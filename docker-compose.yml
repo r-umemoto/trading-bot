@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  bot-dev:
+    build: .
+    container_name: kddi-sniper-container
+    volumes:
+      # 手元のコードをコンテナの /app に同期
+      - .:/app
+    # コンテナを起動し続けるための設定
+    tty: true
