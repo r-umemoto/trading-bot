@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"trading-bot/internal/kabu"
+	"trading-bot/internal/market"
 	"trading-bot/internal/sniper"
 	"trading-bot/internal/sniper/strategy"
 )
@@ -70,10 +71,17 @@ func main() {
 		fmt.Printf("🎯 新規監視リスト登録: %s -> [3990円で買 -> +0.2%%で売]の包括戦略をセット完了\n", target.Symbol)
 	}
 
-	// 4. WebSocketからの価格受信チャネル
-	priceCh := make(chan kabu.PushMessage)
-	wsClient := kabu.NewWSClient("ws://localhost:18080/kabusapi/websocket")
-	go wsClient.Listen(priceCh)
+	// ---------------------------------------------------
+	// 🎯 配信サービスのインスタンス化（ここで証券会社を決定）
+	// ---------------------------------------------------
+	// ※変数の型を明示的に market.PriceStreamer インターフェースにするのがポイント
+	var streamer market.PriceStreamer = kabu.NewKabuStreamer("ws://localhost:18080/kabusapi/websocket")
+
+	// 購読開始（標準化された Tick の管を受け取る）
+	tickCh, err := streamer.Subscribe(ctx, []string{"9433"})
+	if err != nil {
+		log.Fatalf("価格配信の購読に失敗: %v", err)
+	}
 
 	// ---------------------------------------------------
 	// 🎯 究極のコンテキスト管理（OSシグナルと連動）
@@ -103,12 +111,12 @@ Loop:
 			fmt.Println("\n中断シグナルを受信しました。終了処理に入ります。")
 			cancel()
 
-		case msg := <-priceCh:
-			fmt.Printf("🎯 価格データ受信: 建値: %.1f円 \n", msg.CurrentPrice)
+		case tick := <-tickCh:
+			fmt.Printf("🎯 価格データ受信: 建値: %.1f円 \n", tick.Price)
 			// 受信した価格データを、登録されているすべての戦略に分配する
 			for _, s := range snipers {
-				if s.Symbol == msg.Symbol {
-					s.OnPriceUpdate(msg.CurrentPrice)
+				if s.Symbol == tick.Symbol {
+					s.OnPriceUpdate(tick.Price)
 				}
 			}
 		}
