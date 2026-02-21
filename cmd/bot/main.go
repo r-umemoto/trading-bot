@@ -31,10 +31,7 @@ func main() {
 	fmt.Println("✅ APIトークン取得完了")
 
 	// 3. アプリケーションの組み立て（portfolio.go の buildPortfolio を呼び出す）
-	snipers, streamer := buildPortfolio(client, apiPassword)
-
-	// 4. 司令部（Engine）の生成と実行
-	engine := NewEngine(streamer, snipers, client, apiPassword)
+	engine := buildPortfolio(client, apiPassword)
 
 	// 5. 実行！（ここでブロックされ、Engineの内部ですべてが回る）
 	if err := engine.Run(ctx); err != nil {
