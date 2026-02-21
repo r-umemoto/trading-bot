@@ -57,32 +57,33 @@ func main() {
 	var snipers []*sniper.Sniper
 	for _, target := range watchList {
 		// 戦略の組み立て（コンポジット）
-		// ① 3990円以下になったら買う
 		buyStrategy := strategy.NewLimitBuy(3990.0, int(target.Qty))
-		// ② 買った値段（今回は約定を3990円と仮定）から 0.2% 上がったら売る
 		sellStrategy := strategy.NewFixedRate(3990.0, 0.002, int(target.Qty))
-
 		// ①と②を包括的戦略（1往復トレード）として束ねる
 		masterStrategy := strategy.NewRoundTrip(buyStrategy, sellStrategy)
+		// 2. 🚨 本来の戦略をキルスイッチで包み込む（ラップする）
+		safeLogic := strategy.NewKillSwitch(masterStrategy, 100)
 
 		// スナイパーに包括的戦略を渡して配備
-		snipers = append(snipers, sniper.NewSniper(target.Symbol, masterStrategy, client))
+		snipers = append(snipers, sniper.NewSniper(target.Symbol, safeLogic, client))
 
 		fmt.Printf("🎯 新規監視リスト登録: %s -> [3990円で買 -> +0.2%%で売]の包括戦略をセット完了\n", target.Symbol)
 	}
 
 	// 4. WebSocketからの価格受信チャネル
 	priceCh := make(chan kabu.PushMessage)
-
-	// ここで goroutine を使って websocket.go の Listen処理などを起動します
-	// WebSocketクライアントの生成（kabuステーションのデフォルトWSポート）
 	wsClient := kabu.NewWSClient("ws://localhost:18080/kabusapi/websocket")
-
-	// WebSocketの受信ループを別プロセス（Goroutine）で起動
 	go wsClient.Listen(priceCh)
 
+	// ---------------------------------------------------
+	// 🎯 究極のコンテキスト管理（OSシグナルと連動）
+	// Ctrl+C が押されると、自動的に ctx が Done になります
+	// ---------------------------------------------------
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// 5. キルスイッチの起動
-	go killSwitch(ctx, cancel, client, snipers)
+	go killSwitch(ctx, stop, client, snipers)
 
 	// OSからの終了シグナル（Ctrl+C）を受け取る準備
 	sigCh := make(chan os.Signal, 1)
@@ -91,11 +92,12 @@ func main() {
 	fmt.Println("🚀 市場の監視を開始します...")
 
 	// 6. メインループ（Pub/Sub モデルによる価格の分配）
+Loop:
 	for {
 		select {
 		case <-ctx.Done():
 			fmt.Println("システムを安全にシャットダウンします。")
-			return
+			break Loop
 
 		case <-sigCh:
 			fmt.Println("\n中断シグナルを受信しました。終了処理に入ります。")
@@ -111,6 +113,22 @@ func main() {
 			}
 		}
 	}
+
+	// ===================================================
+	// 🎯 ここから下は「死に際の処理（Graceful Shutdown）」
+	// ===================================================
+	fmt.Println("\n🚨 全スナイパーに緊急撤退命令を出します...")
+	for _, s := range snipers {
+		// ここでスナイパー内部の OnPriceUpdate(0.0) が発火し、成行売りが飛ぶ！
+		s.EmergencyExit()
+	}
+
+	// 最後に少しだけAPI通信の完了を待ってあげる
+	fmt.Println("⏳ 撤退注文の通信完了を待機中 (3秒)...")
+	time.Sleep(3 * time.Second)
+
+	fmt.Println("システムを安全にシャットダウンします。")
+	// ここで main 関数が終わりに到達し、自然にプロセスが落ちる
 }
 
 // cmd/bot/main.go の killSwitch 関数を修正

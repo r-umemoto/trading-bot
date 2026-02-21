@@ -13,6 +13,11 @@ type Strategy interface {
 	Evaluate(currentPrice float64) brain.Signal
 }
 
+// ★ スナイパー内で定義する「オプショナルな機能」の規格
+type KillSwitchable interface {
+	Activate() brain.Signal
+}
+
 // OrderState は発注した注文の追跡用データです
 type OrderState struct {
 	OrderID  string
@@ -41,8 +46,6 @@ func NewSniper(symbol string, strategy Strategy, client *kabu.KabuClient) *Snipe
 	}
 }
 
-// internal/engine/sniper.go の OnPriceUpdate 関数を修正
-
 func (s *Sniper) OnPriceUpdate(currentPrice float64) {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
@@ -53,19 +56,23 @@ func (s *Sniper) OnPriceUpdate(currentPrice float64) {
 		return
 	}
 
-	// 1. 戦略に「今どうすべきか？」の判断を仰ぐ
+	// 1. 頭脳に価格を渡して判断を仰ぐ
 	signal := s.Strategy.Evaluate(currentPrice)
 
-	// 2. 何もしない（HOLD）なら即終了
+	// 2. 受け取ったシグナルで発砲する
+	s.executeSignal(signal)
+}
+
+// 🎯 新設：純粋な発砲処理（ダミー価格のハックが不要になる）
+func (s *Sniper) executeSignal(signal brain.Signal) {
 	if signal.Action == brain.ActionHold {
 		return
 	}
 
-	// 2. 買い/売り の判定
-	side := "1" // デフォルトは売 (1)
+	side := "1"
 	actionName := "売"
 	if signal.Action == brain.ActionBuy {
-		side = "2" // 買 (2)
+		side = "2"
 		actionName = "買"
 	}
 
@@ -160,4 +167,27 @@ func (s *Sniper) ForceExit(apiPassword string) {
 	} else {
 		fmt.Printf("✅ [%s] 残存建玉なし。撤収完了。\n", s.Symbol)
 	}
+}
+
+// 緊急撤退命令を受信するメソッド
+func (s *Sniper) EmergencyExit() {
+	// ⚠️ ここではロックを取らない！（OnPriceUpdateの中で取ってくれるから）
+	// ⚠️ s.isExiting = true もまだやらない！（弾かれてしまうから）
+
+	// 1. キルスイッチを持っているか確認
+	if ks, ok := s.Strategy.(KillSwitchable); ok {
+		fmt.Printf("🚨 [%s] 緊急撤退命令を受理。戦略のキルスイッチを起動します！\n", s.Symbol)
+
+		// 2. キルスイッチをON！
+		emergencySignal := ks.Activate()
+
+		s.executeSignal(emergencySignal)
+	} else {
+		fmt.Printf("⚠️ [%s] 現在の戦略にはキルスイッチが搭載されていません。\n", s.Symbol)
+	}
+
+	// 4. 最後に発砲が終わってから、スナイパーの稼働を完全に停止させる
+	s.mu.Lock()
+	s.isExiting = true
+	s.mu.Unlock()
 }
