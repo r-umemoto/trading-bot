@@ -96,7 +96,7 @@ func (s *Sniper) executeSignal(signal brain.Signal) {
 }
 
 // ForceExit はキルスイッチ作動時に呼ばれ、自身の未約定注文のキャンセルと成行決済を行います
-func (s *Sniper) ForceExit(apiPassword string) {
+func (s *Sniper) ForceExit() {
 	s.mu.Lock()
 	s.isExiting = true // 撤収フラグを立てる！
 	s.mu.Unlock()      // フラグを立てたら、通信で詰まらないように一旦ロック解除
