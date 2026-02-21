@@ -66,38 +66,93 @@ func handleToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// 1. 固定で返していた建玉データを「書き換え可能な変数」として外に出す
+var mockPositions = []map[string]interface{}{
+	{
+		"ExecutionID": "exec_001",
+		"AccountType": 4,
+		"Symbol":      "9433",
+		"SymbolName":  "ＫＤＤＩ",
+		"SettleType":  0,
+		"LeavesQty":   100.0, // 👈 最初は100株持っている
+		"HoldQty":     100.0,
+		"Price":       4000.0,
+	},
+}
+
 // 3. 建玉一覧取得用のダミーハンドラー
 func handlePositions(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("[Mock] 📦 建玉照会リクエストを受信しました")
 
-	// ダミーの建玉データ（KDDIを4000円で100株保有している状態）
-	positions := []map[string]interface{}{
-		{
-			"ExecutionID":    "exec_mock_001",
-			"Symbol":         "9433",
-			"SymbolName":     "ＫＤＤＩ",
-			"LeavesQty":      100.0,
-			"HoldQty":        0.0,
-			"Price":          4000.0, // ここが0.2%計算の基準になる建値
-			"CurrentPrice":   4000.0,
-			"Valuation":      400000.0,
-			"ProfitLoss":     0.0,
-			"ProfitLossRate": 0.0,
-		},
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(positions)
+	json.NewEncoder(w).Encode(mockPositions)
 }
 
 // cmd/mock/main.go の handleSendOrder 関数を修正
 func handleSendOrder(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("[Mock] 🔫 注文(SendOrder)リクエストを受信しました！")
+	fmt.Println("\n[Mock] 🔫 注文(SendOrder)リクエストを受信しました！")
 
-	// タイムスタンプ（ナノ秒）を使ってユニークな受付IDを生成
+	// 1. ボットから送られてきた注文データ（JSON）を読み解く
+	var req struct {
+		Symbol string  `json:"Symbol"`
+		Side   string  `json:"Side"` // "1": 売, "2": 買
+		Qty    float64 `json:"Qty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+		actionStr := "不明"
+		switch req.Side {
+		case "1":
+			actionStr = "売"
+		case "2":
+			actionStr = "買"
+		}
+		fmt.Printf("[Mock] 注文内容: 【%s】 銘柄: %s, 数量: %.0f株\n", actionStr, req.Symbol, req.Qty)
+
+		// 2. 買い注文の場合（建玉を増やす）
+		switch req.Side {
+		case "2":
+			// 今回はシンプルに新しい建玉データとして追加します
+			mockPositions = append(mockPositions, map[string]interface{}{
+				"ExecutionID": fmt.Sprintf("exec_%d", time.Now().UnixNano()),
+				"Symbol":      req.Symbol,
+				"SymbolName":  "シミュレーション銘柄",
+				"LeavesQty":   req.Qty,
+				"Price":       4000.0, // 仮の約定価格
+			})
+			fmt.Printf("[Mock] 📈 %s の建玉が %.0f株 追加されました。\n", req.Symbol, req.Qty)
+
+			// 3. 売り注文の場合（建玉を減らす）
+		case "1":
+			var newPositions []map[string]interface{}
+			for _, pos := range mockPositions {
+				if pos["Symbol"] == req.Symbol {
+					// 今持っている株数から、売った株数を引き算する
+					currentQty := pos["LeavesQty"].(float64)
+					newQty := currentQty - req.Qty
+
+					if newQty > 0 {
+						pos["LeavesQty"] = newQty // 減らした状態にして残す
+						newPositions = append(newPositions, pos)
+						fmt.Printf("[Mock] 📉 %s の建玉が %.0f株 に減りました（一部決済）。\n", req.Symbol, newQty)
+					} else {
+						// 0株以下になったら、配列から完全に消し去る
+						fmt.Printf("[Mock] 🗑️ %s の建玉がゼロになったため削除しました（完全決済）。\n", req.Symbol)
+					}
+				} else {
+					// 違う銘柄の建玉はそのまま残す
+					newPositions = append(newPositions, pos)
+				}
+			}
+			// 更新された状態を上書き保存
+			mockPositions = newPositions
+		}
+	} else {
+		fmt.Printf("[Mock] ⚠️ リクエストの解析に失敗しました: %v\n", err)
+	}
+
+	// 4. いつも通りユニークな受付IDを返す
 	uniqueID := fmt.Sprintf("mock_order_%d", time.Now().UnixNano())
-
-	// 成功レスポンス（Result: 0）と、生成したユニークIDを返す
 	response := map[string]interface{}{
 		"Result":  0,
 		"OrderId": uniqueID,
@@ -105,8 +160,6 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-
-	fmt.Printf("[Mock] 割り当てた受付ID: %s\n", uniqueID)
 }
 
 // mock_server/main.go に追記
