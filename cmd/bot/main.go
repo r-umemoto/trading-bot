@@ -10,135 +10,41 @@ import (
 	"syscall"
 	"time"
 
-	"trading-bot/internal/domain/market"
 	"trading-bot/internal/domain/sniper"
-	"trading-bot/internal/domain/sniper/strategy"
 	"trading-bot/internal/infra/kabu"
 )
 
 func main() {
 	fmt.Println("システム起動: 初期化プロセスを開始します。")
 
-	// 1. 全体を安全に停止するためのコンテキスト管理
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 2. APIクライアントの準備とトークン取得
-	apiPassword := os.Getenv("KABU_API_PASSWORD")
-	if apiPassword == "" {
-		apiPassword = "dummy_password"
-	}
-	client := kabu.NewKabuClient("http://localhost:18080/kabusapi", "")
-
-	if err := client.GetToken(apiPassword); err != nil {
-		log.Fatalf("トークン取得エラー: %v", err)
-	}
-	fmt.Println("✅ APIトークン取得完了")
-
-	// ---------------------------------------------------
-	// 起動時の残存建玉クリーンアップ
-	// ---------------------------------------------------
-	if err := cleanupInitialPositions(client, apiPassword); err != nil {
-		log.Fatalf("❌ 起動時クリーンアップ失敗: %v\n", err)
-	}
-	// ---------------------------------------------------
-
-	var executor sniper.OrderExecutor = kabu.NewKabuExecutor(client, apiPassword)
-
-	// 3. 監視対象銘柄の定義（監視リスト）
-	type target struct {
-		Symbol string
-		Qty    uint32
-	}
-	watchList := []target{
-		{
-			Symbol: "9433",
-			Qty:    100,
-		},
-	} // KDDIをターゲットに設定
-
-	var snipers []*sniper.Sniper
-	for _, target := range watchList {
-		// 戦略の組み立て（コンポジット）
-		buyStrategy := strategy.NewLimitBuy(3990.0, int(target.Qty))
-		sellStrategy := strategy.NewFixedRate(3990.0, 0.002, int(target.Qty))
-		// ①と②を包括的戦略（1往復トレード）として束ねる
-		masterStrategy := strategy.NewRoundTrip(buyStrategy, sellStrategy)
-		// 2. 🚨 本来の戦略をキルスイッチで包み込む（ラップする）
-		safeLogic := strategy.NewKillSwitch(masterStrategy, 100)
-
-		// スナイパーに包括的戦略を渡して配備
-		snipers = append(snipers, sniper.NewSniper(target.Symbol, safeLogic, executor))
-
-		fmt.Printf("🎯 新規監視リスト登録: %s -> [3990円で買 -> +0.2%%で売]の包括戦略をセット完了\n", target.Symbol)
-	}
-
-	// ---------------------------------------------------
-	// 🎯 配信サービスのインスタンス化（ここで証券会社を決定）
-	// ---------------------------------------------------
-	// ※変数の型を明示的に market.PriceStreamer インターフェースにするのがポイント
-	var streamer market.PriceStreamer = kabu.NewKabuStreamer("ws://localhost:18080/kabusapi/websocket")
-
-	// 購読開始（標準化された Tick の管を受け取る）
-	tickCh, err := streamer.Subscribe(ctx, []string{"9433"})
-	if err != nil {
-		log.Fatalf("価格配信の購読に失敗: %v", err)
-	}
-
-	// ---------------------------------------------------
-	// 🎯 究極のコンテキスト管理（OSシグナルと連動）
-	// Ctrl+C が押されると、自動的に ctx が Done になります
-	// ---------------------------------------------------
+	// 1. コンテキスト（OSシグナル）の準備
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 5. キルスイッチの起動
+	// 2. インフラ（APIクライアント）の準備
+	apiPassword := os.Getenv("KABU_API_PASSWORD")
+	client := kabu.NewKabuClient("http://localhost:18080/kabusapi", "")
+	if err := client.GetToken(apiPassword); err != nil {
+		log.Fatalf("❌ トークン取得エラー: %v", err)
+	}
+	fmt.Println("✅ APIトークン取得完了")
+
+	// 起動時クリーンアップ
+	cleanupInitialPositions(client, apiPassword)
+
+	// 3. アプリケーションの組み立て（DI: 依存性の注入）
+	snipers, streamer := buildPortfolio(client, apiPassword)
+
+	// 4. 司令部（Engine）の生成
+	engine := NewEngine(streamer, snipers)
+
+	// 時間指定キルスイッチ
 	go killSwitch(ctx, stop, client, snipers)
 
-	// OSからの終了シグナル（Ctrl+C）を受け取る準備
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	fmt.Println("🚀 市場の監視を開始します...")
-
-	// 6. メインループ（Pub/Sub モデルによる価格の分配）
-Loop:
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Println("システムを安全にシャットダウンします。")
-			break Loop
-
-		case <-sigCh:
-			fmt.Println("\n中断シグナルを受信しました。終了処理に入ります。")
-			cancel()
-
-		case tick := <-tickCh:
-			fmt.Printf("🎯 価格データ受信: 建値: %.1f円 \n", tick.Price)
-			// 受信した価格データを、登録されているすべての戦略に分配する
-			for _, s := range snipers {
-				if s.Symbol == tick.Symbol {
-					s.OnPriceUpdate(tick.Price)
-				}
-			}
-		}
+	// 5. 実行！（ブロックされる）
+	if err := engine.Run(ctx); err != nil {
+		log.Fatalf("❌ システム異常終了: %v", err)
 	}
-
-	// ===================================================
-	// 🎯 ここから下は「死に際の処理（Graceful Shutdown）」
-	// ===================================================
-	fmt.Println("\n🚨 全スナイパーに緊急撤退命令を出します...")
-	for _, s := range snipers {
-		// ここでスナイパー内部の OnPriceUpdate(0.0) が発火し、成行売りが飛ぶ！
-		s.EmergencyExit()
-	}
-
-	// 最後に少しだけAPI通信の完了を待ってあげる
-	fmt.Println("⏳ 撤退注文の通信完了を待機中 (3秒)...")
-	time.Sleep(3 * time.Second)
-
-	fmt.Println("システムを安全にシャットダウンします。")
-	// ここで main 関数が終わりに到達し、自然にプロセスが落ちる
 }
 
 // cmd/bot/main.go の killSwitch 関数を修正
@@ -154,7 +60,7 @@ func killSwitch(ctx context.Context, cancel context.CancelFunc, client *kabu.Kab
 		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
-			if (t.Hour() == 14 && t.Minute() >= 50) || t.Hour() >= 315 {
+			if (t.Hour() == 14 && t.Minute() >= 50) || t.Hour() >= 15 {
 				fmt.Println("\n⏰【キルスイッチ作動】14:50到達。全スナイパーに撤収を命じます！")
 
 				// 1. 全スナイパーに一斉に撤収命令を出す（並列実行も可能ですが今回は直列で確実に行います）
