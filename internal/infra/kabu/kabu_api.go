@@ -123,8 +123,7 @@ func (c *KabuClient) SendOrder(req OrderRequest) (*OrderResponse, error) {
 }
 
 // GetPositions は現在の建玉一覧を取得します。
-// product引数: "0":すべて, "1":現物, "2":信用, "3":先物, "4":オプション
-func (c *KabuClient) GetPositions(product string) ([]Position, error) {
+func (c *KabuClient) GetPositions(product ProductType) ([]Position, error) {
 	// エンドポイントにクエリパラメータを付与
 	endpoint := fmt.Sprintf("/positions?product=%s", product)
 

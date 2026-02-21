@@ -60,9 +60,14 @@ func (e *KabuExecutor) CancelOrder(orderID string) error {
 	return nil
 }
 
-func (e *KabuExecutor) GetPositions(product string) ([]sniper.Position, error) {
+func (e *KabuExecutor) GetPositions(product sniper.ProductType) ([]sniper.Position, error) {
 
-	positions, err := e.client.GetPositions(product)
+	arg := ProductMargin
+	if product != sniper.ProductMargin {
+		// 現状は信用取引しかしてない
+		return nil, fmt.Errorf("prodcutが不正です %d", product)
+	}
+	positions, err := e.client.GetPositions(arg)
 	if err != nil {
 		return nil, fmt.Errorf("建玉取得失敗: %s)", product)
 	}

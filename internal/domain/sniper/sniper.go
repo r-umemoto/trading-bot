@@ -29,7 +29,7 @@ type Position struct {
 type OrderExecutor interface {
 	ExecuteOrder(symbol string, action brain.Action, qty int) (OrderState, error)
 	CancelOrder(orderID string) error
-	GetPositions(product string) ([]Position, error)
+	GetPositions(product ProductType) ([]Position, error)
 }
 
 // ★ スナイパー内で定義する「オプショナルな機能」の規格
@@ -120,7 +120,7 @@ func (s *Sniper) ForceExit(apiPassword string) {
 	time.Sleep(2 * time.Second)
 
 	// --- 第三段階：自分の担当銘柄の残ポジションを確認して成行売り ---
-	positions, err := s.executor.GetPositions("2")
+	positions, err := s.executor.GetPositions(ProductMargin)
 	if err != nil {
 		fmt.Printf("❌ [%s] 建玉取得エラー: %v\n", s.Symbol, err)
 		return
