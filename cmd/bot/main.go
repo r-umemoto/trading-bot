@@ -43,6 +43,8 @@ func main() {
 	}
 	// ---------------------------------------------------
 
+	var executor sniper.OrderExecutor = kabu.NewKabuExecutor(client, apiPassword)
+
 	// 3. 監視対象銘柄の定義（監視リスト）
 	type target struct {
 		Symbol string
@@ -66,7 +68,7 @@ func main() {
 		safeLogic := strategy.NewKillSwitch(masterStrategy, 100)
 
 		// スナイパーに包括的戦略を渡して配備
-		snipers = append(snipers, sniper.NewSniper(target.Symbol, safeLogic, client))
+		snipers = append(snipers, sniper.NewSniper(target.Symbol, safeLogic, executor))
 
 		fmt.Printf("🎯 新規監視リスト登録: %s -> [3990円で買 -> +0.2%%で売]の包括戦略をセット完了\n", target.Symbol)
 	}

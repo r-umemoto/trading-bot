@@ -5,17 +5,11 @@ import (
 	"sync"
 	"time"
 	"trading-bot/internal/domain/sniper/brain"
-	"trading-bot/internal/infra/kabu"
 )
 
 // すべての戦略が満たすべき頭脳の規格
 type Strategy interface {
 	Evaluate(currentPrice float64) brain.Signal
-}
-
-// ★ スナイパー内で定義する「オプショナルな機能」の規格
-type KillSwitchable interface {
-	Activate() brain.Signal
 }
 
 // OrderState は発注した注文の追跡用データです
@@ -26,22 +20,39 @@ type OrderState struct {
 	IsClosed bool
 }
 
+type Position struct {
+	Symbol string
+	Qty    float64
+}
+
+// ★ 新設：スナイパーが要求する「注文執行機能」の規格
+type OrderExecutor interface {
+	ExecuteOrder(symbol string, action brain.Action, qty int) (OrderState, error)
+	CancelOrder(orderID string) error
+	GetPositions(product string) ([]Position, error)
+}
+
+// ★ スナイパー内で定義する「オプショナルな機能」の規格
+type KillSwitchable interface {
+	Activate() brain.Signal
+}
+
 // Sniper は戦略とAPIクライアントを持ち、執行を担います
 type Sniper struct {
 	Symbol    string
 	Strategy  Strategy
-	Client    *kabu.KabuClient // 👈 kabu. をつける
+	executor  OrderExecutor
 	Orders    []*OrderState
 	mu        sync.Mutex // 👈 状態をロックするための鍵
 	isExiting bool       // 👈 撤収作業中かどうかのフラグ
 }
 
 // NewSniper の引数と戻り値も修正
-func NewSniper(symbol string, strategy Strategy, client *kabu.KabuClient) *Sniper {
+func NewSniper(symbol string, strategy Strategy, excutor OrderExecutor) *Sniper {
 	return &Sniper{
 		Symbol:   symbol,
 		Strategy: strategy,
-		Client:   client,
+		executor: excutor,
 		Orders:   make([]*OrderState, 0),
 	}
 }
@@ -69,42 +80,19 @@ func (s *Sniper) executeSignal(signal brain.Signal) {
 		return
 	}
 
-	side := "1"
-	actionName := "売"
-	if signal.Action == brain.ActionBuy {
-		side = "2"
-		actionName = "買"
-	}
-
-	fmt.Printf("🔥 [%s] シグナル検知！ %s %d株を成行発注します\n", s.Symbol, actionName, signal.Quantity)
+	fmt.Printf("🔥 [%s] シグナル検知！ %s %d株を成行発注します\n", s.Symbol, signal.Action, signal.Quantity)
 
 	// 3. 執行
-	req := kabu.OrderRequest{
-		Password:       "dummy_password", // 本番は安全な管理へ
-		Symbol:         s.Symbol,
-		Exchange:       1,
-		SecurityType:   1,
-		Side:           side,
-		Qty:            signal.Quantity,
-		FrontOrderType: 10, // 成行
-		Price:          0,
-	}
-
-	resp, err := s.Client.SendOrder(req)
+	resp, err := s.executor.ExecuteOrder(s.Symbol, signal.Action, signal.Quantity)
 	if err != nil {
 		fmt.Printf("❌ [%s] 発注エラー: %v\n", s.Symbol, err)
 		return
 	}
 
 	// 4. モックサーバーから返ってきた「本物」のOrderIDを記録する
-	s.Orders = append(s.Orders, &OrderState{
-		OrderID:  resp.OrderId, // ← モックサーバーが発行した "mock_order_99999" 等が入る
-		Action:   signal.Action,
-		Quantity: signal.Quantity,
-		IsClosed: false,
-	})
+	s.Orders = append(s.Orders, &resp)
 
-	fmt.Printf("✅ 注文完了！状態を記録しました (API受付ID: %s)\n", resp.OrderId)
+	fmt.Printf("✅ 注文完了！状態を記録しました (API受付ID: %s)\n", resp.OrderID)
 }
 
 // ForceExit はキルスイッチ作動時に呼ばれ、自身の未約定注文のキャンセルと成行決済を行います
@@ -119,8 +107,7 @@ func (s *Sniper) ForceExit(apiPassword string) {
 	for _, order := range s.Orders {
 		if !order.IsClosed {
 			fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Symbol, order.OrderID)
-			req := kabu.CancelRequest{OrderID: order.OrderID, Password: apiPassword}
-			_, err := s.Client.CancelOrder(req)
+			err := s.executor.CancelOrder(order.OrderID)
 			if err != nil {
 				fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Symbol, err)
 			} else {
@@ -133,7 +120,7 @@ func (s *Sniper) ForceExit(apiPassword string) {
 	time.Sleep(2 * time.Second)
 
 	// --- 第三段階：自分の担当銘柄の残ポジションを確認して成行売り ---
-	positions, err := s.Client.GetPositions("2")
+	positions, err := s.executor.GetPositions("2")
 	if err != nil {
 		fmt.Printf("❌ [%s] 建玉取得エラー: %v\n", s.Symbol, err)
 		return
@@ -142,23 +129,13 @@ func (s *Sniper) ForceExit(apiPassword string) {
 	var remainingQty int
 	for _, pos := range positions {
 		if pos.Symbol == s.Symbol { // 自分の担当銘柄だけを合算
-			remainingQty += int(pos.LeavesQty)
+			remainingQty += int(pos.Qty)
 		}
 	}
 
 	if remainingQty > 0 {
 		fmt.Printf("🔥 [%s] 残存建玉 %d株 を成行で強制決済します！\n", s.Symbol, remainingQty)
-		req := kabu.OrderRequest{
-			Password:       apiPassword,
-			Symbol:         s.Symbol,
-			Exchange:       1,
-			SecurityType:   1,
-			Side:           "1", // 売
-			Qty:            remainingQty,
-			FrontOrderType: 10, // 成行
-			Price:          0,
-		}
-		_, err := s.Client.SendOrder(req)
+		_, err := s.executor.ExecuteOrder(s.Symbol, brain.ActionSell, remainingQty)
 		if err != nil {
 			fmt.Printf("❌ [%s] 成行決済エラー: %v\n", s.Symbol, err)
 		} else {
