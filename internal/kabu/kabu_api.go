@@ -1,5 +1,4 @@
-// kabu_api.go
-package main
+package kabu
 
 import (
 	"bytes"

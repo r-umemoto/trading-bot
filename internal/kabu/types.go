@@ -1,4 +1,4 @@
-package main
+package kabu
 
 // トークン取得リクエスト用（こちらから送るデータ）
 type TokenRequest struct {

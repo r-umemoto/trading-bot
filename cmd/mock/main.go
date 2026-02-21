@@ -90,18 +90,23 @@ func handlePositions(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(positions)
 }
 
-// 4. 発注（SendOrder）用のダミーハンドラー
+// cmd/mock/main.go の handleSendOrder 関数を修正
 func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("[Mock] 🔫 注文(SendOrder)リクエストを受信しました！")
 
-	// 成功レスポンス（Result: 0）と、ダミーの受付番号を返す
+	// タイムスタンプ（ナノ秒）を使ってユニークな受付IDを生成
+	uniqueID := fmt.Sprintf("mock_order_%d", time.Now().UnixNano())
+
+	// 成功レスポンス（Result: 0）と、生成したユニークIDを返す
 	response := map[string]interface{}{
 		"Result":  0,
-		"OrderId": "mock_order_99999",
+		"OrderId": uniqueID,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+
+	fmt.Printf("[Mock] 割り当てた受付ID: %s\n", uniqueID)
 }
 
 // mock_server/main.go に追記

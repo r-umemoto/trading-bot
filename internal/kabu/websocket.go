@@ -1,5 +1,5 @@
 // websocket.go
-package main
+package kabu
 
 import (
 	"encoding/json"
