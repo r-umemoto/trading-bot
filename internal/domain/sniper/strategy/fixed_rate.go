@@ -1,6 +1,6 @@
 package strategy
 
-import "trading-bot/internal/sniper/brain"
+import "trading-bot/internal/domain/sniper/brain"
 
 // ---------------------------------------------------
 // ② 単体戦略：指定価格以上になったら売る (FixedRateStrategy)

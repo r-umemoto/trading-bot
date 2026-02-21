@@ -2,7 +2,7 @@
 package strategy
 
 import (
-	"trading-bot/internal/sniper/brain"
+	"trading-bot/internal/domain/sniper/brain"
 )
 
 type LimitBuy struct {

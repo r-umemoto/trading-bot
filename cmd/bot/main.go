@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"trading-bot/internal/kabu"
-	"trading-bot/internal/market"
-	"trading-bot/internal/sniper"
-	"trading-bot/internal/sniper/strategy"
+	"trading-bot/internal/domain/market"
+	"trading-bot/internal/domain/sniper"
+	"trading-bot/internal/domain/sniper/strategy"
+	"trading-bot/internal/infra/kabu"
 )
 
 func main() {

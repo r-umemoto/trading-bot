@@ -1,6 +1,6 @@
 package strategy
 
-import "trading-bot/internal/sniper/brain"
+import "trading-bot/internal/domain/sniper/brain"
 
 // ---------------------------------------------------
 // ③ 複合戦略：買いと売りをセットにした包括的戦略 (RoundTripStrategy)

@@ -1,7 +1,7 @@
 package strategy
 
 import (
-	"trading-bot/internal/sniper/brain"
+	"trading-bot/internal/domain/sniper/brain"
 )
 
 // KillSwitch は他の戦略をラップし、発動時に強制決済シグナルを出すデコレーター

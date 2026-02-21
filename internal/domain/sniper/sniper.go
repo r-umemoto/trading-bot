@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
-	"trading-bot/internal/kabu"
-	"trading-bot/internal/sniper/brain"
+	"trading-bot/internal/domain/sniper/brain"
+	"trading-bot/internal/infra/kabu"
 )
 
 // すべての戦略が満たすべき頭脳の規格

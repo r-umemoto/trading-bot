@@ -2,7 +2,7 @@ package kabu
 
 import (
 	"context"
-	"trading-bot/internal/market"
+	"trading-bot/internal/domain/market"
 )
 
 // KabuStreamer は market.PriceStreamer インターフェースを満たすカブコム専用アダプター
