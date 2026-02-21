@@ -1,16 +1,22 @@
-package engine
+package sniper
 
 import (
 	"fmt"
 	"sync"
 	"time"
 	"trading-bot/internal/kabu"
+	"trading-bot/internal/sniper/brain"
 )
+
+// すべての戦略が満たすべき頭脳の規格
+type Strategy interface {
+	Evaluate(currentPrice float64) brain.Signal
+}
 
 // OrderState は発注した注文の追跡用データです
 type OrderState struct {
 	OrderID  string
-	Action   TradeAction
+	Action   brain.Action
 	Quantity int
 	IsClosed bool
 }
@@ -51,27 +57,36 @@ func (s *Sniper) OnPriceUpdate(currentPrice float64) {
 	signal := s.Strategy.Evaluate(currentPrice)
 
 	// 2. 何もしない（HOLD）なら即終了
-	if signal.Action == ActionHold {
+	if signal.Action == brain.ActionHold {
 		return
 	}
 
-	// 3. 執行（発注APIを実際に叩く）
-	fmt.Printf("🔥【執行】命令を受理。%s: %s を %d株 発注します！\n",
-		signal.Action, s.Symbol, signal.Quantity)
-
-	// ※ご自身の data.go の定義に合わせてリクエストを作成してください
-	// ここは成行売りのリクエスト例です
-	orderReq := kabu.OrderRequest{ // ← data.goの定義名に合わせてください
-		Password: "your_test_password",
-		Symbol:   s.Symbol,
-		// Exchange, SecurityType, Side(売), Qty(数量), FrontOrderType(成行) など必要な項目をセット
+	// 2. 買い/売り の判定
+	side := "1" // デフォルトは売 (1)
+	actionName := "売"
+	if signal.Action == brain.ActionBuy {
+		side = "2" // 買 (2)
+		actionName = "買"
 	}
 
-	// 実際にモックサーバー（または本番）へ発注リクエストを送信！
-	resp, err := s.Client.SendOrder(orderReq)
+	fmt.Printf("🔥 [%s] シグナル検知！ %s %d株を成行発注します\n", s.Symbol, actionName, signal.Quantity)
+
+	// 3. 執行
+	req := kabu.OrderRequest{
+		Password:       "dummy_password", // 本番は安全な管理へ
+		Symbol:         s.Symbol,
+		Exchange:       1,
+		SecurityType:   1,
+		Side:           side,
+		Qty:            signal.Quantity,
+		FrontOrderType: 10, // 成行
+		Price:          0,
+	}
+
+	resp, err := s.Client.SendOrder(req)
 	if err != nil {
-		fmt.Printf("❌ 発注エラー (%s): %v\n", s.Symbol, err)
-		return // 失敗した場合はスライスに記録せず、次のチャンスを待つ
+		fmt.Printf("❌ [%s] 発注エラー: %v\n", s.Symbol, err)
+		return
 	}
 
 	// 4. モックサーバーから返ってきた「本物」のOrderIDを記録する

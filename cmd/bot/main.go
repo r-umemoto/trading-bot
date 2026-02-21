@@ -10,8 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"trading-bot/internal/engine"
 	"trading-bot/internal/kabu"
+	"trading-bot/internal/sniper"
+	"trading-bot/internal/sniper/strategy"
 )
 
 func main() {
@@ -33,27 +34,41 @@ func main() {
 	}
 	fmt.Println("✅ APIトークン取得完了")
 
-	// 3. 建玉の取得と戦略の配置（並列テスト）
-	positions, err := client.GetPositions("2")
-	if err != nil {
-		log.Fatalf("ポジション取得エラー: %v", err)
+	// ---------------------------------------------------
+	// 起動時の残存建玉クリーンアップ
+	// ---------------------------------------------------
+	if err := cleanupInitialPositions(client, apiPassword); err != nil {
+		log.Fatalf("❌ 起動時クリーンアップ失敗: %v\n", err)
 	}
+	// ---------------------------------------------------
 
-	var snipers []*engine.Sniper
-	for _, pos := range positions {
-		if pos.LeavesQty > 0 {
-			qty := int(pos.LeavesQty)
+	// 3. 監視対象銘柄の定義（監視リスト）
+	type target struct {
+		Symbol string
+		Qty    uint32
+	}
+	watchList := []target{
+		{
+			Symbol: "9433",
+			Qty:    100,
+		},
+	} // KDDIをターゲットに設定
 
-			// 戦略A: 0.2% での利確監視
-			strategyA := engine.NewFixedRateStrategy(pos.Symbol, pos.Price, 0.002, qty)
-			snipers = append(snipers, engine.NewSniper(pos.Symbol, strategyA, client))
+	var snipers []*sniper.Sniper
+	for _, target := range watchList {
+		// 戦略の組み立て（コンポジット）
+		// ① 3990円以下になったら買う
+		buyStrategy := strategy.NewLimitBuy(3990.0, int(target.Qty))
+		// ② 買った値段（今回は約定を3990円と仮定）から 0.2% 上がったら売る
+		sellStrategy := strategy.NewFixedRate(3990.0, 0.002, int(target.Qty))
 
-			// 戦略B: 0.3% での利確監視（並列でテスト）
-			strategyB := engine.NewFixedRateStrategy(pos.Symbol, pos.Price, 0.003, qty)
-			snipers = append(snipers, engine.NewSniper(pos.Symbol, strategyB, client))
+		// ①と②を包括的戦略（1往復トレード）として束ねる
+		masterStrategy := strategy.NewRoundTrip(buyStrategy, sellStrategy)
 
-			fmt.Printf("🎯 監視登録完了: %s 建値: %.1f円 -> [戦略A: 0.2%%], [戦略B: 0.3%%]\n", pos.SymbolName, pos.Price)
-		}
+		// スナイパーに包括的戦略を渡して配備
+		snipers = append(snipers, sniper.NewSniper(target.Symbol, masterStrategy, client))
+
+		fmt.Printf("🎯 新規監視リスト登録: %s -> [3990円で買 -> +0.2%%で売]の包括戦略をセット完了\n", target.Symbol)
 	}
 
 	// 4. WebSocketからの価格受信チャネル
@@ -101,7 +116,7 @@ func main() {
 // cmd/bot/main.go の killSwitch 関数を修正
 
 // killSwitch は指定時刻に全スナイパーへ撤収命令を出します
-func killSwitch(ctx context.Context, cancel context.CancelFunc, client *kabu.KabuClient, snipers []*engine.Sniper) {
+func killSwitch(ctx context.Context, cancel context.CancelFunc, client *kabu.KabuClient, snipers []*sniper.Sniper) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	apiPassword := "dummy_password" // 本番は環境変数から
@@ -111,7 +126,7 @@ func killSwitch(ctx context.Context, cancel context.CancelFunc, client *kabu.Kab
 		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
-			if (t.Hour() == 14 && t.Minute() >= 50) || t.Hour() >= 15 {
+			if (t.Hour() == 14 && t.Minute() >= 50) || t.Hour() >= 315 {
 				fmt.Println("\n⏰【キルスイッチ作動】14:50到達。全スナイパーに撤収を命じます！")
 
 				// 1. 全スナイパーに一斉に撤収命令を出す（並列実行も可能ですが今回は直列で確実に行います）
@@ -153,4 +168,61 @@ func killSwitch(ctx context.Context, cancel context.CancelFunc, client *kabu.Kab
 			}
 		}
 	}
+}
+
+// cmd/bot/main.go の下部に追加
+
+// cleanupInitialPositions は起動時に残存している建玉をすべて成行で強制決済します。
+// 完全にノーポジションになったことを確認できない場合はエラーを返します。
+func cleanupInitialPositions(client *kabu.KabuClient, apiPassword string) error {
+	fmt.Println("🧹 起動時のシステム状態チェックを開始します...")
+
+	initialPositions, err := client.GetPositions("2")
+	if err != nil {
+		return fmt.Errorf("建玉取得エラー: %w", err)
+	}
+
+	cleaned := false
+	for _, pos := range initialPositions {
+		if pos.LeavesQty > 0 {
+			qty := int(pos.LeavesQty)
+			fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %d株\n", pos.SymbolName, qty)
+
+			req := kabu.OrderRequest{
+				Password:       apiPassword,
+				Symbol:         pos.Symbol,
+				Exchange:       1,
+				SecurityType:   1,
+				Side:           "1", // 売
+				Qty:            qty,
+				FrontOrderType: 10, // 成行
+				Price:          0,
+			}
+			if _, err := client.SendOrder(req); err != nil {
+				return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.SymbolName, err)
+			}
+			cleaned = true
+		}
+	}
+
+	if cleaned {
+		fmt.Println("⏳ クリーンアップの約定処理を待機中 (3秒)...")
+		time.Sleep(3 * time.Second)
+
+		// 最終確認：本当に全部消えたか？
+		finalPositions, err := client.GetPositions("2")
+		if err != nil {
+			return fmt.Errorf("最終確認での建玉取得エラー: %w", err)
+		}
+		for _, pos := range finalPositions {
+			if pos.LeavesQty > 0 {
+				return fmt.Errorf("🚨 クリーンアップ後も建玉が残っています (%s: %f株)。手動で確認してください", pos.SymbolName, pos.LeavesQty)
+			}
+		}
+		fmt.Println("✅ クリーンアップ完了。システムはノーポジションから開始します。")
+	} else {
+		fmt.Println("✅ 残存建玉はありません。クリーンな状態で起動します。")
+	}
+
+	return nil
 }

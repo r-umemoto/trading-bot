@@ -34,21 +34,37 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	fmt.Println("[Mock] 🎯 ボットからのWebSocket接続を受け付けました！")
-	basePrice := 4000.0
 
+	// テスト用の価格シナリオ（波）を作る
+	// 4000円から始まり、3990円以下に沈み、その後 4000円付近まで浮上する波
+	priceWave := []float64{
+		4000.0, 3995.0, 3991.0,
+		3990.0, // 🎯 [シナリオ1] ここで LimitBuy(3990円以下で買い) が発動するはず！
+		3985.0, 3980.0,
+		3985.0, 3990.0, 3995.0, // 底を打って上がり始める
+		3998.0, // 🎯 [シナリオ2] 3990円の+0.2%(=3997.98円)以上なので、ここで FixedRate が発動して利確するはず！
+		4000.0, 4005.0,
+	}
+
+	tick := 0
 	for {
-		msg := PushMessage{
-			Symbol:       "9433",
-			SymbolName:   "ＫＤＤＩ",
-			CurrentPrice: basePrice,
-			Time:         time.Now().Format("15:04:05"),
+		// 配列のインデックスをループさせる
+		currentPrice := priceWave[tick%len(priceWave)]
+
+		// PushMessageの組み立て
+		msg := map[string]interface{}{
+			"Symbol":       "9433",
+			"SymbolName":   "ＫＤＤＩ",
+			"CurrentPrice": currentPrice,
 		}
 		jsonData, _ := json.Marshal(msg)
 		if err := conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
 			break
 		}
-		basePrice += 2.0
-		time.Sleep(2 * time.Second)
+		fmt.Printf("🌊 モック相場変動: %.1f 円\n", currentPrice)
+
+		tick++
+		time.Sleep(1 * time.Second) // 1秒ごとに価格を更新
 	}
 }
 
