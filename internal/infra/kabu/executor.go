@@ -69,7 +69,7 @@ func (e *KabuExecutor) GetPositions(product sniper.ProductType) ([]sniper.Positi
 	}
 	positions, err := e.client.GetPositions(arg)
 	if err != nil {
-		return nil, fmt.Errorf("建玉取得失敗: %s)", product)
+		return nil, fmt.Errorf("建玉取得失敗: %d)", product)
 	}
 
 	decodePositons := make([]sniper.Position, 0, len(positions))
