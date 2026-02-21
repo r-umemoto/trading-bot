@@ -67,7 +67,7 @@ func main() {
 	go wsClient.Listen(priceCh)
 
 	// 5. キルスイッチの起動
-	go killSwitch(ctx, cancel, client)
+	go killSwitch(ctx, cancel, client, snipers)
 
 	// OSからの終了シグナル（Ctrl+C）を受け取る準備
 	sigCh := make(chan os.Signal, 1)
@@ -98,32 +98,58 @@ func main() {
 	}
 }
 
-// killSwitch は指定時刻に未約定注文をキャンセルします
-func killSwitch(ctx context.Context, cancel context.CancelFunc, client *kabu.KabuClient) {
+// cmd/bot/main.go の killSwitch 関数を修正
+
+// killSwitch は指定時刻に全スナイパーへ撤収命令を出します
+func killSwitch(ctx context.Context, cancel context.CancelFunc, client *kabu.KabuClient, snipers []*engine.Sniper) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+	apiPassword := "dummy_password" // 本番は環境変数から
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
-			// テスト時はここを現在の1〜2分後に設定してください
-			if t.Hour() == 14 && t.Minute() >= 50 {
-				fmt.Println("\n⏰【キルスイッチ作動】14:50に到達。未約定の注文をキャンセルします。")
+			if (t.Hour() == 14 && t.Minute() >= 50) || t.Hour() >= 15 {
+				fmt.Println("\n⏰【キルスイッチ作動】14:50到達。全スナイパーに撤収を命じます！")
 
-				orders, err := client.GetOrders()
+				// 1. 全スナイパーに一斉に撤収命令を出す（並列実行も可能ですが今回は直列で確実に行います）
+				for _, sniper := range snipers {
+					sniper.ForceExit(apiPassword)
+				}
+
+				// 2. 取引所の約定処理を待機
+				fmt.Println("⏳ 全スナイパーの撤収完了。取引所の約定データ反映を待機中 (3秒)...")
+				time.Sleep(3 * time.Second)
+
+				// 3. 最終ポジション確認（死力確認）
+				fmt.Println("🔍 最終ポジション確認を実行します...")
+				finalPositions, err := client.GetPositions("2")
 				if err == nil {
-					for _, order := range orders {
-						if order.State == 3 {
-							fmt.Printf("🛑 注文(ID: %s)をキャンセル中...\n", order.ID)
-							req := kabu.CancelRequest{OrderID: order.ID, Password: "dummy"}
-							_, _ = client.CancelOrder(req)
+					remainingCount := 0
+					for _, pos := range finalPositions {
+						if pos.LeavesQty > 0 {
+							remainingCount++
+							fmt.Printf("⚠️ 警告: 建玉が残っています！ 銘柄: %s, 残数量: %f\n", pos.SymbolName, pos.LeavesQty)
 						}
 					}
+
+					if remainingCount == 0 {
+						fmt.Println("✅ 【完全勝利】すべての建玉の決済が確認されました。ノーポジションです。")
+						cancel() // 成功した時だけシャットダウン！
+						return
+					} else {
+						// 失敗時は cancel() も return もしない！
+						fmt.Printf("🚨 【緊急事態】未決済の建玉が %d 件残っています！\n", remainingCount)
+						fmt.Println("🔄 30秒後に強制決済プロセスをリトライします...")
+						time.Sleep(30 * time.Second) // 👈 証券会社へのDDoSを防ぐためのインターバル
+					}
+				} else {
+					fmt.Printf("❌ 最終確認での建玉取得エラー: %v\n", err)
+					fmt.Println("🔄 30秒後に強制決済プロセスをリトライします...")
+					time.Sleep(30 * time.Second)
 				}
-				cancel()
-				return
 			}
 		}
 	}
