@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"trading-bot/internal/domain/market"
+	"trading-bot/internal/domain/service"
 	"trading-bot/internal/domain/sniper"
 	"trading-bot/internal/domain/sniper/strategy"
 	"trading-bot/internal/infra/kabu"
@@ -47,8 +48,8 @@ func buildPortfolio(client *kabu.KabuClient, apiPassword string) *Engine {
 
 	// 4. ユースケースの生成（★ここが追加部分）
 	tradeUC := usecase.NewTradeUseCase(snipers)
-	lifecycleUC := usecase.NewLifecycleUseCase(snipers, client, apiPassword)
+	cleaner := service.NewPositionCleaner(snipers, client, apiPassword)
 
 	// 5. 司令部（Engine）の生成
-	return NewEngine(streamer, tradeUC, lifecycleUC, watchSymbols)
+	return NewEngine(streamer, tradeUC, cleaner, watchSymbols)
 }

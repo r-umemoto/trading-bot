@@ -1,34 +1,32 @@
-// internal/usecase/lifecycle_usecase.go
-package usecase
+package service
 
 import (
 	"fmt"
 	"time"
-
 	"trading-bot/internal/domain/sniper"
 	"trading-bot/internal/infra/kabu"
 )
 
-// LifecycleUseCase はシステムの起動時クリーンアップと、終了時の完全撤収（ノーポジ確認）を担います
-type LifecycleUseCase struct {
+// PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するサービスです。
+type PositionCleaner struct {
 	snipers     []*sniper.Sniper
-	client      *kabu.KabuClient // 最終確認やクリーンアップ用のインフラ通信
+	client      *kabu.KabuClient
 	apiPassword string
 }
 
-func NewLifecycleUseCase(snipers []*sniper.Sniper, client *kabu.KabuClient, apiPassword string) *LifecycleUseCase {
-	return &LifecycleUseCase{
+func NewPositionCleaner(snipers []*sniper.Sniper, client *kabu.KabuClient, apiPassword string) *PositionCleaner {
+	return &PositionCleaner{
 		snipers:     snipers,
 		client:      client,
 		apiPassword: apiPassword,
 	}
 }
 
-// Startup は起動時に残存建玉をすべて成行で強制決済します
-func (u *LifecycleUseCase) Startup() error {
+// CleanupOnStartup は起動時に残存している建玉をすべて成行で強制決済します
+func (c *PositionCleaner) CleanupOnStartup() error {
 	fmt.Println("🧹 起動時のシステム状態チェックを開始します...")
 
-	initialPositions, err := u.client.GetPositions("2")
+	initialPositions, err := c.client.GetPositions("2")
 	if err != nil {
 		return fmt.Errorf("建玉取得エラー: %w", err)
 	}
@@ -40,7 +38,7 @@ func (u *LifecycleUseCase) Startup() error {
 			fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %d株\n", pos.SymbolName, qty)
 
 			req := kabu.OrderRequest{
-				Password:       u.apiPassword,
+				Password:       c.apiPassword,
 				Symbol:         pos.Symbol,
 				Exchange:       1,
 				SecurityType:   1,
@@ -49,7 +47,7 @@ func (u *LifecycleUseCase) Startup() error {
 				FrontOrderType: 10, // 成行
 				Price:          0,
 			}
-			if _, err := u.client.SendOrder(req); err != nil {
+			if _, err := c.client.SendOrder(req); err != nil {
 				return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.SymbolName, err)
 			}
 			cleaned = true
@@ -60,7 +58,7 @@ func (u *LifecycleUseCase) Startup() error {
 		fmt.Println("⏳ クリーンアップの約定処理を待機中 (3秒)...")
 		time.Sleep(3 * time.Second)
 
-		finalPositions, err := u.client.GetPositions("2")
+		finalPositions, err := c.client.GetPositions("2")
 		if err != nil {
 			return fmt.Errorf("最終確認での建玉取得エラー: %w", err)
 		}
@@ -77,10 +75,10 @@ func (u *LifecycleUseCase) Startup() error {
 	return nil
 }
 
-// Shutdown は全スナイパーに撤退命令を出し、完全にノーポジになるまで執念深く確認します
-func (u *LifecycleUseCase) Shutdown() error {
+// CleanAllPositions は終了時に全スナイパーを撤収させ、ノーポジになるまで見届けます
+func (c *PositionCleaner) CleanAllPositions() error {
 	fmt.Println("\n🚨 全スナイパーに緊急撤退命令を出します...")
-	for _, s := range u.snipers {
+	for _, s := range c.snipers {
 		s.ForceExit()
 	}
 
@@ -89,7 +87,7 @@ func (u *LifecycleUseCase) Shutdown() error {
 
 	for {
 		fmt.Println("🔍 最終ポジション確認を実行します...")
-		finalPositions, err := u.client.GetPositions("2")
+		finalPositions, err := c.client.GetPositions("2")
 
 		if err == nil {
 			remainingCount := 0

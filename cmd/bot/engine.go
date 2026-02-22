@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"trading-bot/internal/domain/market"
+	"trading-bot/internal/domain/service"
 	"trading-bot/internal/infra/kabu"
 	"trading-bot/internal/usecase"
 )
@@ -15,18 +16,18 @@ import (
 type Engine struct {
 	streamer     market.PriceStreamer
 	tradeUC      *usecase.TradeUseCase
-	lifecycleUC  *usecase.LifecycleUseCase
+	cleaner      *service.PositionCleaner
 	watchSymbols []string
 
 	client      *kabu.KabuClient // クリーンアップと最終確認用
 	apiPassword string
 }
 
-func NewEngine(streamer market.PriceStreamer, tradeUC *usecase.TradeUseCase, lifecycleUC *usecase.LifecycleUseCase, watchSymbols []string) *Engine {
+func NewEngine(streamer market.PriceStreamer, tradeUC *usecase.TradeUseCase, cleaner *service.PositionCleaner, watchSymbols []string) *Engine {
 	return &Engine{
 		streamer:     streamer,
 		tradeUC:      tradeUC,
-		lifecycleUC:  lifecycleUC,
+		cleaner:      cleaner,
 		watchSymbols: watchSymbols,
 	}
 }
@@ -34,7 +35,7 @@ func NewEngine(streamer market.PriceStreamer, tradeUC *usecase.TradeUseCase, lif
 // Run はシステムの初期化を行い、メインループを開始します
 func (e *Engine) Run(ctx context.Context) error {
 	// 1. 起動時処理をユースケースに移譲
-	if err := e.lifecycleUC.Startup(); err != nil {
+	if err := e.cleaner.CleanupOnStartup(); err != nil {
 		return err
 	}
 
@@ -70,5 +71,5 @@ Loop:
 	}
 
 	// 5. ループを抜けた後の死に際の処理
-	return e.lifecycleUC.Shutdown()
+	return e.cleaner.CleanAllPositions()
 }
