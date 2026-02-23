@@ -7,10 +7,10 @@ import "trading-bot/internal/domain/sniper/brain"
 // ---------------------------------------------------
 type FixedRateStrategy struct {
 	TargetPrice float64
-	Quantity    int
+	Quantity    float64
 }
 
-func NewFixedRate(entryPrice, rate float64, qty int) *FixedRateStrategy {
+func NewFixedRate(entryPrice, rate float64, qty float64) *FixedRateStrategy {
 	return &FixedRateStrategy{
 		TargetPrice: entryPrice * (1.0 + rate),
 		Quantity:    qty,

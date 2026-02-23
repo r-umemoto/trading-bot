@@ -9,11 +9,11 @@ type KillSwitch struct {
 	MainLogic   LogicNode // 包み込まれる本来の戦略
 	IsTriggered bool      // キルスイッチが押されたか
 	HasPosition bool      // 現在建玉を持っているか（全決済のため）
-	Quantity    int
+	Quantity    float64
 }
 
 // 本来の戦略を渡してキルスイッチ付き戦略を作る
-func NewKillSwitch(mainLogic LogicNode, qty int) *KillSwitch {
+func NewKillSwitch(mainLogic LogicNode, qty float64) *KillSwitch {
 	return &KillSwitch{
 		MainLogic:   mainLogic,
 		IsTriggered: false,

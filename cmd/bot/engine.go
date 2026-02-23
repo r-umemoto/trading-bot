@@ -34,13 +34,18 @@ func NewEngine(streamer market.EventStreamer, tradeUC *usecase.TradeUseCase, cle
 
 // Run はシステムの初期化を行い、メインループを開始します
 func (e *Engine) Run(ctx context.Context) error {
-	// 1. 起動時処理をユースケースに移譲
+	// ノーポジションに強制
+	if err := e.cleaner.CleanupOnStartup(); err != nil {
+		return err
+	}
+
+	// 起動時処理をユースケースに移譲
 	priceCh, execCh, err := e.streamer.Start(ctx)
 	if err != nil {
 		return err
 	}
 
-	// 3. 時間指定キルスイッチ用のタイマー（1秒周期）
+	// 時間指定キルスイッチ用のタイマー（1秒周期）
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 

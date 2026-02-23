@@ -11,17 +11,16 @@ import (
 
 // PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するサービスです。
 type PositionCleaner struct {
-	snipers     []*sniper.Sniper
-	client      *kabu.KabuClient
-	apiPassword string
-	broker      market.OrderBroker
+	snipers []*sniper.Sniper
+	client  *kabu.KabuClient
+	broker  market.OrderBroker
 }
 
-func NewPositionCleaner(snipers []*sniper.Sniper, client *kabu.KabuClient, apiPassword string) *PositionCleaner {
+func NewPositionCleaner(snipers []*sniper.Sniper, client *kabu.KabuClient, broker market.OrderBroker) *PositionCleaner {
 	return &PositionCleaner{
-		snipers:     snipers,
-		client:      client,
-		apiPassword: apiPassword,
+		snipers: snipers,
+		client:  client,
+		broker:  broker,
 	}
 }
 
@@ -29,7 +28,7 @@ func NewPositionCleaner(snipers []*sniper.Sniper, client *kabu.KabuClient, apiPa
 func (c *PositionCleaner) CleanupOnStartup() error {
 	fmt.Println("🧹 起動時のシステム状態チェックを開始します...")
 
-	initialPositions, err := c.client.GetPositions("2")
+	initialPositions, err := c.client.GetPositions(kabu.ProductMargin)
 	if err != nil {
 		return fmt.Errorf("建玉取得エラー: %w", err)
 	}
@@ -41,7 +40,7 @@ func (c *PositionCleaner) CleanupOnStartup() error {
 			fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %d株\n", pos.SymbolName, qty)
 
 			req := kabu.OrderRequest{
-				Password:       c.apiPassword,
+				Password:       c.client.ApiPassword,
 				Symbol:         pos.Symbol,
 				Exchange:       1,
 				SecurityType:   1,
@@ -85,28 +84,43 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 	for _, s := range c.snipers {
 		s.ForceExit()
 		for _, cancel := range s.Orders {
-			c.broker.CancelOrder(ctx, cancel.OrderID)
+			if !cancel.IsClosed {
+				fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Symbol, cancel.OrderID)
+				err := c.broker.CancelOrder(ctx, cancel.OrderID)
+				if err != nil {
+					fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Symbol, err)
+				} else {
+					cancel.IsClosed = true // キャンセル完了として扱う
+				}
+			}
 		}
 	}
 
-	remainPpsitions, err := c.broker.GetOrders(ctx, market.ProductMargin)
+	// --- 第二段階：証券会社側でのロック解除を待機 ---
+	time.Sleep(2 * time.Second)
+
+	positions, err := c.broker.GetPositions(ctx, market.ProductMargin)
 	if err != nil {
-		return fmt.Errorf("注文一覧取得失敗")
+		fmt.Printf("❌ 建玉取得エラー: %v\n", err)
+		return nil
 	}
 
-	for _, ramainOrder := range remainPpsitions {
+	for _, ramainOrder := range positions {
 		// 成り行きで売る
 		c.broker.SendOrder(ctx, market.OrderRequest{
-			Symbol: ramainOrder.Symbol, // TODO 正式なパラメータを実装
+			Symbol: ramainOrder.Symbol,
+			Action: market.Sell,
+			Qty:    ramainOrder.Qty,
 		})
 	}
 
 	fmt.Println("⏳ 撤収完了。取引所の約定データ反映を待機中 (3秒)...")
 	time.Sleep(3 * time.Second)
 
+	safety := 0
 	for {
 		fmt.Println("🔍 最終ポジション確認を実行します...")
-		remainPpsitions, err := c.broker.GetOrders(ctx, market.ProductMargin)
+		remainPpsitions, err := c.broker.GetPositions(ctx, market.ProductMargin)
 		if err == nil {
 			remainingCount := 0
 			for _, pos := range remainPpsitions {
@@ -128,5 +142,11 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 
 		fmt.Println("🔄 30秒後に強制決済プロセスをリトライします...")
 		time.Sleep(30 * time.Second)
+		safety++
+		if safety > 2 {
+			fmt.Println("🔄 リトライ上限...")
+			break
+		}
 	}
+	return fmt.Errorf("異常終了")
 }

@@ -30,10 +30,12 @@ func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest
 		Exchange:       1,
 		SecurityType:   1,
 		Side:           side,
-		Qty:            req.Qty,
+		Qty:            int(req.Qty),
 		FrontOrderType: 10, // 成行
 		Price:          0,
 	}
+
+	fmt.Printf("発注完了 side:%s, qty: %f", side, req.Qty)
 
 	resp, err := b.client.SendOrder(kabReq)
 	if err != nil {
@@ -53,7 +55,15 @@ func (b *KabuOrderBroker) CancelOrder(ctx context.Context, orderID string) error
 	return nil
 }
 
-func (b *KabuOrderBroker) GetOrders(ctx context.Context, product market.ProductType) ([]market.Position, error) {
+func (b *KabuOrderBroker) GetOrders(ctx context.Context) ([]market.Order, error) {
+	orders, err := b.client.GetOrders()
+	if err != nil {
+		return nil, fmt.Errorf("注文取得失敗)")
+	}
+	return orders, nil
+}
+
+func (b *KabuOrderBroker) GetPositions(ctx context.Context, product market.ProductType) ([]market.Position, error) {
 	arg := ProductMargin
 	if product != market.ProductMargin {
 		// 現状は信用取引しかしてない

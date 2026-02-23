@@ -18,7 +18,7 @@ type Strategy interface {
 type OrderState struct {
 	OrderID  string
 	Action   market.Action
-	Quantity int
+	Quantity float64
 	IsClosed bool
 }
 
@@ -66,7 +66,7 @@ func (s *Sniper) Tick(currentPrice float64) *market.OrderRequest {
 	}
 
 	// 1. 現在の建玉から必要なパラメータを計算（抽出）する
-	var holdQty uint32
+	var holdQty float64
 	var totalExposure float64
 	for _, p := range s.positions {
 		holdQty += p.Qty
@@ -106,7 +106,7 @@ func (s *Sniper) Tick(currentPrice float64) *market.OrderRequest {
 }
 
 // RecordOrder は、ユースケースが発注を完了した後に呼ばれ、状態を記録します
-func (s *Sniper) RecordOrder(orderID string, action market.Action, qty int) {
+func (s *Sniper) RecordOrder(orderID string, action market.Action, qty float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -128,7 +128,7 @@ func (s *Sniper) ForceExit() {
 }
 
 // reducePositions は、指定された数量分だけ古い建玉から順に削減します
-func (s *Sniper) reducePositions(sellQty uint32) {
+func (s *Sniper) reducePositions(sellQty float64) {
 	remainingToSell := sellQty
 	var newPositions []market.Position
 

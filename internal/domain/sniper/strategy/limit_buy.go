@@ -7,10 +7,10 @@ import (
 
 type LimitBuy struct {
 	TargetPrice float64
-	Quantity    int
+	Quantity    float64
 }
 
-func NewLimitBuy(targetPrice float64, qty int) *LimitBuy {
+func NewLimitBuy(targetPrice float64, qty float64) *LimitBuy {
 	return &LimitBuy{TargetPrice: targetPrice, Quantity: qty}
 }
 

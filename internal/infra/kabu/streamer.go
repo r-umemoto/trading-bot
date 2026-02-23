@@ -2,6 +2,7 @@ package kabu
 
 import (
 	"context"
+	"fmt"
 	"time"
 	"trading-bot/internal/domain/market"
 )
@@ -36,9 +37,7 @@ func (a *KabuMarketAdapter) Start(ctx context.Context) (<-chan market.Tick, <-ch
 	return priceCh, execCh, nil
 }
 
-func (a *KabuMarketAdapter) startWebSocketLoop(ctx context.Context, ch chan market.Tick) {
-	tickCh := make(chan market.Tick)
-
+func (a *KabuMarketAdapter) startWebSocketLoop(ctx context.Context, tickCh chan market.Tick) {
 	// 既存のWebSocketクライアントを起動
 	rawCh := make(chan PushMessage)
 	wsClient := NewWSClient(a.wsURL)
@@ -77,7 +76,7 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 			apiOrders, err := a.client.GetOrders()
 			if err != nil {
 				// ネットワークエラー等はログだけ出して次のTickを待つ
-				// fmt.Printf("ポーリングエラー: %v\n", err)
+				fmt.Printf("ポーリングエラー: %v\n", err)
 				continue
 			}
 
@@ -100,8 +99,8 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 						OrderID: apiOrder.ID,
 						Symbol:  apiOrder.Symbol,
 						Action:  action,
-						// Price:   apiOrder.ExecutionPrice,
-						// Qty:     apiOrder.ExecutionQty,
+						Price:   apiOrder.Price,
+						Qty:     apiOrder.CumQty,
 					}
 
 					// 送信完了として記録

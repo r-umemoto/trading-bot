@@ -28,7 +28,7 @@ func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 
 	// 3. ユースケースとサービスの組み立て
 	tradeUC := usecase.NewTradeUseCase(snipers, broker)
-	cleaner := service.NewPositionCleaner(snipers, client, cfg.Kabu.Password)
+	cleaner := service.NewPositionCleaner(snipers, client, broker)
 
 	// 4. エンジンの完成
 	return NewEngine(streamer, tradeUC, cleaner, watchSymbols), nil
@@ -62,7 +62,7 @@ func deploySnipers() ([]*sniper.Sniper, []string) {
 
 	watchList := []struct {
 		Symbol string
-		Qty    int
+		Qty    float64
 		Price  float64
 	}{
 		{Symbol: "9433", Qty: 100, Price: 3990.0},
