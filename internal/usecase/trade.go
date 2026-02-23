@@ -19,7 +19,7 @@ func NewTradeUseCase(snipers []*sniper.Sniper) *TradeUseCase {
 func (u *TradeUseCase) Execute(tick market.Tick) {
 	for _, s := range u.snipers {
 		if s.Symbol == tick.Symbol {
-			s.OnPriceUpdate(tick.Price)
+			s.Tick(tick.Price)
 		}
 	}
 }

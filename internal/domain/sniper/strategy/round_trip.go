@@ -9,7 +9,7 @@ import "trading-bot/internal/domain/sniper/brain"
 // ★ strategyパッケージ専用のローカルインターフェース！
 // （sniper.Brainと全く同じ形だけど、お互い全く関係ない）
 type LogicNode interface {
-	Evaluate(price float64) brain.Signal
+	Evaluate(input StrategyInput) brain.Signal
 }
 
 type RoundTripStrategy struct {
@@ -27,17 +27,17 @@ func NewRoundTrip(entry, exit LogicNode) *RoundTripStrategy {
 }
 
 // 単体の戦略と全く同じ Evaluate を持っているため、Sniper からは透過的に扱える
-func (s *RoundTripStrategy) Evaluate(price float64) brain.Signal {
+func (s *RoundTripStrategy) Evaluate(input StrategyInput) brain.Signal {
 	if !s.HasPosition {
 		// 建玉がない場合：買い戦略に判断を委譲
-		sig := s.EntryStrategy.Evaluate(price)
+		sig := s.EntryStrategy.Evaluate(input)
 		if sig.Action == brain.ActionBuy {
 			s.HasPosition = true // 買いシグナルが出たら「持っている」状態へ遷移
 		}
 		return sig
 	} else {
 		// 建玉がある場合：売り戦略に判断を委譲
-		sig := s.ExitStrategy.Evaluate(price)
+		sig := s.ExitStrategy.Evaluate(input)
 		if sig.Action == brain.ActionSell {
 			s.HasPosition = false // 売りシグナルが出たら「持っていない」状態へ戻る
 		}

@@ -17,8 +17,8 @@ func NewFixedRate(entryPrice, rate float64, qty int) *FixedRateStrategy {
 	}
 }
 
-func (s *FixedRateStrategy) Evaluate(price float64) brain.Signal {
-	if price >= s.TargetPrice {
+func (s *FixedRateStrategy) Evaluate(input StrategyInput) brain.Signal {
+	if input.CurrentPrice >= s.TargetPrice {
 		return brain.Signal{Action: brain.ActionSell, Quantity: s.Quantity}
 	}
 	return brain.Signal{Action: brain.ActionHold}

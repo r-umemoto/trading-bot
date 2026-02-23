@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"trading-bot/internal/domain/market"
 	"trading-bot/internal/domain/sniper/brain"
+	"trading-bot/internal/domain/sniper/strategy"
 )
 
 // すべての戦略が満たすべき頭脳の規格
 type Strategy interface {
-	Evaluate(currentPrice float64) brain.Signal
+	Evaluate(input strategy.StrategyInput) brain.Signal
 }
 
 // OrderState は発注した注文の追跡用データです
@@ -21,11 +23,12 @@ type OrderState struct {
 }
 
 type Position struct {
-	Symbol string
-	Qty    float64
+	Symbol string  // 銘柄
+	Qty    uint32  // 数数
+	Price  float64 // 取得価格
 }
 
-// ★ 新設：スナイパーが要求する「注文執行機能」の規格
+// スナイパーが要求する「注文執行機能」の規格
 type OrderExecutor interface {
 	ExecuteOrder(symbol string, action brain.Action, qty int) (OrderState, error)
 	CancelOrder(orderID string) error
@@ -40,6 +43,7 @@ type KillSwitchable interface {
 // Sniper は戦略とAPIクライアントを持ち、執行を担います
 type Sniper struct {
 	Symbol    string
+	positions []Position
 	Strategy  Strategy
 	executor  OrderExecutor
 	Orders    []*OrderState
@@ -50,14 +54,16 @@ type Sniper struct {
 // NewSniper の引数と戻り値も修正
 func NewSniper(symbol string, strategy Strategy, excutor OrderExecutor) *Sniper {
 	return &Sniper{
-		Symbol:   symbol,
-		Strategy: strategy,
-		executor: excutor,
-		Orders:   make([]*OrderState, 0),
+		Symbol:    symbol,
+		Strategy:  strategy,
+		executor:  excutor,
+		Orders:    make([]*OrderState, 0),
+		positions: []Position{}, // 初期状態は空
 	}
 }
 
-func (s *Sniper) OnPriceUpdate(currentPrice float64) {
+// 価格の更新がされたと時に実行される監視ロジック
+func (s *Sniper) Tick(currentPrice float64) {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
@@ -67,32 +73,54 @@ func (s *Sniper) OnPriceUpdate(currentPrice float64) {
 		return
 	}
 
+	// 1. 現在の建玉から必要なパラメータを計算（抽出）する
+	var holdQty uint32
+	var totalExposure float64
+
+	for _, p := range s.positions {
+		holdQty += p.Qty
+		totalExposure += p.Price * float64(p.Qty) // 取得単価 × 数量
+	}
+
+	averagePrice := 0.0
+	if holdQty > 0 {
+		averagePrice = totalExposure / float64(holdQty)
+	}
+
+	// 2. 計算済みのキレイなデータだけをInputに詰める
+	input := strategy.StrategyInput{
+		CurrentPrice:  currentPrice,
+		HoldQty:       holdQty,
+		AveragePrice:  averagePrice,
+		TotalExposure: totalExposure,
+	}
+
 	// 1. 頭脳に価格を渡して判断を仰ぐ
-	signal := s.Strategy.Evaluate(currentPrice)
+	signal := s.Strategy.Evaluate(input)
 
 	// 2. 受け取ったシグナルで発砲する
 	s.executeSignal(signal)
 }
 
-// 🎯 新設：純粋な発砲処理（ダミー価格のハックが不要になる）
+// 🎯 新設：純粋な発砲処理
 func (s *Sniper) executeSignal(signal brain.Signal) {
 	if signal.Action == brain.ActionHold {
 		return
 	}
 
-	fmt.Printf("🔥 [%s] シグナル検知！ %s %d株を成行発注します\n", s.Symbol, signal.Action, signal.Quantity)
+	fmt.Printf("🚀 [%s] 発注開始: %s %d株\n", s.Symbol, signal.Action, signal.Quantity)
 
-	// 3. 執行
+	// APIへ注文を送信
 	resp, err := s.executor.ExecuteOrder(s.Symbol, signal.Action, signal.Quantity)
 	if err != nil {
 		fmt.Printf("❌ [%s] 発注エラー: %v\n", s.Symbol, err)
 		return
 	}
 
-	// 4. モックサーバーから返ってきた「本物」のOrderIDを記録する
+	// 発注が受け付けられたら、未約定の注文としてリストに追加するだけ（建玉は増やさない）
 	s.Orders = append(s.Orders, &resp)
 
-	fmt.Printf("✅ 注文完了！状態を記録しました (API受付ID: %s)\n", resp.OrderID)
+	fmt.Printf("📝 [%s] 注文受付完了: ID=%s (約定待ち)\n", s.Symbol, resp.OrderID)
 }
 
 // ForceExit はキルスイッチ作動時に呼ばれ、自身の未約定注文のキャンセルと成行決済を行います
@@ -167,4 +195,66 @@ func (s *Sniper) EmergencyExit() {
 	s.mu.Lock()
 	s.isExiting = true
 	s.mu.Unlock()
+}
+
+// reducePositions は、指定された数量分だけ古い建玉から順に削減します
+func (s *Sniper) reducePositions(sellQty uint32) {
+	remainingToSell := sellQty
+	var newPositions []Position
+
+	for _, p := range s.positions {
+		if remainingToSell <= 0 {
+			// 売却分を消化しきったら、残りの建玉はそのまま保持リストへ
+			newPositions = append(newPositions, p)
+			continue
+		}
+
+		if p.Qty <= remainingToSell {
+			// この建玉ロットを全量売却するケース
+			remainingToSell -= p.Qty
+			// 全量売却なので newPositions には追加しない（消滅）
+		} else {
+			// この建玉ロットの一部だけを売却するケース
+			p.Qty -= remainingToSell
+			remainingToSell = 0
+			newPositions = append(newPositions, p)
+		}
+	}
+
+	// 更新された建玉リストで上書き
+	s.positions = newPositions
+}
+
+// OnExecution は、証券会社から約定通知を受信した際に呼び出されます
+func (s *Sniper) OnExecution(report market.ExecutionReport) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. 対象の注文状態を更新する
+	var matchedOrder *OrderState
+	for _, order := range s.Orders {
+		if order.OrderID == report.OrderID {
+			matchedOrder = order
+			order.IsClosed = true
+			break
+		}
+	}
+
+	if matchedOrder == nil {
+		fmt.Printf("⚠️ [%s] 未知の注文ID(%s)の約定通知を受信しました\n", s.Symbol, report.OrderID)
+	}
+
+	// 2. 実際の約定結果に基づいて、建玉（Positions）を更新する
+	switch report.Action {
+	case market.Buy:
+		s.positions = append(s.positions, Position{
+			Symbol: report.Symbol,
+			Qty:    report.Qty,
+			Price:  report.Price,
+		})
+		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%d\n", s.Symbol, report.Price, report.Qty)
+	case market.Sell:
+		s.reducePositions(report.Qty)
+		fmt.Printf("✅ [%s] 売付約定を反映: 数量%d\n", s.Symbol, report.Qty)
+	}
 }

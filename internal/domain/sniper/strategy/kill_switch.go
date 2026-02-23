@@ -34,7 +34,7 @@ func (k *KillSwitch) Activate() brain.Signal {
 	return brain.Signal{Action: brain.ActionHold}
 }
 
-func (k *KillSwitch) Evaluate(price float64) brain.Signal {
+func (k *KillSwitch) Evaluate(input StrategyInput) brain.Signal {
 	// 🚨 キルスイッチ発動中！
 	if k.IsTriggered {
 		// 既にキルスイッチ起動済みの場合は気絶しておく
@@ -42,7 +42,7 @@ func (k *KillSwitch) Evaluate(price float64) brain.Signal {
 	}
 
 	// 🕊️ 平常時は、包み込んでいる本来の戦略に判断を丸投げする
-	sig := k.MainLogic.Evaluate(price)
+	sig := k.MainLogic.Evaluate(input)
 
 	// 本来の戦略が出したシグナルを見て、ポジション状態を同期しておく
 	switch sig.Action {

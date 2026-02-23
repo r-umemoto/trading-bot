@@ -72,7 +72,8 @@ func deploySnipers(executor sniper.OrderExecutor) ([]*sniper.Sniper, []string) {
 		buyStrategy := strategy.NewLimitBuy(t.Price, t.Qty)
 		sellStrategy := strategy.NewFixedRate(t.Price, 0.002, t.Qty)
 		masterStrategy := strategy.NewRoundTrip(buyStrategy, sellStrategy)
-		safeLogic := strategy.NewKillSwitch(masterStrategy, t.Qty)
+		budgetLogic := strategy.NewBudgetConstraint(masterStrategy, 1000000.0)
+		safeLogic := strategy.NewKillSwitch(budgetLogic, t.Qty)
 
 		s := sniper.NewSniper(t.Symbol, safeLogic, executor)
 		snipers = append(snipers, s)
