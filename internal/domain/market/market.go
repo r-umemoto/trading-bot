@@ -8,12 +8,6 @@ type Tick struct {
 	Price  float64
 }
 
-// PriceStreamer は株価を配信するサービスの共通規格
-type PriceStreamer interface {
-	// コンテキストを受け取り、Tickが延々と流れてくる専用の管（チャネル）を返す
-	Subscribe(ctx context.Context, symbols []string) (<-chan Tick, error)
-}
-
 type Action string
 
 const (
@@ -28,4 +22,10 @@ type ExecutionReport struct {
 	Action  Action  // 買いか売りか
 	Price   float64 // 実際の約定単価
 	Qty     uint32  // 実際に約定した数量
+}
+
+// EventStreamer は、市場で発生するあらゆるイベントを受信するための規格です
+type EventStreamer interface {
+	// Start は市場との接続を開始し、2つのイベントチャネルを返します
+	Start(ctx context.Context) (<-chan Tick, <-chan ExecutionReport, error)
 }

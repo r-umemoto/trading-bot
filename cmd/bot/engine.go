@@ -14,7 +14,7 @@ import (
 
 // Engine はシステム全体のライフサイクル（初期化、実行、停止）を管理する司令部です
 type Engine struct {
-	streamer     market.PriceStreamer
+	streamer     market.EventStreamer
 	tradeUC      *usecase.TradeUseCase
 	cleaner      *service.PositionCleaner
 	watchSymbols []string
@@ -23,7 +23,7 @@ type Engine struct {
 	apiPassword string
 }
 
-func NewEngine(streamer market.PriceStreamer, tradeUC *usecase.TradeUseCase, cleaner *service.PositionCleaner, watchSymbols []string) *Engine {
+func NewEngine(streamer market.EventStreamer, tradeUC *usecase.TradeUseCase, cleaner *service.PositionCleaner, watchSymbols []string) *Engine {
 	return &Engine{
 		streamer:     streamer,
 		tradeUC:      tradeUC,
@@ -35,12 +35,7 @@ func NewEngine(streamer market.PriceStreamer, tradeUC *usecase.TradeUseCase, cle
 // Run はシステムの初期化を行い、メインループを開始します
 func (e *Engine) Run(ctx context.Context) error {
 	// 1. 起動時処理をユースケースに移譲
-	if err := e.cleaner.CleanupOnStartup(); err != nil {
-		return err
-	}
-
-	// 2. 購読開始
-	tickCh, err := e.streamer.Subscribe(ctx, e.watchSymbols)
+	priceCh, execCh, err := e.streamer.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -65,8 +60,11 @@ Loop:
 				break Loop
 			}
 
-		case tick := <-tickCh: // 価格の受信
-			e.tradeUC.Execute(tick)
+		case tick := <-priceCh: // 価格の受信
+			e.tradeUC.HandleTick(tick)
+		case report := <-execCh:
+			// 約定通知が来たら、担当のスナイパーを探して渡す（ルーティング）
+			e.tradeUC.HandleExecution(report)
 		}
 	}
 

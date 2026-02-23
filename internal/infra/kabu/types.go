@@ -91,11 +91,30 @@ type CancelResponse struct {
 	OrderID string `json:"OrderId"`
 }
 
+type Side string
+
+const (
+	Buy  Side = "1"
+	Sell Side = "2"
+)
+
+func (s Side) print() string {
+	switch s {
+	case "1":
+		return "Buy"
+	case "2":
+		return "Sell"
+	default:
+		return "unknown"
+	}
+}
+
 // OrderInfo は現在出ている注文の情報を表します
 type OrderInfo struct {
 	ID     string `json:"ID"`     // 注文ID（キャンセル時に必要）
 	State  int    `json:"State"`  // 状態（3: 処理中/待機中, 5: 終了 など）
 	Symbol string `json:"Symbol"` // 銘柄コード
+	Side   Side   `json:"Side"`
 }
 
 // product: "0":すべて, "1":現物, "2":信用, "3":先物, "4":オプション

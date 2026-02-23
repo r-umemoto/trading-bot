@@ -38,7 +38,7 @@ func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 // ▼ ここから下は「下請け工場（プライベート関数）」に押し込む
 // ---------------------------------------------------------
 
-func buildInfrastructure(cfg *config.AppConfig) (sniper.OrderExecutor, market.PriceStreamer, *kabu.KabuClient, error) {
+func buildInfrastructure(cfg *config.AppConfig) (sniper.OrderExecutor, market.EventStreamer, *kabu.KabuClient, error) {
 	if cfg.BrokerType != "kabu" {
 		return nil, nil, nil, fmt.Errorf("未対応のブローカーです: %s", cfg.BrokerType)
 	}
@@ -51,7 +51,7 @@ func buildInfrastructure(cfg *config.AppConfig) (sniper.OrderExecutor, market.Pr
 	executor := kabu.NewKabuExecutor(client, cfg.Kabu.Password)
 
 	wsURL := strings.Replace(cfg.Kabu.APIURL, "http://", "ws://", 1)
-	streamer := kabu.NewKabuStreamer(wsURL + "/websocket")
+	streamer := kabu.NewKabuMarketAdapter(wsURL+"/websocket", client)
 
 	return executor, streamer, client, nil
 }
