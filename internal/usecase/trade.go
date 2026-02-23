@@ -2,6 +2,8 @@
 package usecase
 
 import (
+	"context"
+	"fmt"
 	"trading-bot/internal/domain/market"
 	"trading-bot/internal/domain/sniper"
 )
@@ -9,17 +11,35 @@ import (
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
 	snipers []*sniper.Sniper
+	broker  market.OrderBroker
 }
 
-func NewTradeUseCase(snipers []*sniper.Sniper) *TradeUseCase {
-	return &TradeUseCase{snipers: snipers}
+func NewTradeUseCase(snipers []*sniper.Sniper, broker market.OrderBroker) *TradeUseCase {
+	return &TradeUseCase{
+		snipers: snipers,
+		broker:  broker,
+	}
 }
 
 // HandleTick は市場のTickデータを受け取り、担当スナイパーの思考と執行をトリガーします
-func (u *TradeUseCase) HandleTick(tick market.Tick) {
+func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
 	for _, s := range u.snipers {
 		if s.Symbol == tick.Symbol {
-			s.Tick(tick.Price)
+			// 1. スナイパーに考えさせる（純粋な関数）
+			req := s.Tick(tick.Price)
+
+			if req != nil {
+				// 2. 要求があれば、市場（インフラ）に発注する
+				orderID, err := u.broker.SendOrder(ctx, *req)
+				if err != nil {
+					fmt.Printf("❌ 発注失敗: %v\n", err)
+					continue
+				}
+
+				// 3. 発注が成功したら、スナイパーにIDを覚えさせる
+				s.RecordOrder(orderID, req.Action, req.Qty)
+				fmt.Printf("✅ 注文受付IDを記録しました: %s\n", orderID)
+			}
 		}
 	}
 }

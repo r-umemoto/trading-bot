@@ -18,16 +18,16 @@ import (
 // buildPortfolio は、システム全体を俯瞰する「目次」です
 func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 	// 1. インフラ層の構築（泥臭い設定はすべてここへ）
-	executor, streamer, client, err := buildInfrastructure(cfg)
+	streamer, client, broker, err := buildInfrastructure(cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	// 2. ドメイン層（スナイパー）の配備
-	snipers, watchSymbols := deploySnipers(executor)
+	snipers, watchSymbols := deploySnipers()
 
 	// 3. ユースケースとサービスの組み立て
-	tradeUC := usecase.NewTradeUseCase(snipers)
+	tradeUC := usecase.NewTradeUseCase(snipers, broker)
 	cleaner := service.NewPositionCleaner(snipers, client, cfg.Kabu.Password)
 
 	// 4. エンジンの完成
@@ -38,25 +38,25 @@ func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 // ▼ ここから下は「下請け工場（プライベート関数）」に押し込む
 // ---------------------------------------------------------
 
-func buildInfrastructure(cfg *config.AppConfig) (sniper.OrderExecutor, market.EventStreamer, *kabu.KabuClient, error) {
+func buildInfrastructure(cfg *config.AppConfig) (market.EventStreamer, *kabu.KabuClient, *kabu.KabuOrderBroker, error) {
 	if cfg.BrokerType != "kabu" {
 		return nil, nil, nil, fmt.Errorf("未対応のブローカーです: %s", cfg.BrokerType)
 	}
 
 	client := kabu.NewKabuClient(cfg.Kabu)
-	if err := client.GetToken(cfg.Kabu.Password); err != nil {
+	if err := client.GetToken(); err != nil {
 		return nil, nil, nil, fmt.Errorf("トークン取得エラー: %w", err)
 	}
 
-	executor := kabu.NewKabuExecutor(client, cfg.Kabu.Password)
+	broker := kabu.NewKabuOrderBroker(client)
 
 	wsURL := strings.Replace(cfg.Kabu.APIURL, "http://", "ws://", 1)
 	streamer := kabu.NewKabuMarketAdapter(wsURL+"/websocket", client)
 
-	return executor, streamer, client, nil
+	return streamer, client, broker, nil
 }
 
-func deploySnipers(executor sniper.OrderExecutor) ([]*sniper.Sniper, []string) {
+func deploySnipers() ([]*sniper.Sniper, []string) {
 	var snipers []*sniper.Sniper
 	var watchSymbols []string
 
@@ -75,7 +75,7 @@ func deploySnipers(executor sniper.OrderExecutor) ([]*sniper.Sniper, []string) {
 		budgetLogic := strategy.NewBudgetConstraint(masterStrategy, 1000000.0)
 		safeLogic := strategy.NewKillSwitch(budgetLogic, t.Qty)
 
-		s := sniper.NewSniper(t.Symbol, safeLogic, executor)
+		s := sniper.NewSniper(t.Symbol, safeLogic)
 		snipers = append(snipers, s)
 		watchSymbols = append(watchSymbols, t.Symbol)
 	}

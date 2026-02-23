@@ -61,7 +61,7 @@ Loop:
 			}
 
 		case tick := <-priceCh: // 価格の受信
-			e.tradeUC.HandleTick(tick)
+			e.tradeUC.HandleTick(ctx, tick)
 		case report := <-execCh:
 			// 約定通知が来たら、担当のスナイパーを探して渡す（ルーティング）
 			e.tradeUC.HandleExecution(report)
@@ -69,5 +69,5 @@ Loop:
 	}
 
 	// 5. ループを抜けた後の死に際の処理
-	return e.cleaner.CleanAllPositions()
+	return e.cleaner.CleanAllPositions(ctx)
 }

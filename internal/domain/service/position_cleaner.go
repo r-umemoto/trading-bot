@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"time"
+	"trading-bot/internal/domain/market"
 	"trading-bot/internal/domain/sniper"
 	"trading-bot/internal/infra/kabu"
 )
@@ -12,6 +14,7 @@ type PositionCleaner struct {
 	snipers     []*sniper.Sniper
 	client      *kabu.KabuClient
 	apiPassword string
+	broker      market.OrderBroker
 }
 
 func NewPositionCleaner(snipers []*sniper.Sniper, client *kabu.KabuClient, apiPassword string) *PositionCleaner {
@@ -76,10 +79,26 @@ func (c *PositionCleaner) CleanupOnStartup() error {
 }
 
 // CleanAllPositions は終了時に全スナイパーを撤収させ、ノーポジになるまで見届けます
-func (c *PositionCleaner) CleanAllPositions() error {
+func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 	fmt.Println("\n🚨 全スナイパーに緊急撤退命令を出します...")
+
 	for _, s := range c.snipers {
 		s.ForceExit()
+		for _, cancel := range s.Orders {
+			c.broker.CancelOrder(ctx, cancel.OrderID)
+		}
+	}
+
+	remainPpsitions, err := c.broker.GetOrders(ctx, market.ProductMargin)
+	if err != nil {
+		return fmt.Errorf("注文一覧取得失敗")
+	}
+
+	for _, ramainOrder := range remainPpsitions {
+		// 成り行きで売る
+		c.broker.SendOrder(ctx, market.OrderRequest{
+			Symbol: ramainOrder.Symbol, // TODO 正式なパラメータを実装
+		})
 	}
 
 	fmt.Println("⏳ 撤収完了。取引所の約定データ反映を待機中 (3秒)...")
@@ -87,14 +106,17 @@ func (c *PositionCleaner) CleanAllPositions() error {
 
 	for {
 		fmt.Println("🔍 最終ポジション確認を実行します...")
-		finalPositions, err := c.client.GetPositions("2")
+		remainPpsitions, err := c.broker.GetOrders(ctx, market.ProductMargin)
+		if err != nil {
+			return fmt.Errorf("注文一覧取得失敗")
+		}
 
 		if err == nil {
 			remainingCount := 0
-			for _, pos := range finalPositions {
-				if pos.LeavesQty > 0 {
+			for _, pos := range remainPpsitions {
+				if pos.Qty > 0 {
 					remainingCount++
-					fmt.Printf("⚠️ 警告: 建玉が残っています！ 銘柄: %s, 残数量: %f\n", pos.SymbolName, pos.LeavesQty)
+					fmt.Printf("⚠️ 警告: 建玉が残っています！ 銘柄: %s, 残数量: %d\n", pos.Symbol, pos.Qty)
 				}
 			}
 

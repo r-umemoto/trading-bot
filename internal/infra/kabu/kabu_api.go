@@ -11,9 +11,10 @@ import (
 
 // KabuClient はkabuステーションAPIと通信するためのクライアント構造体です
 type KabuClient struct {
-	BaseURL    string
-	Token      string
-	HTTPClient *http.Client
+	BaseURL     string
+	Token       string
+	ApiPassword string
+	HTTPClient  *http.Client
 }
 
 // NewKabuClient は新しいAPIクライアントを生成するコンストラクタです
@@ -23,6 +24,7 @@ func NewKabuClient(config Config) *KabuClient {
 		HTTPClient: &http.Client{
 			Timeout: 10 * time.Second, // タイムアウトをデフォルトでDI
 		},
+		ApiPassword: config.Password,
 	}
 }
 
@@ -46,8 +48,8 @@ func (c *KabuClient) doRequest(method, endpoint string, body io.Reader) (*http.R
 // --- 以下、ビジネスロジック（各APIの実装） ---
 
 // GetToken はパスワードを使って認証を行い、クライアント自身にトークンをセットします
-func (c *KabuClient) GetToken(apiPassword string) error {
-	reqBody := TokenRequest{APIPassword: apiPassword}
+func (c *KabuClient) GetToken() error {
+	reqBody := TokenRequest{APIPassword: c.ApiPassword}
 	jsonData, _ := json.Marshal(reqBody)
 
 	// 内部メソッドを使うのでエンドポイント以下の指定だけで済む
