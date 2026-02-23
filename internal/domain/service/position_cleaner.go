@@ -67,7 +67,7 @@ func (c *PositionCleaner) CleanupOnStartup() error {
 		}
 		for _, pos := range finalPositions {
 			if pos.LeavesQty > 0 {
-				return fmt.Errorf("🚨 クリーンアップ後も建玉が残っています (%s: %f株)。手動で確認してください", pos.SymbolName, pos.LeavesQty)
+				return fmt.Errorf("🚨 クリーンアップ後も建玉が残っています (%s: %d株)。手動で確認してください", pos.SymbolName, pos.LeavesQty)
 			}
 		}
 		fmt.Println("✅ クリーンアップ完了。システムはノーポジションから開始します。")
@@ -107,10 +107,6 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 	for {
 		fmt.Println("🔍 最終ポジション確認を実行します...")
 		remainPpsitions, err := c.broker.GetOrders(ctx, market.ProductMargin)
-		if err != nil {
-			return fmt.Errorf("注文一覧取得失敗")
-		}
-
 		if err == nil {
 			remainingCount := 0
 			for _, pos := range remainPpsitions {
