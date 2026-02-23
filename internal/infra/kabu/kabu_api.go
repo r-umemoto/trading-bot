@@ -17,10 +17,9 @@ type KabuClient struct {
 }
 
 // NewKabuClient は新しいAPIクライアントを生成するコンストラクタです
-func NewKabuClient(baseURL, token string) *KabuClient {
+func NewKabuClient(config Config) *KabuClient {
 	return &KabuClient{
-		BaseURL: baseURL,
-		Token:   token,
+		BaseURL: config.APIURL,
 		HTTPClient: &http.Client{
 			Timeout: 10 * time.Second, // タイムアウトをデフォルトでDI
 		},

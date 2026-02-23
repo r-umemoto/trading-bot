@@ -7,8 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
-	"trading-bot/internal/infra/kabu"
+	"trading-bot/internal/config"
 )
 
 func main() {
@@ -18,20 +17,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 2. インフラ（APIクライアント）の準備
-	apiPassword := os.Getenv("KABU_API_PASSWORD")
-	if apiPassword == "" {
-		apiPassword = "dummy_password"
+	// 1. 設定の読み込み（エラーチェックが自動で効く！）
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("❌ 設定の読み込みに失敗しました: %v", err)
 	}
-	client := kabu.NewKabuClient("http://localhost:18080/kabusapi", "")
-
-	if err := client.GetToken(apiPassword); err != nil {
-		log.Fatalf("❌ トークン取得エラー: %v", err)
-	}
-	fmt.Println("✅ APIトークン取得完了")
 
 	// 3. アプリケーションの組み立て（portfolio.go の buildPortfolio を呼び出す）
-	engine := buildPortfolio(client, apiPassword)
+	engine := buildPortfolio(cfg)
 
 	// 5. 実行！（ここでブロックされ、Engineの内部ですべてが回る）
 	if err := engine.Run(ctx); err != nil {
