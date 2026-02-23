@@ -66,7 +66,7 @@ func (c *PositionCleaner) CleanupOnStartup() error {
 		}
 		for _, pos := range finalPositions {
 			if pos.LeavesQty > 0 {
-				return fmt.Errorf("🚨 クリーンアップ後も建玉が残っています (%s: %d株)。手動で確認してください", pos.SymbolName, pos.LeavesQty)
+				return fmt.Errorf("🚨 クリーンアップ後も建玉が残っています (%s: %f株)。手動で確認してください", pos.SymbolName, pos.LeavesQty)
 			}
 		}
 		fmt.Println("✅ クリーンアップ完了。システムはノーポジションから開始します。")
@@ -126,7 +126,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 			for _, pos := range remainPpsitions {
 				if pos.Qty > 0 {
 					remainingCount++
-					fmt.Printf("⚠️ 警告: 建玉が残っています！ 銘柄: %s, 残数量: %d\n", pos.Symbol, pos.Qty)
+					fmt.Printf("⚠️ 警告: 建玉が残っています！ 銘柄: %s, 残数量: %f\n", pos.Symbol, pos.Qty)
 				}
 			}
 

@@ -55,7 +55,7 @@ func NewSniper(symbol string, strategy Strategy) *Sniper {
 }
 
 // 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick(currentPrice float64) *market.OrderRequest {
+func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
@@ -79,10 +79,13 @@ func (s *Sniper) Tick(currentPrice float64) *market.OrderRequest {
 	}
 
 	input := strategy.StrategyInput{
-		CurrentPrice:  currentPrice,
+		CurrentPrice:  state.CurrentPrice,
 		HoldQty:       holdQty,
 		AveragePrice:  averagePrice,
 		TotalExposure: totalExposure,
+		ShortMA:       state.ShortMA,
+		LongMA:        state.LongMA,
+		VWAP:          state.VWAP,
 	}
 
 	// 1. 頭脳に価格を渡して判断を仰ぐ
@@ -182,9 +185,9 @@ func (s *Sniper) OnExecution(report market.ExecutionReport) {
 			Qty:    report.Qty,
 			Price:  report.Price,
 		})
-		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%d\n", s.Symbol, report.Price, report.Qty)
+		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Symbol, report.Price, report.Qty)
 	case market.Sell:
 		s.reducePositions(report.Qty)
-		fmt.Printf("✅ [%s] 売付約定を反映: 数量%d\n", s.Symbol, report.Qty)
+		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Symbol, report.Qty)
 	}
 }

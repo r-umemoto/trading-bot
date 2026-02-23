@@ -8,6 +8,7 @@ import (
 type Tick struct {
 	Symbol string
 	Price  float64
+	VWAP   float64
 }
 
 type Action string

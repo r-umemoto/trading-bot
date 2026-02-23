@@ -10,23 +10,28 @@ import (
 
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
-	snipers []*sniper.Sniper
-	broker  market.OrderBroker
+	snipers  []*sniper.Sniper
+	broker   market.OrderBroker
+	analyzer market.Analyzer
 }
 
-func NewTradeUseCase(snipers []*sniper.Sniper, broker market.OrderBroker) *TradeUseCase {
+func NewTradeUseCase(snipers []*sniper.Sniper, broker market.OrderBroker, analyzer market.Analyzer) *TradeUseCase {
 	return &TradeUseCase{
-		snipers: snipers,
-		broker:  broker,
+		snipers:  snipers,
+		broker:   broker,
+		analyzer: analyzer,
 	}
 }
 
 // HandleTick は市場のTickデータを受け取り、担当スナイパーの思考と執行をトリガーします
 func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
+	u.analyzer.UpdateTick(tick)
+	state := u.analyzer.GetState(tick.Symbol)
+
 	for _, s := range u.snipers {
 		if s.Symbol == tick.Symbol {
 			// 1. スナイパーに考えさせる（純粋な関数）
-			req := s.Tick(tick.Price)
+			req := s.Tick(state)
 
 			if req != nil {
 				// 2. 要求があれば、市場（インフラ）に発注する
