@@ -24,7 +24,10 @@ func main() {
 	}
 
 	// 3. アプリケーションの組み立て（portfolio.go の buildPortfolio を呼び出す）
-	engine := buildPortfolio(cfg)
+	engine, err := buildEngine(cfg)
+	if err != nil {
+		log.Fatalf("❌ engineの組み立て失敗: %v", err)
+	}
 
 	// 5. 実行！（ここでブロックされ、Engineの内部ですべてが回る）
 	if err := engine.Run(ctx); err != nil {
