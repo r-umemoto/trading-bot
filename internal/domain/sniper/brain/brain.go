@@ -15,8 +15,10 @@ const (
 
 // Signal は戦略がスナイパーに返す「命令」です
 type Signal struct {
-	Action   Action
-	Quantity float64
+	Action    Action
+	Quantity  float64
+	Price     float64
+	OrderType market.OrderType
 }
 
 func (s Signal) ToMarketAction() (market.Action, error) {

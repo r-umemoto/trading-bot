@@ -35,7 +35,7 @@ func NewEngine(streamer market.EventStreamer, tradeUC *usecase.TradeUseCase, cle
 // Run はシステムの初期化を行い、メインループを開始します
 func (e *Engine) Run(ctx context.Context) error {
 	// ノーポジションに強制
-	if err := e.cleaner.CleanupOnStartup(); err != nil {
+	if err := e.cleaner.CleanupOnStartup(ctx); err != nil {
 		return err
 	}
 

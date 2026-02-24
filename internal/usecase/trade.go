@@ -40,9 +40,10 @@ func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
 					fmt.Printf("❌ 発注失敗: %v\n", err)
 					continue
 				}
+				order := market.NewOrder(orderID, req.Symbol, req.Action, req.Price, req.Qty)
 
 				// 3. 発注が成功したら、スナイパーにIDを覚えさせる
-				s.RecordOrder(orderID, req.Action, req.Qty)
+				s.RecordOrder(order)
 				fmt.Printf("✅ 注文受付IDを記録しました: %s\n", orderID)
 			}
 		}

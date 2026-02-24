@@ -9,16 +9,16 @@ import (
 
 // KabuMarketAdapter はカブコムの不揃いなAPI仕様を吸収し、統一されたストリームに変換します
 type KabuMarketAdapter struct {
-	wsURL           string
-	client          *KabuClient
-	processedOrders map[string]bool // 通知済みの注文IDを記録し、重複検知を防ぐ
+	wsURL               string
+	client              *KabuClient
+	processedExecutions map[string]bool // 通知済みの注文IDを記録し、重複検知を防ぐ
 }
 
 func NewKabuMarketAdapter(wsURL string, client *KabuClient) *KabuMarketAdapter {
 	return &KabuMarketAdapter{
-		wsURL:           wsURL,
-		client:          client,
-		processedOrders: make(map[string]bool),
+		wsURL:               wsURL,
+		client:              client,
+		processedExecutions: make(map[string]bool),
 	}
 }
 
@@ -56,6 +56,7 @@ func (a *KabuMarketAdapter) startWebSocketLoop(ctx context.Context, tickCh chan 
 				tickCh <- market.Tick{
 					Symbol: msg.Symbol,
 					Price:  msg.CurrentPrice,
+					VWAP:   msg.VWAP,
 				}
 			}
 		}
@@ -69,42 +70,48 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 	for {
 		select {
 		case <-ctx.Done():
-			return // コンテキストキャンセルで安全に終了
+			return
 
 		case <-ticker.C:
-			// APIから注文一覧を取得 (※KabuClientの実装に合わせてメソッド名は調整してください)
 			apiOrders, err := a.client.GetOrders()
 			if err != nil {
-				// ネットワークエラー等はログだけ出して次のTickを待つ
 				fmt.Printf("ポーリングエラー: %v\n", err)
 				continue
 			}
 
+			// 1. 注文(Order)のループ
 			for _, apiOrder := range apiOrders {
-				// kabusapiの仕様: State == 3 が「処理済（約定）」
-				if apiOrder.State == 3 {
-					// すでに通知済みの注文IDならスキップ
-					if a.processedOrders[apiOrder.ID] {
+
+				action := market.Buy
+				if apiOrder.Side == SIDE_SELL {
+					action = market.Sell
+				}
+
+				// 2. さらに明細(Details)のループを回す！
+				for _, detail := range apiOrder.Details {
+
+					// 約定IDが空の明細（単なる「受付済」などのステータス履歴）はスキップ
+					if detail.ID == "" {
 						continue
 					}
 
-					// kabusapiの売買区分(Side)をドメインのActionに変換（1:売, 2:買 の場合）
-					action := market.Buy
-					if apiOrder.Side == "1" {
-						action = market.Sell
+					// 🌟 注文IDではなく「約定ID」で通知済みかを判定する
+					if a.processedExecutions[detail.ID] {
+						continue
 					}
 
 					// 約定イベントを生成してチャネルに送信
 					execCh <- market.ExecutionReport{
-						OrderID: apiOrder.ID,
-						Symbol:  apiOrder.Symbol,
-						Action:  action,
-						Price:   apiOrder.Price,
-						Qty:     apiOrder.CumQty,
+						OrderID:     apiOrder.ID,
+						ExecutionID: detail.ID, // レポートにも約定IDを持たせる
+						Symbol:      apiOrder.Symbol,
+						Action:      action,
+						Price:       detail.Price, // 👈 Details側の「実際の約定単価」
+						Qty:         detail.Qty,   // 👈 Details側の「実際の約定数量」
 					}
 
-					// 送信完了として記録
-					a.processedOrders[apiOrder.ID] = true
+					// 🌟 処理完了として「約定ID」を記録する
+					a.processedExecutions[detail.ID] = true
 				}
 			}
 		}

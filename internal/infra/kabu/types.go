@@ -1,5 +1,7 @@
 package kabu
 
+import "trading-bot/internal/domain/market"
+
 // トークン取得リクエスト用（こちらから送るデータ）
 type TokenRequest struct {
 	APIPassword string `json:"APIPassword"`
@@ -36,25 +38,28 @@ type PushMessage struct {
 	SymbolName   string  `json:"SymbolName"`
 	CurrentPrice float64 `json:"CurrentPrice"`
 	Time         string  `json:"Time"` // 約定時刻
+	VWAP         float64 `json:"VWAP"`
 
 	// ※実際のAPIからはさらに板の気配値なども大量に降ってきますが、
 	// まずは現在値の監視に必要な項目だけ定義します。
 }
 
 // OrderRequest は新規・決済注文を発注するためのリクエストデータです
+// https://kabucom.github.io/kabusapi/reference/index.html#operation/sendorderPost
 type OrderRequest struct {
-	Password        string  `json:"Password"`        // 注文パスワード
-	Symbol          string  `json:"Symbol"`          // 銘柄コード (例: "9433")
-	Exchange        int     `json:"Exchange"`        // 市場コード (1: 東証)
-	SecurityType    int     `json:"SecurityType"`    // 商品種別 (1: 株式)
-	Side            string  `json:"Side"`            // 売買区分 ("1": 売, "2": 買)
-	CashMargin      int     `json:"CashMargin"`      // 信用区分 (1: 現物, 2: 信用新規, 3: 信用返済)
-	MarginTradeType int     `json:"MarginTradeType"` // 信用取引区分 (1: 制度信用, 3: 一般信用デイトレ)
-	AccountType     int     `json:"AccountType"`     // 口座種別 (4: 特定口座)
-	Qty             int     `json:"Qty"`             // 注文数量
-	Price           float64 `json:"Price"`           // 注文価格 (0: 成行)
-	ExpireDay       int     `json:"ExpireDay"`       // 注文有効期限 (0: 当日)
-	FrontOrderType  int     `json:"FrontOrderType"`  // 執行条件 (10: 成行, 20: 指値)
+	Symbol             string  `json:"Symbol"`             // 銘柄コード (例: "9433")
+	Exchange           int     `json:"Exchange"`           // 市場コード (1: 東証)
+	SecurityType       int     `json:"SecurityType"`       // 商品種別 (1: 株式)
+	Side               string  `json:"Side"`               // 売買区分 ("1": 売, "2": 買)
+	CashMargin         int     `json:"CashMargin"`         // 信用区分 (1: 現物, 2: 信用新規, 3: 信用返済)
+	MarginTradeType    int     `json:"MarginTradeType"`    // 信用取引区分 (1: 制度信用, 3: 一般信用デイトレ)
+	AccountType        int     `json:"AccountType"`        // 口座種別 (4: 特定口座)
+	Qty                float64 `json:"Qty"`                // 注文数量
+	Price              float64 `json:"Price"`              // 注文価格 (0: 成行)
+	ExpireDay          int     `json:"ExpireDay"`          // 注文有効期限 (0: 当日)
+	FrontOrderType     int32   `json:"FrontOrderType"`     // 執行条件 (10: 成行, 20: 指値)
+	DelivType          int32   `json:"DelivType"`          // 受渡区分 (0: 指定なし, 2: お預かり金, 3: Auマネーコネクト)
+	ClosePositionOrder int32   `json:"ClosePositionOrder"` // 決済順序
 }
 
 // OrderResponse は発注後のレスポンスデータです
@@ -94,8 +99,8 @@ type CancelResponse struct {
 type Side string
 
 const (
-	Buy  Side = "1"
-	Sell Side = "2"
+	SIDE_BUY  Side = "1"
+	SIDE_SELL Side = "2"
 )
 
 func (s Side) print() string {
@@ -104,6 +109,17 @@ func (s Side) print() string {
 		return "Buy"
 	case "2":
 		return "Sell"
+	default:
+		return "unknown"
+	}
+}
+
+func (s Side) toAction() market.Action {
+	switch s {
+	case "1":
+		return market.Buy
+	case "2":
+		return market.Sell
 	default:
 		return "unknown"
 	}
@@ -119,3 +135,20 @@ const (
 	ProductFuture                   // 先物（3）
 	ProductOption                   // オプション（4）
 )
+
+type Execution struct {
+	ID    string  `json:"ExecutionID"` // 注文ID（キャンセル時に必要）
+	Price float64 `json:"Price"`       // 約定値段
+	Qty   float64 `json:"Qty"`         // 約定数量
+}
+
+type Order struct {
+	ID       string      `json:"ID"`       // 注文ID（キャンセル時に必要）
+	State    int32       `json:"State"`    // 状態（3: 処理中/待機中, 5: 終了 など）
+	Symbol   string      `json:"Symbol"`   // 銘柄コード
+	Side     Side        `json:"Side"`     // 売買区分
+	OrderQty float64     `json:"OrderQty"` // 発注数量
+	CumQty   float64     `json:"CumQty"`   // 約定数量
+	Price    float64     `json:"Price"`    // 値段
+	Details  []Execution `json:"Details"`  // 値段
+}

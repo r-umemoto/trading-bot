@@ -14,21 +14,6 @@ type Strategy interface {
 	Evaluate(input strategy.StrategyInput) brain.Signal
 }
 
-// OrderState は発注した注文の追跡用データです
-type OrderState struct {
-	OrderID  string
-	Action   market.Action
-	Quantity float64
-	IsClosed bool
-}
-
-// スナイパーが要求する「注文執行機能」の規格
-type OrderExecutor interface {
-	ExecuteOrder(symbol string, action brain.Action, qty int) (OrderState, error)
-	CancelOrder(orderID string) error
-	GetPositions(product market.ProductType) ([]market.Position, error)
-}
-
 // ★ スナイパー内で定義する「オプショナルな機能」の規格
 type KillSwitchable interface {
 	Activate() brain.Signal
@@ -36,21 +21,27 @@ type KillSwitchable interface {
 
 // Sniper は戦略とAPIクライアントを持ち、執行を担います
 type Sniper struct {
-	Symbol    string
-	positions []market.Position
-	Strategy  Strategy
-	Orders    []*OrderState
-	mu        sync.Mutex // 👈 状態をロックするための鍵
-	isExiting bool       // 👈 撤収作業中かどうかのフラグ
+	Symbol          string
+	positions       []market.Position
+	Strategy        Strategy
+	Orders          []*market.Order
+	mu              sync.Mutex // 👈 状態をロックするための鍵
+	isExiting       bool       // 👈 撤収作業中かどうかのフラグ
+	AccountType     market.AccountType
+	Exchange        market.ExchangeMarket
+	MarginTradeType market.MarginTradeType
 }
 
 // NewSniper の引数と戻り値も修正
 func NewSniper(symbol string, strategy Strategy) *Sniper {
 	return &Sniper{
-		Symbol:    symbol,
-		Strategy:  strategy,
-		Orders:    make([]*OrderState, 0),
-		positions: []market.Position{}, // 初期状態は空
+		Symbol:          symbol,
+		Strategy:        strategy,
+		Orders:          make([]*market.Order, 0),
+		positions:       []market.Position{}, // 初期状態は空
+		AccountType:     market.ACCOUNT_SPECIAL,
+		Exchange:        market.EXCHANGE_TOSHO,
+		MarginTradeType: market.TRADE_TYPE_GENERAL_DAY,
 	}
 }
 
@@ -69,8 +60,8 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 	var holdQty float64
 	var totalExposure float64
 	for _, p := range s.positions {
-		holdQty += p.Qty
-		totalExposure += p.Price * float64(p.Qty) // 取得単価 × 数量
+		holdQty += p.LeavesQty
+		totalExposure += p.Price * float64(p.LeavesQty) // 取得単価 × 数量
 	}
 
 	averagePrice := 0.0
@@ -102,23 +93,26 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 	}
 
 	return &market.OrderRequest{
-		Symbol: s.Symbol,
-		Action: marketAction,
-		Qty:    signal.Quantity,
+		Symbol:             s.Symbol,
+		Exchange:           s.Exchange,
+		SecurityType:       market.SECURITY_TYPE_STOCK,
+		Action:             marketAction,
+		MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
+		AccountType:        market.ACCOUNT_SPECIAL,
+		DelivType:          market.DELIVER_TYPE_CURREBCY,
+		OrderType:          market.ORDER_TYPE_LIMIT,
+		ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
+		Qty:                signal.Quantity,
+		Price:              signal.Price,
 	}
 }
 
 // RecordOrder は、ユースケースが発注を完了した後に呼ばれ、状態を記録します
-func (s *Sniper) RecordOrder(orderID string, action market.Action, qty float64) {
+func (s *Sniper) RecordOrder(order market.Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.Orders = append(s.Orders, &OrderState{
-		OrderID:  orderID,
-		Action:   action,
-		Quantity: qty,
-		IsClosed: false,
-	})
+	s.Orders = append(s.Orders, &order)
 }
 
 // ForceExit はキルスイッチ作動時に呼ばれ、自身の未約定注文のキャンセルと成行決済を行います
@@ -142,13 +136,13 @@ func (s *Sniper) reducePositions(sellQty float64) {
 			continue
 		}
 
-		if p.Qty <= remainingToSell {
+		if p.LeavesQty <= remainingToSell {
 			// この建玉ロットを全量売却するケース
-			remainingToSell -= p.Qty
+			remainingToSell -= p.LeavesQty
 			// 全量売却なので newPositions には追加しない（消滅）
 		} else {
 			// この建玉ロットの一部だけを売却するケース
-			p.Qty -= remainingToSell
+			p.LeavesQty -= remainingToSell
 			remainingToSell = 0
 			newPositions = append(newPositions, p)
 		}
@@ -164,11 +158,12 @@ func (s *Sniper) OnExecution(report market.ExecutionReport) {
 	defer s.mu.Unlock()
 
 	// 1. 対象の注文状態を更新する
-	var matchedOrder *OrderState
-	for _, order := range s.Orders {
-		if order.OrderID == report.OrderID {
+	var matchedOrder *market.Order
+	var matchedOrderIndex = -1
+	for i, order := range s.Orders {
+		if order.ID == report.OrderID {
 			matchedOrder = order
-			order.IsClosed = true
+			matchedOrderIndex = i
 			break
 		}
 	}
@@ -177,13 +172,27 @@ func (s *Sniper) OnExecution(report market.ExecutionReport) {
 		fmt.Printf("⚠️ [%s] 未知の注文ID(%s)の約定通知を受信しました\n", s.Symbol, report.OrderID)
 	}
 
+	// 注文エンティティに約定を追加
+	matchedOrder.AddExecution(market.Execution{
+		ID:    report.ExecutionID,
+		Price: report.Price,
+		Qty:   report.Qty,
+	})
+
+	// もし全約定していたら、Activeリストから消す（履歴用リストに移す等）
+	if matchedOrder.IsCompleted() {
+		if matchedOrderIndex != -1 {
+			s.Orders = append(s.Orders[:matchedOrderIndex], s.Orders[matchedOrderIndex+1:]...)
+		}
+	}
+
 	// 2. 実際の約定結果に基づいて、建玉（Positions）を更新する
 	switch report.Action {
 	case market.Buy:
 		s.positions = append(s.positions, market.Position{
-			Symbol: report.Symbol,
-			Qty:    report.Qty,
-			Price:  report.Price,
+			Symbol:    report.Symbol,
+			LeavesQty: report.Qty,
+			Price:     report.Price,
 		})
 		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Symbol, report.Price, report.Qty)
 	case market.Sell:

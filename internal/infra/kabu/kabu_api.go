@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"time"
-	"trading-bot/internal/domain/market"
 )
 
 // KabuClient はkabuステーションAPIと通信するためのクライアント構造体です
@@ -174,14 +173,14 @@ func (c *KabuClient) CancelOrder(req CancelRequest) (*CancelResponse, error) {
 }
 
 // GetOrders は現在の注文一覧を取得します
-func (c *KabuClient) GetOrders() ([]market.Order, error) {
+func (c *KabuClient) GetOrders() ([]Order, error) {
 	resp, err := c.doRequest("GET", "/orders", nil)
 	if err != nil {
 		return nil, fmt.Errorf("注文照会API通信エラー: %v", err)
 	}
 	defer resp.Body.Close()
 
-	var orders []market.Order
+	var orders []Order
 	if err := json.NewDecoder(resp.Body).Decode(&orders); err != nil {
 		return nil, fmt.Errorf("注文データ解析エラー: %v", err)
 	}

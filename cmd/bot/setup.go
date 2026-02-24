@@ -18,7 +18,7 @@ import (
 // buildPortfolio は、システム全体を俯瞰する「目次」です
 func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 	// 1. インフラ層の構築（泥臭い設定はすべてここへ）
-	streamer, client, broker, err := buildInfrastructure(cfg)
+	streamer, broker, err := buildInfrastructure(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -27,8 +27,9 @@ func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 	snipers, watchSymbols := deploySnipers()
 
 	// 3. ユースケースとサービスの組み立て
-	tradeUC := usecase.NewTradeUseCase(snipers, broker)
-	cleaner := service.NewPositionCleaner(snipers, client, broker)
+	analyzer := market.NewDefaultAnalyzer()
+	tradeUC := usecase.NewTradeUseCase(snipers, broker, analyzer)
+	cleaner := service.NewPositionCleaner(snipers, broker)
 
 	// 4. エンジンの完成
 	return NewEngine(streamer, tradeUC, cleaner, watchSymbols), nil
@@ -38,14 +39,14 @@ func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 // ▼ ここから下は「下請け工場（プライベート関数）」に押し込む
 // ---------------------------------------------------------
 
-func buildInfrastructure(cfg *config.AppConfig) (market.EventStreamer, *kabu.KabuClient, *kabu.KabuOrderBroker, error) {
+func buildInfrastructure(cfg *config.AppConfig) (market.EventStreamer, *kabu.KabuOrderBroker, error) {
 	if cfg.BrokerType != "kabu" {
-		return nil, nil, nil, fmt.Errorf("未対応のブローカーです: %s", cfg.BrokerType)
+		return nil, nil, fmt.Errorf("未対応のブローカーです: %s", cfg.BrokerType)
 	}
 
 	client := kabu.NewKabuClient(cfg.Kabu)
 	if err := client.GetToken(); err != nil {
-		return nil, nil, nil, fmt.Errorf("トークン取得エラー: %w", err)
+		return nil, nil, fmt.Errorf("トークン取得エラー: %w", err)
 	}
 
 	broker := kabu.NewKabuOrderBroker(client)
@@ -53,7 +54,7 @@ func buildInfrastructure(cfg *config.AppConfig) (market.EventStreamer, *kabu.Kab
 	wsURL := strings.Replace(cfg.Kabu.APIURL, "http://", "ws://", 1)
 	streamer := kabu.NewKabuMarketAdapter(wsURL+"/websocket", client)
 
-	return streamer, client, broker, nil
+	return streamer, broker, nil
 }
 
 func deploySnipers() ([]*sniper.Sniper, []string) {
@@ -69,10 +70,8 @@ func deploySnipers() ([]*sniper.Sniper, []string) {
 	}
 
 	for _, t := range watchList {
-		buyStrategy := strategy.NewLimitBuy(t.Price, t.Qty)
-		sellStrategy := strategy.NewFixedRate(t.Price, 0.002, t.Qty)
-		masterStrategy := strategy.NewRoundTrip(buyStrategy, sellStrategy)
-		budgetLogic := strategy.NewBudgetConstraint(masterStrategy, 1000000.0)
+		vwapStrategy := strategy.NewVWAPReboundStrategy(0.5, 0.1, 100)
+		budgetLogic := strategy.NewBudgetConstraint(vwapStrategy, 1000000.0)
 		safeLogic := strategy.NewKillSwitch(budgetLogic, t.Qty)
 
 		s := sniper.NewSniper(t.Symbol, safeLogic)

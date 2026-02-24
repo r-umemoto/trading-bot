@@ -21,17 +21,19 @@ const (
 type ProductType int
 
 const (
-	ProductCash   ProductType = iota // 現物 (0)
-	ProductMargin                    // 信用 (1)
+	PRODICT_NONE   ProductType = iota
+	PRODICT_CASH               // 現物
+	PRODUCT_MARGIN             // 信用
 )
 
 // ExecutionReport は市場で発生した約定の事実を表します
 type ExecutionReport struct {
-	OrderID string  // 紐づく注文ID
-	Symbol  string  // 銘柄
-	Action  Action  // 買いか売りか
-	Price   float64 // 実際の約定単価
-	Qty     float64 // 実際に約定した数量
+	OrderID     string  // 紐づく注文ID
+	ExecutionID string  // 約定のID
+	Symbol      string  // 銘柄
+	Action      Action  // 買いか売りか
+	Price       float64 // 実際の約定単価
+	Qty         float64 // 実際に約定した数量
 }
 
 // EventStreamer は、市場で発生するあらゆるイベントを受信するための規格です
@@ -40,18 +42,80 @@ type EventStreamer interface {
 	Start(ctx context.Context) (<-chan Tick, <-chan ExecutionReport, error)
 }
 
-// OrderRequest は市場へ送る注文の要望です
+type OrderType uint32
+
+const (
+	ORDER_TYPE_MARKET OrderType = 10
+	ORDER_TYPE_LIMIT  OrderType = 20
+)
+
+type AccountType uint32
+
+const (
+	ACCOUNT_NONE      AccountType = iota
+	ACCOUNT_GENERAL               // 一般
+	ACCOUNT_SPECIAL               // 特定
+	ACCOUNT_CORPORATE             // 法人
+)
+
+type ExchangeMarket uint32
+
+const (
+	EXCHANGE_NONE  ExchangeMarket = iota
+	EXCHANGE_TOSHO                // 東証
+	EXCHANGE_SOR                  // SOR
+)
+
+// これ間違えると手数料かかってくるから注意
+type MarginTradeType uint32
+
+const (
+	TRADE_TYPE_NONE        MarginTradeType = iota
+	TRADE_TYPE_SYSTEM                      // 制度信用
+	TRADE_TYPE_GENERAL                     // 一般信用長期
+	TRADE_TYPE_GENERAL_DAY                 // 一般信用デイトレ
+)
+
+type SecurityType uint32
+
+const (
+	SECURITY_TYPE_NONE SecurityType = iota
+	SECURITY_TYPE_STOCK
+)
+
+type DelivType uint32
+
+const (
+	DELIVER_TYPE_NONE DelivType = iota
+	DELIVER_TYPE_CURREBCY
+)
+
+type ClosePositionOrder uint32
+
+const (
+	CLOSE_POSITION_ORDER_NONE     ClosePositionOrder = iota
+	CLOSE_POSITION_ASC_DAY_DEC_PL                    // 日付（古い順）、損益（高い順）
+)
+
 type OrderRequest struct {
-	Symbol string
-	Action Action
-	Qty    float64
+	Symbol             string
+	Exchange           ExchangeMarket
+	SecurityType       SecurityType
+	Action             Action
+	MarginTradeType    MarginTradeType
+	AccountType        AccountType
+	DelivType          DelivType
+	ClosePositionOrder ClosePositionOrder
+	OrderType          OrderType
+	Qty                float64
+	Price              float64
 }
 
 // OrderRequest は市場へ送る注文の要望です
 type Position struct {
-	Symbol string  // 銘柄
-	Qty    float64 // 数数
-	Price  float64 // 取得価格
+	Symbol    string  // 銘柄
+	LeavesQty float64 // 保有数量
+	Price     float64 // 取得価格
 }
 
 type OrderState uint32
@@ -69,16 +133,6 @@ const (
 	SideBuy  Side = "1"
 	SideSell Side = "2"
 )
-
-type Order struct {
-	ID       string     `json:"ID"`       // 注文ID（キャンセル時に必要）
-	State    OrderState `json:"State"`    // 状態（3: 処理中/待機中, 5: 終了 など）
-	Symbol   string     `json:"Symbol"`   // 銘柄コード
-	Side     Side       `json:"Side"`     // 売買区分
-	OrderQty float64    `json:"OrderQty"` // 発注数量
-	CumQty   float64    `json:"CumQty"`   // 約定数量
-	Price    float64    `json:"Price"`    // 値段
-}
 
 // OrderBroker は市場へ注文を仲介する規格です（インフラ層で実装します）
 type OrderBroker interface {
