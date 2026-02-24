@@ -33,15 +33,19 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	cleaned := false
 	for _, pos := range initialPositions {
 		if pos.LeavesQty > 0 {
-			qty := pos.LeavesQty
-			fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %d株\n", pos.Symbol, qty)
+			fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %d株\n", pos.Symbol, pos.LeavesQty)
 
 			req := market.OrderRequest{
-				Symbol:    pos.Symbol,
-				Action:    market.Sell,
-				Qty:       qty,
-				OrderType: market.ORDER_TYPE_MARKET,
-				Price:     0,
+				Symbol:             pos.Symbol,
+				Exchange:           pos.Exchange,
+				SecurityType:       market.SECURITY_TYPE_STOCK,
+				Action:             market.Sell,
+				MarginTradeType:    pos.TradeType,
+				AccountType:        pos.AccountType,
+				ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
+				OrderType:          market.ORDER_TYPE_MARKET,
+				Qty:                pos.LeavesQty,
+				Price:              0,
 			}
 			if _, err := c.broker.SendOrder(ctx, req); err != nil {
 				return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.Symbol, err)

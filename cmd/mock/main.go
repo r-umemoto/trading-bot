@@ -16,6 +16,7 @@ type PushMessage struct {
 	SymbolName   string  `json:"SymbolName"`
 	CurrentPrice float64 `json:"CurrentPrice"`
 	Time         string  `json:"Time"`
+	VWAP         float64 `json:"VWAP"`
 }
 
 var upgrader = websocket.Upgrader{
@@ -40,7 +41,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	priceWave := []float64{
 		4000.0, 3995.0, 3991.0,
 		3990.0, // 🎯 [シナリオ1] ここで LimitBuy(3990円以下で買い) が発動するはず！
-		3985.0, 3980.0,
+		3985.0, 3980.0, 3880.0,
 		3985.0, 3990.0, 3995.0, // 底を打って上がり始める
 		3998.0, // 🎯 [シナリオ2] 3990円の+0.2%(=3997.98円)以上なので、ここで FixedRate が発動して利確するはず！
 		4000.0, 4005.0,
@@ -56,6 +57,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			"Symbol":       "9433",
 			"SymbolName":   "ＫＤＤＩ",
 			"CurrentPrice": currentPrice,
+			"VWAP":         3980,
 		}
 		jsonData, _ := json.Marshal(msg)
 		if err := conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
@@ -96,6 +98,8 @@ var mockPositions = []map[string]interface{}{
 	},
 }
 
+var mockOrders = []map[string]interface{}{}
+
 // 3. 建玉一覧取得用のダミーハンドラー
 func handlePositions(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("[Mock] 📦 建玉照会リクエストを受信しました")
@@ -110,9 +114,11 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 
 	// 1. ボットから送られてきた注文データ（JSON）を読み解く
 	var req struct {
-		Symbol string  `json:"Symbol"`
-		Side   string  `json:"Side"` // "1": 売, "2": 買
-		Qty    float64 `json:"Qty"`
+		Symbol         string  `json:"Symbol"`
+		Side           string  `json:"Side"` // "1": 売, "2": 買
+		Qty            float64 `json:"Qty"`
+		Price          float64 `json:"Price"`
+		FrontOrderType int     `json:"FrontOrderType"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
@@ -123,7 +129,7 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 		case "2":
 			actionStr = "買"
 		}
-		fmt.Printf("[Mock] 注文内容: 【%s】 銘柄: %s, 数量: %.0f株\n", actionStr, req.Symbol, req.Qty)
+		fmt.Printf("[Mock] 注文内容: 【%s】 銘柄: %s, 数量: %.0f株, 価格%.0f\n", actionStr, req.Symbol, req.Qty, req.Price)
 
 		// 2. 買い注文の場合（建玉を増やす）
 		switch req.Side {
@@ -134,11 +140,10 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 				"Symbol":      req.Symbol,
 				"SymbolName":  "シミュレーション銘柄",
 				"LeavesQty":   req.Qty,
-				"Price":       4000.0, // 仮の約定価格
+				"Price":       req.Price,
 			})
 			fmt.Printf("[Mock] 📈 %s の建玉が %.0f株 追加されました。\n", req.Symbol, req.Qty)
 
-			// 3. 売り注文の場合（建玉を減らす）
 		case "1":
 			var newPositions []map[string]interface{}
 			for _, pos := range mockPositions {
@@ -174,6 +179,20 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 		"OrderId": uniqueID,
 	}
 
+	uniqueExID := fmt.Sprintf("mock_order_ex_%d", time.Now().UnixNano())
+
+	mockOrders = append(mockOrders, map[string]interface{}{
+		"ID":     uniqueID,
+		"Symbol": req.Symbol,
+		"State":  3,
+		"CumQty": req.Qty,
+		"Details": []map[string]interface{}{{
+			"Price":       req.Price,
+			"State":       3,
+			"ExecutionID": uniqueExID,
+		}},
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -184,16 +203,8 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 func handleOrders(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("[Mock] 📋 注文照会(Orders)リクエストを受信しました")
 
-	// ダミーの注文データ（状態3：未約定で待機中の注文が1件ある想定）
-	orders := []map[string]interface{}{
-		{
-			"ID":     "mock_active_order_001",
-			"State":  3,
-			"Symbol": "9433",
-		},
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(orders)
+	json.NewEncoder(w).Encode(mockOrders)
 }
 
 // 6. キャンセル(CancelOrder)用のダミーハンドラー

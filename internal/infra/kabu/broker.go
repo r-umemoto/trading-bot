@@ -20,29 +20,88 @@ func NewKabuOrderBroker(client *KabuClient) *KabuOrderBroker {
 // SendOrder は market.OrderBroker の実装です
 func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
 	side := "1"     // 売
-	cashMargin := 2 // 新規
+	cashMargin := 3 // 返却
 	if req.Action == market.Buy {
-		cashMargin = 3 // 返却
+		cashMargin = 2 // 新規
 		side = "2"     // 買
+	}
+
+	AccountType := 0
+	switch req.AccountType {
+	case market.ACCOUNT_SPECIAL:
+		AccountType = 4
+	}
+	if AccountType == 0 {
+		return "", fmt.Errorf("口座種別が不正です")
+	}
+
+	exchange := 0
+	switch req.Exchange {
+	case market.EXCHANGE_TOSHO:
+		exchange = 1
+	}
+	if exchange == 0 {
+		return "", fmt.Errorf("市場が不正です")
+	}
+
+	securityType := 0
+	switch req.SecurityType {
+	case market.SECURITY_TYPE_STOCK:
+		securityType = 1
+	}
+	if securityType == 0 {
+		return "", fmt.Errorf("商品が不正です")
+	}
+
+	tradeType := 0
+	switch req.MarginTradeType {
+	case market.TRADE_TYPE_GENERAL_DAY:
+		tradeType = 3
+	}
+	if tradeType == 0 {
+		return "", fmt.Errorf("取引種別が不正です")
+	}
+
+	orderType := 0
+	switch req.OrderType {
+	case market.ORDER_TYPE_MARKET:
+		orderType = 10
+	case market.ORDER_TYPE_LIMIT:
+		orderType = 20
+	}
+	if orderType == 0 {
+		return "", fmt.Errorf("注文種別が不正です")
+	}
+
+	deliverType := 0
+	switch req.Action {
+	case market.Buy:
+		if cashMargin == 1 {
+			deliverType = 2
+		}
+	case market.Sell:
+		if cashMargin == 3 {
+			deliverType = 2
+		}
 	}
 
 	kabReq := OrderRequest{
 		Symbol:             req.Symbol,
-		Exchange:           int(req.Exchange),
-		SecurityType:       int(req.SecurityType),
+		Exchange:           exchange,
+		SecurityType:       securityType,
 		Side:               side,
 		CashMargin:         cashMargin,
-		MarginTradeType:    int(req.MarginTradeType),
-		AccountType:        int(req.AccountType),
+		MarginTradeType:    tradeType,
+		AccountType:        AccountType,
 		ExpireDay:          0,
 		Qty:                req.Qty,
-		FrontOrderType:     int32(req.OrderType), // 指値
+		FrontOrderType:     int32(orderType),
 		Price:              req.Price,
-		DelivType:          int32(req.DelivType),
+		DelivType:          int32(deliverType),
 		ClosePositionOrder: int32(req.ClosePositionOrder),
 	}
 
-	fmt.Printf("発注完了 side:%s, qty: %f", side, req.Qty)
+	fmt.Printf("発注完了 %+v\n", kabReq)
 
 	resp, err := b.client.SendOrder(kabReq)
 	if err != nil {
@@ -101,10 +160,62 @@ func (b *KabuOrderBroker) GetPositions(ctx context.Context, product market.Produ
 	decodePositons := make([]market.Position, 0, len(positions))
 	for _, pos := range positions {
 		decodePositons = append(decodePositons, market.Position{
-			Symbol:    pos.Symbol,
-			LeavesQty: pos.LeavesQty,
+			ExecutionID: pos.ExecutionID,
+			Symbol:      pos.Symbol,
+			Exchange:    b.toMarketExchange(pos.Exchange),
+			Action:      b.toMakerAction(pos.Side),
+			TradeType:   b.toMakerTradeType(pos.MarginTradeType),
+			AccountType: b.toAccountType(pos.AccountType),
+			LeavesQty:   pos.LeavesQty,
+			Price:       pos.Price,
 		})
 	}
 
 	return decodePositons, nil
+}
+
+func (b *KabuOrderBroker) toMarketExchange(excahge int32) market.ExchangeMarket {
+	switch excahge {
+	case 1:
+		return market.EXCHANGE_TOSHO
+	default:
+		return market.EXCHANGE_NONE
+	}
+}
+
+func (b *KabuOrderBroker) toMakerAction(side string) market.Action {
+	switch side {
+	case "1":
+		return market.Sell
+	case "2":
+		return market.Buy
+	default:
+		return ""
+	}
+}
+
+func (b *KabuOrderBroker) toMakerTradeType(tradeType int32) market.MarginTradeType {
+	switch tradeType {
+	case 1:
+		return market.TRADE_TYPE_SYSTEM
+	case 2:
+		return market.TRADE_TYPE_GENERAL
+	case 3:
+		return market.TRADE_TYPE_GENERAL_DAY
+	default:
+		return market.TRADE_TYPE_NONE
+	}
+}
+
+func (b *KabuOrderBroker) toAccountType(accountType int32) market.AccountType {
+	switch accountType {
+	case 2:
+		return market.ACCOUNT_GENERAL
+	case 4:
+		return market.ACCOUNT_SPECIAL
+	case 12:
+		return market.ACCOUNT_CORPORATE
+	default:
+		return market.ACCOUNT_NONE
+	}
 }

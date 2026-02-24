@@ -99,7 +99,6 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 		Action:             marketAction,
 		MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
 		AccountType:        market.ACCOUNT_SPECIAL,
-		DelivType:          market.DELIVER_TYPE_CURREBCY,
 		OrderType:          market.ORDER_TYPE_LIMIT,
 		ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
 		Qty:                signal.Quantity,
@@ -170,6 +169,7 @@ func (s *Sniper) OnExecution(report market.ExecutionReport) {
 
 	if matchedOrder == nil {
 		fmt.Printf("⚠️ [%s] 未知の注文ID(%s)の約定通知を受信しました\n", s.Symbol, report.OrderID)
+		return
 	}
 
 	// 注文エンティティに約定を追加

@@ -70,16 +70,20 @@ type OrderResponse struct {
 
 // Position は1つの建玉（現在保有しているポジション）を表します
 type Position struct {
-	ExecutionID    string  `json:"ExecutionID"`    // 約定番号（決済指定時に使う）
-	Symbol         string  `json:"Symbol"`         // 銘柄コード (例: "7012")
-	SymbolName     string  `json:"SymbolName"`     // 銘柄名
-	LeavesQty      float64 `json:"LeavesQty"`      // 残数量（いま決済できる株数）
-	HoldQty        float64 `json:"HoldQty"`        // 拘束数量（すでに売り注文を出して待機中の株数）
-	Price          float64 `json:"Price"`          // 建値（平均取得単価） ★0.2%計算の基準！
-	CurrentPrice   float64 `json:"CurrentPrice"`   // 現在値
-	Valuation      float64 `json:"Valuation"`      // 評価金額
-	ProfitLoss     float64 `json:"ProfitLoss"`     // 評価損益
-	ProfitLossRate float64 `json:"ProfitLossRate"` // 評価損益率
+	ExecutionID     string  `json:"ExecutionID"`     // 約定番号（決済指定時に使う）
+	Exchange        int32   `json:"Exchange"`        //
+	AccountType     int32   `json:"AccountType"`     //
+	MarginTradeType int32   `json:"MarginTradeType"` //
+	Side            string  `json:"Side"`            //
+	Symbol          string  `json:"Symbol"`          // 銘柄コード (例: "7012")
+	SymbolName      string  `json:"SymbolName"`      // 銘柄名
+	LeavesQty       float64 `json:"LeavesQty"`       // 残数量（いま決済できる株数）
+	HoldQty         float64 `json:"HoldQty"`         // 拘束数量（すでに売り注文を出して待機中の株数）
+	Price           float64 `json:"Price"`           // 建値（平均取得単価） ★0.2%計算の基準！
+	CurrentPrice    float64 `json:"CurrentPrice"`    // 現在値
+	Valuation       float64 `json:"Valuation"`       // 評価金額
+	ProfitLoss      float64 `json:"ProfitLoss"`      // 評価損益
+	ProfitLossRate  float64 `json:"ProfitLossRate"`  // 評価損益率
 }
 
 // ※kabuステーションAPIの /positions は、このオブジェクトの「配列」を返してきます。

@@ -83,13 +83,6 @@ const (
 	SECURITY_TYPE_STOCK
 )
 
-type DelivType uint32
-
-const (
-	DELIVER_TYPE_NONE DelivType = iota
-	DELIVER_TYPE_CURREBCY
-)
-
 type ClosePositionOrder uint32
 
 const (
@@ -104,7 +97,6 @@ type OrderRequest struct {
 	Action             Action
 	MarginTradeType    MarginTradeType
 	AccountType        AccountType
-	DelivType          DelivType
 	ClosePositionOrder ClosePositionOrder
 	OrderType          OrderType
 	Qty                float64
@@ -113,9 +105,14 @@ type OrderRequest struct {
 
 // OrderRequest は市場へ送る注文の要望です
 type Position struct {
-	Symbol    string  // 銘柄
-	LeavesQty float64 // 保有数量
-	Price     float64 // 取得価格
+	ExecutionID string
+	Symbol      string // 銘柄
+	Exchange    ExchangeMarket
+	Action      Action
+	TradeType   MarginTradeType
+	AccountType AccountType
+	LeavesQty   float64 // 保有数量
+	Price       float64 // 取得価格
 }
 
 type OrderState uint32
