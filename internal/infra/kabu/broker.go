@@ -19,11 +19,11 @@ func NewKabuOrderBroker(client *KabuClient) *KabuOrderBroker {
 
 // SendOrder は market.OrderBroker の実装です
 func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
-	side := "1"     // 売
-	cashMargin := 3 // 返却
+	side := SIDE_SELL // 売
+	cashMargin := 3   // 返却
 	if req.Action == market.Buy {
-		cashMargin = 2 // 新規
-		side = "2"     // 買
+		cashMargin = 2  // 新規
+		side = SIDE_BUY // 買
 	}
 
 	AccountType := 0
@@ -89,7 +89,7 @@ func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest
 		Symbol:             req.Symbol,
 		Exchange:           exchange,
 		SecurityType:       securityType,
-		Side:               side,
+		Side:               string(side),
 		CashMargin:         cashMargin,
 		MarginTradeType:    tradeType,
 		AccountType:        AccountType,
@@ -185,9 +185,9 @@ func (b *KabuOrderBroker) toMarketExchange(excahge int32) market.ExchangeMarket 
 
 func (b *KabuOrderBroker) toMakerAction(side string) market.Action {
 	switch side {
-	case "1":
+	case string(SIDE_SELL):
 		return market.Sell
-	case "2":
+	case string(SIDE_BUY):
 		return market.Buy
 	default:
 		return ""

@@ -127,8 +127,8 @@ const (
 type Side string
 
 const (
-	SideBuy  Side = "1"
-	SideSell Side = "2"
+	SideBuy  Side = "2"
+	SideSell Side = "1"
 )
 
 // OrderBroker は市場へ注文を仲介する規格です（インフラ層で実装します）

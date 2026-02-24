@@ -103,15 +103,15 @@ type CancelResponse struct {
 type Side string
 
 const (
-	SIDE_BUY  Side = "1"
-	SIDE_SELL Side = "2"
+	SIDE_BUY  Side = "2"
+	SIDE_SELL Side = "1"
 )
 
 func (s Side) print() string {
 	switch s {
-	case "1":
+	case SIDE_BUY:
 		return "Buy"
-	case "2":
+	case SIDE_SELL:
 		return "Sell"
 	default:
 		return "unknown"
@@ -120,9 +120,9 @@ func (s Side) print() string {
 
 func (s Side) toAction() market.Action {
 	switch s {
-	case "1":
+	case SIDE_BUY:
 		return market.Buy
-	case "2":
+	case SIDE_SELL:
 		return market.Sell
 	default:
 		return "unknown"
