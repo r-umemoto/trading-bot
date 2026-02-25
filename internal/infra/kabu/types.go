@@ -121,9 +121,9 @@ func (s Side) print() string {
 func (s Side) toAction() market.Action {
 	switch s {
 	case SIDE_BUY:
-		return market.Buy
+		return market.ACTION_BUY
 	case SIDE_SELL:
-		return market.Sell
+		return market.ACTION_SELL
 	default:
 		return "unknown"
 	}

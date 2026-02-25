@@ -82,9 +82,9 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 			// 1. 注文(Order)のループ
 			for _, apiOrder := range apiOrders {
 
-				action := market.Buy
+				action := market.ACTION_BUY
 				if apiOrder.Side == SIDE_SELL {
-					action = market.Sell
+					action = market.ACTION_SELL
 				}
 
 				// 2. さらに明細(Details)のループを回す！

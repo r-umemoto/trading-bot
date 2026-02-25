@@ -21,7 +21,7 @@ func NewKabuOrderBroker(client *KabuClient) *KabuOrderBroker {
 func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
 	side := SIDE_SELL // 売
 	cashMargin := 3   // 返却
-	if req.Action == market.Buy {
+	if req.Action == market.ACTION_BUY {
 		cashMargin = 2  // 新規
 		side = SIDE_BUY // 買
 	}
@@ -75,11 +75,11 @@ func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest
 
 	deliverType := 0
 	switch req.Action {
-	case market.Buy:
+	case market.ACTION_BUY:
 		if cashMargin == 1 {
 			deliverType = 2
 		}
-	case market.Sell:
+	case market.ACTION_SELL:
 		if cashMargin == 3 {
 			deliverType = 2
 		}
@@ -128,9 +128,9 @@ func (b *KabuOrderBroker) GetOrders(ctx context.Context) ([]market.Order, error)
 	}
 	domainOrders := make([]market.Order, 0, len(orders))
 	for _, order := range orders {
-		action := market.Buy
+		action := market.ACTION_BUY
 		if order.Side == SIDE_SELL {
-			action = market.Sell
+			action = market.ACTION_SELL
 		}
 		o := market.NewOrder(order.ID, order.Symbol, action, order.Price, order.CumQty)
 		for _, excution := range order.Details {
@@ -186,9 +186,9 @@ func (b *KabuOrderBroker) toMarketExchange(excahge int32) market.ExchangeMarket 
 func (b *KabuOrderBroker) toMakerAction(side string) market.Action {
 	switch side {
 	case string(SIDE_SELL):
-		return market.Sell
+		return market.ACTION_SELL
 	case string(SIDE_BUY):
-		return market.Buy
+		return market.ACTION_BUY
 	default:
 		return ""
 	}

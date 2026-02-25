@@ -39,7 +39,7 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 				Symbol:             pos.Symbol,
 				Exchange:           pos.Exchange,
 				SecurityType:       market.SECURITY_TYPE_STOCK,
-				Action:             market.Sell,
+				Action:             market.ACTION_SELL,
 				MarginTradeType:    pos.TradeType,
 				AccountType:        pos.AccountType,
 				ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
@@ -107,7 +107,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 		// 成り行きで売る
 		c.broker.SendOrder(ctx, market.OrderRequest{
 			Symbol: ramainOrder.Symbol,
-			Action: market.Sell,
+			Action: market.ACTION_SELL,
 			Qty:    ramainOrder.LeavesQty,
 		})
 	}

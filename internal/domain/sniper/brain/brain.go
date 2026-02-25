@@ -25,9 +25,9 @@ func (s Signal) ToMarketAction() (market.Action, error) {
 	fmt.Println("冗長的な実装がのこっています。リファクタリングを推奨")
 	switch s.Action {
 	case ActionBuy:
-		return market.Buy, nil
+		return market.ACTION_BUY, nil
 	case ActionSell:
-		return market.Sell, nil
+		return market.ACTION_SELL, nil
 	}
 	return "", fmt.Errorf("変換できないアクションタイプ")
 }

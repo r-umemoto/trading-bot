@@ -14,8 +14,8 @@ type Tick struct {
 type Action string
 
 const (
-	Buy  Action = "BUY"
-	Sell Action = "SELL"
+	ACTION_BUY  Action = "BUY"
+	ACTION_SELL Action = "SELL"
 )
 
 type ProductType int

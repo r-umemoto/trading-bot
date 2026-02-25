@@ -87,14 +87,16 @@ func handleToken(w http.ResponseWriter, r *http.Request) {
 // 1. 固定で返していた建玉データを「書き換え可能な変数」として外に出す
 var mockPositions = []map[string]interface{}{
 	{
-		"ExecutionID": "exec_001",
-		"AccountType": 4,
-		"Symbol":      "9433",
-		"SymbolName":  "ＫＤＤＩ",
-		"SettleType":  0,
-		"LeavesQty":   100.0, // 👈 最初は100株持っている
-		"HoldQty":     100.0,
-		"Price":       4000.0,
+		"ExecutionID":     "exec_001",
+		"Exchange":        1,
+		"AccountType":     4,
+		"Symbol":          "9433",
+		"SymbolName":      "ＫＤＤＩ",
+		"Side":            "2",
+		"MarginTradeType": 3,
+		"LeavesQty":       100.0, // 👈 最初は100株持っている
+		"HoldQty":         100.0,
+		"Price":           4000.0,
 	},
 }
 
@@ -119,6 +121,7 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 		Qty            float64 `json:"Qty"`
 		Price          float64 `json:"Price"`
 		FrontOrderType int     `json:"FrontOrderType"`
+		AccountType    int32   `json:"AccountType"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
@@ -141,6 +144,7 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 				"SymbolName":  "シミュレーション銘柄",
 				"LeavesQty":   req.Qty,
 				"Price":       req.Price,
+				"AccountType": req.AccountType,
 			})
 			fmt.Printf("[Mock] 📈 %s の建玉が %.0f株 追加されました。\n", req.Symbol, req.Qty)
 
@@ -182,13 +186,16 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 	uniqueExID := fmt.Sprintf("mock_order_ex_%d", time.Now().UnixNano())
 
 	mockOrders = append(mockOrders, map[string]interface{}{
-		"ID":     uniqueID,
-		"Symbol": req.Symbol,
-		"State":  3,
-		"CumQty": req.Qty,
+		"ID":          uniqueID,
+		"Symbol":      req.Symbol,
+		"State":       3,
+		"Side":        req.Side,
+		"CumQty":      req.Qty,
+		"OrderQty":    req.Qty,
+		"AccountType": req.AccountType,
 		"Details": []map[string]interface{}{{
 			"Price":       req.Price,
-			"State":       3,
+			"Qty":         req.Qty,
 			"ExecutionID": uniqueExID,
 		}},
 	})

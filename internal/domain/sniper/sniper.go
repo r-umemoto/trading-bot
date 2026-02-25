@@ -64,14 +64,32 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 		totalExposure += p.Price * float64(p.LeavesQty) // 取得単価 × 数量
 	}
 
+	// 発注済みで、まだ約定していない売り注文の「未約定数量」を合計する
+	var pendingSellQty float64
+	for _, order := range s.Orders { // スナイパーが管理している現在の注文リスト
+		if order.Action == market.ACTION_SELL {
+			// 注文した総数から、すでに約定した数を引く = まだ板に残っている数
+			unexecutedQty := order.OrderQty - order.FilledQty()
+			if unexecutedQty > 0 {
+				pendingSellQty += unexecutedQty
+			}
+		}
+	}
+
+	// 戦略に渡す「自由に動かせる株数」
+	freeQty := holdQty - pendingSellQty
+	if freeQty < 0 {
+		freeQty = 0 // 念のためのマイナス防止
+	}
+
 	averagePrice := 0.0
-	if holdQty > 0 {
-		averagePrice = totalExposure / float64(holdQty)
+	if freeQty > 0 {
+		averagePrice = totalExposure / float64(freeQty)
 	}
 
 	input := strategy.StrategyInput{
 		CurrentPrice:  state.CurrentPrice,
-		HoldQty:       holdQty,
+		HoldQty:       freeQty,
 		AveragePrice:  averagePrice,
 		TotalExposure: totalExposure,
 		ShortMA:       state.ShortMA,
@@ -188,14 +206,14 @@ func (s *Sniper) OnExecution(report market.ExecutionReport) {
 
 	// 2. 実際の約定結果に基づいて、建玉（Positions）を更新する
 	switch report.Action {
-	case market.Buy:
+	case market.ACTION_BUY:
 		s.positions = append(s.positions, market.Position{
 			Symbol:    report.Symbol,
 			LeavesQty: report.Qty,
 			Price:     report.Price,
 		})
 		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Symbol, report.Price, report.Qty)
-	case market.Sell:
+	case market.ACTION_SELL:
 		s.reducePositions(report.Qty)
 		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Symbol, report.Qty)
 	}
