@@ -218,10 +218,23 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 func handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("[Mock] 🛑 注文取消(Cancel)リクエストを受信しました！")
 
-	response := map[string]interface{}{
-		"Result":  0,
-		"OrderId": "mock_active_order_001",
+	var req struct {
+		OrderID string `json:"OrderId"` // 取消したい注文の受付番号
 	}
+
+	response := map[string]interface{}{
+		"Result":  1,
+		"OrderId": "",
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+		response = map[string]interface{}{
+			"Result":  0,
+			"OrderId": req.OrderID,
+		}
+	} else {
+		fmt.Println("[Mock] ⚠️ 注文取消(Cancel)失敗")
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
