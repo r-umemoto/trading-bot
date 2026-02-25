@@ -1,22 +1,26 @@
 // cmd/bot/portfolio.go
-package main
+package engine
 
 import (
 	"fmt"
 	"strings"
-	"trading-bot/internal/config"
-	"trading-bot/internal/domain/market"
-	"trading-bot/internal/domain/service"
-	"trading-bot/internal/domain/sniper"
-	"trading-bot/internal/domain/sniper/strategy"
-	"trading-bot/internal/infra/kabu"
-	"trading-bot/internal/usecase"
+	"trading-bot/pkg/config"
+	"trading-bot/pkg/domain/market"
+	"trading-bot/pkg/domain/service"
+	"trading-bot/pkg/domain/sniper"
+	"trading-bot/pkg/domain/sniper/strategy"
+	"trading-bot/pkg/infra/kabu"
+	"trading-bot/pkg/usecase"
 )
 
-// ... (インポート略) ...
+// WatchTarget defines what symbol to watch with which strategy.
+type WatchTarget struct {
+	Symbol       string
+	StrategyName string
+}
 
-// buildPortfolio は、システム全体を俯瞰する「目次」です
-func buildEngine(cfg *config.AppConfig) (*Engine, error) {
+// BuildEngine は、システム全体を俯瞰する「目次」です
+func BuildEngine(cfg *config.AppConfig, watchList []WatchTarget) (*Engine, error) {
 	// 1. インフラ層の構築（泥臭い設定はすべてここへ）
 	gateway, err := buildInfrastructure(cfg)
 	if err != nil {
@@ -24,7 +28,10 @@ func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 	}
 
 	// 2. ドメイン層（スナイパー）の配備
-	snipers, watchSymbols := deploySnipers()
+	snipers, watchSymbols, err := deploySnipers(watchList)
+	if err != nil {
+		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
+	}
 
 	// 3. ユースケースとサービスの組み立て
 	analyzer := market.NewDefaultAnalyzer()
@@ -58,27 +65,21 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 	return marketGateway, nil
 }
 
-func deploySnipers() ([]*sniper.Sniper, []string) {
+func deploySnipers(watchList []WatchTarget) ([]*sniper.Sniper, []string, error) {
 	var snipers []*sniper.Sniper
 	var watchSymbols []string
 
-	watchList := []struct {
-		Symbol string
-		Qty    float64
-		Price  float64
-	}{
-		{Symbol: "9433", Qty: 100, Price: 3990.0},
-	}
-
 	for _, t := range watchList {
-		vwapStrategy := strategy.NewVWAPReboundStrategy(0.5, 0.1, 100)
-		budgetLogic := strategy.NewBudgetConstraint(vwapStrategy, 1000000.0)
-		safeLogic := strategy.NewKillSwitch(budgetLogic, t.Qty)
+		// 戦略レジストリから戦略を取得
+		st, err := strategy.Get(t.StrategyName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
+		}
 
-		s := sniper.NewSniper(t.Symbol, safeLogic)
+		s := sniper.NewSniper(t.Symbol, st)
 		snipers = append(snipers, s)
 		watchSymbols = append(watchSymbols, t.Symbol)
 	}
 
-	return snipers, watchSymbols
+	return snipers, watchSymbols, nil
 }

@@ -1,7 +1,7 @@
 // internal/domain/sniper/strategy/strategy.go
 package strategy
 
-import "trading-bot/internal/domain/sniper/brain"
+import "trading-bot/pkg/domain/sniper/brain"
 
 // StrategyInput は、戦略が判断を下すための「計算済みの相場・口座状態」です
 type StrategyInput struct {

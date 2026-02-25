@@ -1,15 +1,15 @@
 // cmd/bot/engine.go
-package main
+package engine
 
 import (
 	"context"
 	"fmt"
 	"time"
 
-	"trading-bot/internal/domain/market"
-	"trading-bot/internal/domain/service"
-	"trading-bot/internal/infra/kabu"
-	"trading-bot/internal/usecase"
+	"trading-bot/pkg/domain/market"
+	"trading-bot/pkg/domain/service"
+	"trading-bot/pkg/infra/kabu"
+	"trading-bot/pkg/usecase"
 )
 
 // Engine はシステム全体のライフサイクル（初期化、実行、停止）を管理する司令部です

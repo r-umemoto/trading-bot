@@ -2,7 +2,7 @@
 package config
 
 import (
-	"trading-bot/internal/infra/kabu"
+	"trading-bot/pkg/infra/kabu"
 
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"

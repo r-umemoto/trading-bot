@@ -2,7 +2,7 @@ package brain
 
 import (
 	"fmt"
-	"trading-bot/internal/domain/market"
+	"trading-bot/pkg/domain/market"
 )
 
 type Action string

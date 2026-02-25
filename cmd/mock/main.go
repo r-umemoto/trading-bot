@@ -54,8 +54,8 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		// PushMessageの組み立て
 		msg := map[string]interface{}{
-			"Symbol":       "9433",
-			"SymbolName":   "ＫＤＤＩ",
+			"Symbol":       "9434",
+			"SymbolName":   "sbg",
 			"CurrentPrice": currentPrice,
 			"VWAP":         3980,
 		}
@@ -90,8 +90,8 @@ var mockPositions = []map[string]interface{}{
 		"ExecutionID":     "exec_001",
 		"Exchange":        1,
 		"AccountType":     4,
-		"Symbol":          "9433",
-		"SymbolName":      "ＫＤＤＩ",
+		"Symbol":          "9434",
+		"SymbolName":      "sbg",
 		"Side":            "2",
 		"MarginTradeType": 3,
 		"LeavesQty":       100.0, // 👈 最初は100株持っている

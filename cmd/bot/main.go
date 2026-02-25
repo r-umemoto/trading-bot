@@ -7,7 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"trading-bot/internal/config"
+	"trading-bot/pkg/config"
+	"trading-bot/pkg/engine"
 )
 
 func main() {
@@ -23,8 +24,11 @@ func main() {
 		log.Fatalf("❌ 設定の読み込みに失敗しました: %v", err)
 	}
 
-	// 3. アプリケーションの組み立て（portfolio.go の buildPortfolio を呼び出す）
-	engine, err := buildEngine(cfg)
+	// 3. アプリケーションの組み立て
+	watchList := []engine.WatchTarget{
+		{Symbol: "9434", StrategyName: "sample"},
+	}
+	engine, err := engine.BuildEngine(cfg, watchList)
 	if err != nil {
 		log.Fatalf("❌ engineの組み立て失敗: %v", err)
 	}

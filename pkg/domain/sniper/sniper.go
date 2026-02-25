@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync"
 
-	"trading-bot/internal/domain/market"
-	"trading-bot/internal/domain/sniper/brain"
-	"trading-bot/internal/domain/sniper/strategy"
+	"trading-bot/pkg/domain/market"
+	"trading-bot/pkg/domain/sniper/brain"
+	"trading-bot/pkg/domain/sniper/strategy"
 )
 
 // すべての戦略が満たすべき頭脳の規格

@@ -1,19 +1,19 @@
 package strategy
 
 import (
-	"trading-bot/internal/domain/sniper/brain"
+	"trading-bot/pkg/domain/sniper/brain"
 )
 
 // KillSwitch は他の戦略をラップし、発動時に強制決済シグナルを出すデコレーター
 type KillSwitch struct {
-	MainLogic   LogicNode // 包み込まれる本来の戦略
-	IsTriggered bool      // キルスイッチが押されたか
-	HasPosition bool      // 現在建玉を持っているか（全決済のため）
+	MainLogic   Strategy // 包み込まれる本来の戦略
+	IsTriggered bool     // キルスイッチが押されたか
+	HasPosition bool     // 現在建玉を持っているか（全決済のため）
 	Quantity    float64
 }
 
-// 本来の戦略を渡してキルスイッチ付き戦略を作る
-func NewKillSwitch(mainLogic LogicNode, qty float64) *KillSwitch {
+// NewKillSwitch は本来の戦略を渡してキルスイッチ付き戦略を作ります
+func NewKillSwitch(mainLogic Strategy, qty float64) Strategy {
 	return &KillSwitch{
 		MainLogic:   mainLogic,
 		IsTriggered: false,
@@ -53,4 +53,8 @@ func (k *KillSwitch) Evaluate(input StrategyInput) brain.Signal {
 	}
 
 	return sig
+}
+
+func init() {
+	Register("kill", NewSampleStrategy())
 }

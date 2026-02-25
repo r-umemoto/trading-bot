@@ -1,6 +1,6 @@
 package kabu
 
-import "trading-bot/internal/domain/market"
+import "trading-bot/pkg/domain/market"
 
 // トークン取得リクエスト用（こちらから送るデータ）
 type TokenRequest struct {
@@ -47,7 +47,7 @@ type PushMessage struct {
 // OrderRequest は新規・決済注文を発注するためのリクエストデータです
 // https://kabucom.github.io/kabusapi/reference/index.html#operation/sendorderPost
 type OrderRequest struct {
-	Symbol             string  `json:"Symbol"`             // 銘柄コード (例: "9433")
+	Symbol             string  `json:"Symbol"`             // 銘柄コード (例: "9434")
 	Exchange           int     `json:"Exchange"`           // 市場コード (1: 東証)
 	SecurityType       int     `json:"SecurityType"`       // 商品種別 (1: 株式)
 	Side               string  `json:"Side"`               // 売買区分 ("1": 売, "2": 買)

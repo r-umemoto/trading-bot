@@ -4,8 +4,8 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"trading-bot/internal/domain/market"
-	"trading-bot/internal/domain/sniper"
+	"trading-bot/pkg/domain/market"
+	"trading-bot/pkg/domain/sniper"
 )
 
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
