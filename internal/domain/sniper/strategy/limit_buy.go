@@ -17,7 +17,7 @@ func NewLimitBuy(targetPrice float64, qty float64) *LimitBuy {
 // engine.Strategy インターフェースを満たす
 func (s *LimitBuy) Evaluate(input StrategyInput) brain.Signal {
 	if input.CurrentPrice <= s.TargetPrice {
-		return brain.Signal{Action: brain.ActionBuy, Quantity: s.Quantity}
+		return brain.Signal{Action: brain.ACTION_BUY, Quantity: s.Quantity}
 	}
-	return brain.Signal{Action: brain.ActionHold}
+	return brain.Signal{Action: brain.ACTION_HOLD}
 }

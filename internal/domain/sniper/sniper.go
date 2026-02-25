@@ -100,11 +100,11 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 	// 1. 頭脳に価格を渡して判断を仰ぐ
 	signal := s.Strategy.Evaluate(input)
 
-	if signal.Action == brain.ActionHold {
+	if signal.Action == brain.ACTION_HOLD {
 		return nil // 何もしない
 	}
 
-	marketAction, err := signal.ToMarketAction()
+	marketAction, err := signal.Action.ToMarketAction()
 	if err != nil {
 		fmt.Println("トラップできていないエラーがあります")
 		return nil

@@ -31,14 +31,14 @@ func (s *RoundTripStrategy) Evaluate(input StrategyInput) brain.Signal {
 	if !s.HasPosition {
 		// 建玉がない場合：買い戦略に判断を委譲
 		sig := s.EntryStrategy.Evaluate(input)
-		if sig.Action == brain.ActionBuy {
+		if sig.Action == brain.ACTION_BUY {
 			s.HasPosition = true // 買いシグナルが出たら「持っている」状態へ遷移
 		}
 		return sig
 	} else {
 		// 建玉がある場合：売り戦略に判断を委譲
 		sig := s.ExitStrategy.Evaluate(input)
-		if sig.Action == brain.ActionSell {
+		if sig.Action == brain.ACTION_SELL {
 			s.HasPosition = false // 売りシグナルが出たら「持っていない」状態へ戻る
 		}
 		return sig

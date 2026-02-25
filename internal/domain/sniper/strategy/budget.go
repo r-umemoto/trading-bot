@@ -21,7 +21,7 @@ func (b *BudgetConstraint) Evaluate(input StrategyInput) brain.Signal {
 	signal := b.baseStrategy.Evaluate(input)
 
 	// 2. 買いシグナル以外（売り、何もしない）ならそのまま通す
-	if signal.Action != brain.ActionBuy {
+	if signal.Action != brain.ACTION_BUY {
 		return signal
 	}
 
@@ -30,7 +30,7 @@ func (b *BudgetConstraint) Evaluate(input StrategyInput) brain.Signal {
 
 	if input.TotalExposure+estimatedCost > b.maxBudget {
 		// 予算オーバーならシグナルを握りつぶす
-		return brain.Signal{Action: brain.ActionHold}
+		return brain.Signal{Action: brain.ACTION_HOLD}
 	}
 
 	return signal

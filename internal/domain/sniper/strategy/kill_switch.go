@@ -28,17 +28,17 @@ func (k *KillSwitch) Activate() brain.Signal {
 
 	if k.HasPosition {
 		k.HasPosition = false
-		return brain.Signal{Action: brain.ActionSell, Quantity: k.Quantity}
+		return brain.Signal{Action: brain.ACTION_SELL, Quantity: k.Quantity}
 	}
 
-	return brain.Signal{Action: brain.ActionHold}
+	return brain.Signal{Action: brain.ACTION_HOLD}
 }
 
 func (k *KillSwitch) Evaluate(input StrategyInput) brain.Signal {
 	// 🚨 キルスイッチ発動中！
 	if k.IsTriggered {
 		// 既にキルスイッチ起動済みの場合は気絶しておく
-		return brain.Signal{Action: brain.ActionHold}
+		return brain.Signal{Action: brain.ACTION_HOLD}
 	}
 
 	// 🕊️ 平常時は、包み込んでいる本来の戦略に判断を丸投げする
@@ -46,9 +46,9 @@ func (k *KillSwitch) Evaluate(input StrategyInput) brain.Signal {
 
 	// 本来の戦略が出したシグナルを見て、ポジション状態を同期しておく
 	switch sig.Action {
-	case brain.ActionBuy:
+	case brain.ACTION_BUY:
 		k.HasPosition = true
-	case brain.ActionSell:
+	case brain.ACTION_SELL:
 		k.HasPosition = false
 	}
 
