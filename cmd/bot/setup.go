@@ -39,7 +39,7 @@ func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 // ▼ ここから下は「下請け工場（プライベート関数）」に押し込む
 // ---------------------------------------------------------
 
-func buildInfrastructure(cfg *config.AppConfig) (market.EventStreamer, *kabu.KabuOrderBroker, error) {
+func buildInfrastructure(cfg *config.AppConfig) (market.EventStreamer, *kabu.MarketGateway, error) {
 	if cfg.BrokerType != "kabu" {
 		return nil, nil, fmt.Errorf("未対応のブローカーです: %s", cfg.BrokerType)
 	}

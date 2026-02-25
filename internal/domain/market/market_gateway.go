@@ -132,7 +132,7 @@ const (
 )
 
 // OrderBroker は市場へ注文を仲介する規格です（インフラ層で実装します）
-type OrderBroker interface {
+type MarketGateway interface {
 	SendOrder(ctx context.Context, req OrderRequest) (string, error) // 戻り値は受付OrderID
 	CancelOrder(ctx context.Context, orderID string) error
 	GetPositions(ctx context.Context, product ProductType) ([]Position, error)

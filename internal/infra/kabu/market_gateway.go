@@ -8,16 +8,16 @@ import (
 )
 
 // KabuOrderBroker はカブコムAPIを使って注文を実行します
-type KabuOrderBroker struct {
+type MarketGateway struct {
 	client *KabuClient
 }
 
-func NewKabuOrderBroker(client *KabuClient) *KabuOrderBroker {
-	return &KabuOrderBroker{client: client}
+func NewKabuOrderBroker(client *KabuClient) *MarketGateway {
+	return &MarketGateway{client: client}
 }
 
 // SendOrder は market.OrderBroker の実装です
-func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
+func (b *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
 	side := SIDE_SELL // 売
 	cashMargin := 3   // 返却
 	if req.Action == market.ACTION_BUY {
@@ -111,7 +111,7 @@ func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest
 }
 
 // CancelOrder は market.OrderBroker の実装です
-func (b *KabuOrderBroker) CancelOrder(ctx context.Context, orderID string) error {
+func (b *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
 	req := CancelRequest{OrderID: orderID}
 	_, err := b.client.CancelOrder(req)
 	if err != nil {
@@ -120,7 +120,7 @@ func (b *KabuOrderBroker) CancelOrder(ctx context.Context, orderID string) error
 	return nil
 }
 
-func (b *KabuOrderBroker) GetOrders(ctx context.Context) ([]market.Order, error) {
+func (b *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 	orders, err := b.client.GetOrders()
 	if err != nil {
 		return nil, fmt.Errorf("注文取得失敗)")
@@ -145,7 +145,7 @@ func (b *KabuOrderBroker) GetOrders(ctx context.Context) ([]market.Order, error)
 	return domainOrders, nil
 }
 
-func (b *KabuOrderBroker) GetPositions(ctx context.Context, product market.ProductType) ([]market.Position, error) {
+func (b *MarketGateway) GetPositions(ctx context.Context, product market.ProductType) ([]market.Position, error) {
 	arg := ProductMargin
 	if product != market.PRODUCT_MARGIN {
 		// 現状は信用取引しかしてない
@@ -173,7 +173,7 @@ func (b *KabuOrderBroker) GetPositions(ctx context.Context, product market.Produ
 	return decodePositons, nil
 }
 
-func (b *KabuOrderBroker) toMarketExchange(excahge int32) market.ExchangeMarket {
+func (b *MarketGateway) toMarketExchange(excahge int32) market.ExchangeMarket {
 	switch excahge {
 	case 1:
 		return market.EXCHANGE_TOSHO
@@ -182,7 +182,7 @@ func (b *KabuOrderBroker) toMarketExchange(excahge int32) market.ExchangeMarket 
 	}
 }
 
-func (b *KabuOrderBroker) toMakerAction(side string) market.Action {
+func (b *MarketGateway) toMakerAction(side string) market.Action {
 	switch side {
 	case string(SIDE_SELL):
 		return market.ACTION_SELL
@@ -193,7 +193,7 @@ func (b *KabuOrderBroker) toMakerAction(side string) market.Action {
 	}
 }
 
-func (b *KabuOrderBroker) toMakerTradeType(tradeType int32) market.MarginTradeType {
+func (b *MarketGateway) toMakerTradeType(tradeType int32) market.MarginTradeType {
 	switch tradeType {
 	case 1:
 		return market.TRADE_TYPE_SYSTEM
@@ -206,7 +206,7 @@ func (b *KabuOrderBroker) toMakerTradeType(tradeType int32) market.MarginTradeTy
 	}
 }
 
-func (b *KabuOrderBroker) toAccountType(accountType int32) market.AccountType {
+func (b *MarketGateway) toAccountType(accountType int32) market.AccountType {
 	switch accountType {
 	case 2:
 		return market.ACCOUNT_GENERAL

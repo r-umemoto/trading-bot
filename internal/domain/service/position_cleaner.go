@@ -11,10 +11,10 @@ import (
 // PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するサービスです。
 type PositionCleaner struct {
 	snipers []*sniper.Sniper
-	broker  market.OrderBroker
+	broker  market.MarketGateway
 }
 
-func NewPositionCleaner(snipers []*sniper.Sniper, broker market.OrderBroker) *PositionCleaner {
+func NewPositionCleaner(snipers []*sniper.Sniper, broker market.MarketGateway) *PositionCleaner {
 	return &PositionCleaner{
 		snipers: snipers,
 		broker:  broker,

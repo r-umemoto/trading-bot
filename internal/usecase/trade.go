@@ -11,11 +11,11 @@ import (
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
 	snipers  []*sniper.Sniper
-	broker   market.OrderBroker
+	broker   market.MarketGateway
 	analyzer market.Analyzer
 }
 
-func NewTradeUseCase(snipers []*sniper.Sniper, broker market.OrderBroker, analyzer market.Analyzer) *TradeUseCase {
+func NewTradeUseCase(snipers []*sniper.Sniper, broker market.MarketGateway, analyzer market.Analyzer) *TradeUseCase {
 	return &TradeUseCase{
 		snipers:  snipers,
 		broker:   broker,

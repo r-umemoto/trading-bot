@@ -10,11 +10,11 @@ import (
 // KabuMarketAdapter はカブコムの不揃いなAPI仕様を吸収し、統一されたストリームに変換します
 type KabuMarketAdapter struct {
 	wsURL               string
-	gateway             *KabuOrderBroker
+	gateway             *MarketGateway
 	processedExecutions map[string]bool // 通知済みの注文IDを記録し、重複検知を防ぐ
 }
 
-func NewKabuMarketAdapter(wsURL string, gateway *KabuOrderBroker) *KabuMarketAdapter {
+func NewKabuMarketAdapter(wsURL string, gateway *MarketGateway) *KabuMarketAdapter {
 	return &KabuMarketAdapter{
 		wsURL:               wsURL,
 		gateway:             gateway,
