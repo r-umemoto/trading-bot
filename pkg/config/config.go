@@ -2,10 +2,9 @@
 package config
 
 import (
-	"trading-bot/pkg/infra/kabu"
-
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
 )
 
 // AppConfig はシステム全体の設定です

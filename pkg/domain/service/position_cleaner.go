@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
-	"trading-bot/pkg/domain/market"
-	"trading-bot/pkg/domain/sniper"
+
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 )
 
 // PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するサービスです。

@@ -2,7 +2,8 @@ package brain
 
 import (
 	"fmt"
-	"trading-bot/pkg/domain/market"
+
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 )
 
 type Action string

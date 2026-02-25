@@ -7,8 +7,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"trading-bot/pkg/config"
-	"trading-bot/pkg/engine"
+
+	"github.com/r-umemoto/trading-bot/pkg/config"
+	"github.com/r-umemoto/trading-bot/pkg/engine"
 )
 
 func main() {

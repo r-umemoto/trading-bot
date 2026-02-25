@@ -1,6 +1,6 @@
 package kabu
 
-import "trading-bot/pkg/domain/market"
+import "github.com/r-umemoto/trading-bot/pkg/domain/market"
 
 // トークン取得リクエスト用（こちらから送るデータ）
 type TokenRequest struct {

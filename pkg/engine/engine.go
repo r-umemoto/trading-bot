@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"trading-bot/pkg/domain/market"
-	"trading-bot/pkg/domain/service"
-	"trading-bot/pkg/infra/kabu"
-	"trading-bot/pkg/usecase"
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/service"
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
+	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
 
 // Engine はシステム全体のライフサイクル（初期化、実行、停止）を管理する司令部です

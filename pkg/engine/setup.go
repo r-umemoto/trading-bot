@@ -4,13 +4,14 @@ package engine
 import (
 	"fmt"
 	"strings"
-	"trading-bot/pkg/config"
-	"trading-bot/pkg/domain/market"
-	"trading-bot/pkg/domain/service"
-	"trading-bot/pkg/domain/sniper"
-	"trading-bot/pkg/domain/sniper/strategy"
-	"trading-bot/pkg/infra/kabu"
-	"trading-bot/pkg/usecase"
+
+	"github.com/r-umemoto/trading-bot/pkg/config"
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/service"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
+	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
 
 // WatchTarget defines what symbol to watch with which strategy.

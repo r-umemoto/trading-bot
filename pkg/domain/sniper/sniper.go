@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync"
 
-	"trading-bot/pkg/domain/market"
-	"trading-bot/pkg/domain/sniper/brain"
-	"trading-bot/pkg/domain/sniper/strategy"
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 )
 
 // すべての戦略が満たすべき頭脳の規格

@@ -5,7 +5,8 @@ import (
 	"context"
 	"fmt"
 	"time"
-	"trading-bot/pkg/domain/market"
+
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 )
 
 func NewMarketGateway(client *KabuClient, wsClient *WSClient) *MarketGateway {
