@@ -90,8 +90,7 @@ type Position struct {
 
 // CancelRequest は注文取消用のリクエストデータです
 type CancelRequest struct {
-	OrderID  string `json:"OrderId"`  // 取消したい注文の受付番号
-	Password string `json:"Password"` // 注文パスワード
+	OrderID string `json:"OrderId"` // 取消したい注文の受付番号
 }
 
 // CancelResponse は注文取消後のレスポンスデータです

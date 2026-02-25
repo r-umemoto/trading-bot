@@ -10,14 +10,14 @@ import (
 // KabuMarketAdapter はカブコムの不揃いなAPI仕様を吸収し、統一されたストリームに変換します
 type KabuMarketAdapter struct {
 	wsURL               string
-	client              *KabuClient
+	gateway             *KabuOrderBroker
 	processedExecutions map[string]bool // 通知済みの注文IDを記録し、重複検知を防ぐ
 }
 
-func NewKabuMarketAdapter(wsURL string, client *KabuClient) *KabuMarketAdapter {
+func NewKabuMarketAdapter(wsURL string, gateway *KabuOrderBroker) *KabuMarketAdapter {
 	return &KabuMarketAdapter{
 		wsURL:               wsURL,
-		client:              client,
+		gateway:             gateway,
 		processedExecutions: make(map[string]bool),
 	}
 }
@@ -73,22 +73,17 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 			return
 
 		case <-ticker.C:
-			apiOrders, err := a.client.GetOrders()
+			orders, err := a.gateway.GetOrders(ctx)
 			if err != nil {
 				fmt.Printf("ポーリングエラー: %v\n", err)
 				continue
 			}
 
 			// 1. 注文(Order)のループ
-			for _, apiOrder := range apiOrders {
-
-				action := market.ACTION_BUY
-				if apiOrder.Side == SIDE_SELL {
-					action = market.ACTION_SELL
-				}
+			for _, order := range orders {
 
 				// 2. さらに明細(Details)のループを回す！
-				for _, detail := range apiOrder.Details {
+				for _, detail := range order.Executions {
 
 					// 約定IDが空の明細（単なる「受付済」などのステータス履歴）はスキップ
 					if detail.ID == "" {
@@ -102,10 +97,10 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 
 					// 約定イベントを生成してチャネルに送信
 					execCh <- market.ExecutionReport{
-						OrderID:     apiOrder.ID,
+						OrderID:     order.ID,
 						ExecutionID: detail.ID, // レポートにも約定IDを持たせる
-						Symbol:      apiOrder.Symbol,
-						Action:      action,
+						Symbol:      order.Symbol,
+						Action:      order.Action,
 						Price:       detail.Price, // 👈 Details側の「実際の約定単価」
 						Qty:         detail.Qty,   // 👈 Details側の「実際の約定数量」
 					}

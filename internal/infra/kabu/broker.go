@@ -9,8 +9,7 @@ import (
 
 // KabuOrderBroker はカブコムAPIを使って注文を実行します
 type KabuOrderBroker struct {
-	client      *KabuClient
-	apiPassword string
+	client *KabuClient
 }
 
 func NewKabuOrderBroker(client *KabuClient) *KabuOrderBroker {
@@ -113,7 +112,7 @@ func (b *KabuOrderBroker) SendOrder(ctx context.Context, req market.OrderRequest
 
 // CancelOrder は market.OrderBroker の実装です
 func (b *KabuOrderBroker) CancelOrder(ctx context.Context, orderID string) error {
-	req := CancelRequest{OrderID: orderID, Password: b.apiPassword}
+	req := CancelRequest{OrderID: orderID}
 	_, err := b.client.CancelOrder(req)
 	if err != nil {
 		return fmt.Errorf("キャンセル失敗 (ResultCode: %s)", orderID)

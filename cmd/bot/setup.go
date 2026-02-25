@@ -52,7 +52,7 @@ func buildInfrastructure(cfg *config.AppConfig) (market.EventStreamer, *kabu.Kab
 	broker := kabu.NewKabuOrderBroker(client)
 
 	wsURL := strings.Replace(cfg.Kabu.APIURL, "http://", "ws://", 1)
-	streamer := kabu.NewKabuMarketAdapter(wsURL+"/websocket", client)
+	streamer := kabu.NewKabuMarketAdapter(wsURL+"/websocket", broker)
 
 	return streamer, broker, nil
 }

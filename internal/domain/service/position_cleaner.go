@@ -33,7 +33,7 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	cleaned := false
 	for _, pos := range initialPositions {
 		if pos.LeavesQty > 0 {
-			fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %d株\n", pos.Symbol, pos.LeavesQty)
+			fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %f株\n", pos.Symbol, pos.LeavesQty)
 
 			req := market.OrderRequest{
 				Symbol:             pos.Symbol,
