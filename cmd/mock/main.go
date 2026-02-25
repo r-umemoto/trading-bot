@@ -248,8 +248,8 @@ func main() {
 	http.HandleFunc("/kabusapi/orders", handleOrders)
 	http.HandleFunc("/kabusapi/cancelorder", handleCancelOrder)
 
-	fmt.Println("[Mock] サーバー起動: モックkabuステーションがポート18080で待機中...")
-	if err := http.ListenAndServe(":18080", nil); err != nil {
+	fmt.Println("[Mock] サーバー起動: モックkabuステーションがポート18082で待機中...")
+	if err := http.ListenAndServe(":18082", nil); err != nil {
 		log.Fatal("サーバー起動エラー:", err)
 	}
 }
