@@ -1,4 +1,4 @@
-module trading-bot
+module github.com/r-umemoto/trading-bot
 
 go 1.22.12
 
