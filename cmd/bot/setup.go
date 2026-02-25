@@ -49,12 +49,13 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 		return nil, fmt.Errorf("トークン取得エラー: %w", err)
 	}
 
-	wsURL := strings.Replace(cfg.Kabu.APIURL, "http://", "ws://", 1)
+	wsURL := strings.Replace(cfg.Kabu.APIURL, "http://", "ws://", 1) + "/websocket"
+	wsClient := kabu.NewWSClient(wsURL)
 
 	// 統合された KabuMarket を生成
-	kabuMarket := kabu.NewKabuMarket(client, wsURL+"/websocket")
+	marketGateway := kabu.NewMarketGateway(client, wsClient)
 
-	return kabuMarket, nil
+	return marketGateway, nil
 }
 
 func deploySnipers() ([]*sniper.Sniper, []string) {
