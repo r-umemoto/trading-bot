@@ -11,14 +11,14 @@ import (
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
 	snipers  []*sniper.Sniper
-	broker   market.MarketGateway
+	gateway  market.MarketGateway
 	analyzer market.Analyzer
 }
 
-func NewTradeUseCase(snipers []*sniper.Sniper, broker market.MarketGateway, analyzer market.Analyzer) *TradeUseCase {
+func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, analyzer market.Analyzer) *TradeUseCase {
 	return &TradeUseCase{
 		snipers:  snipers,
-		broker:   broker,
+		gateway:  gateway,
 		analyzer: analyzer,
 	}
 }
@@ -35,7 +35,7 @@ func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
 
 			if req != nil {
 				// 2. 要求があれば、市場（インフラ）に発注する
-				orderID, err := u.broker.SendOrder(ctx, *req)
+				orderID, err := u.gateway.SendOrder(ctx, *req)
 				if err != nil {
 					fmt.Printf("❌ 発注失敗: %v\n", err)
 					continue

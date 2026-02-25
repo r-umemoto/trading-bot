@@ -7,40 +7,45 @@ import (
 	"trading-bot/internal/domain/market"
 )
 
-// KabuMarketAdapter はカブコムの不揃いなAPI仕様を吸収し、統一されたストリームに変換します
-type KabuMarketAdapter struct {
+// OrderFetcher は、Streamerがポーリングのために必要とするHTTP機能の抽象です
+type OrderFetcher interface {
+	GetOrders(ctx context.Context) ([]market.Order, error)
+}
+
+// KabuStreamer はWebSocketとポーリングを用いたリアルタイム配信を担当します
+type KabuStreamer struct {
 	wsURL               string
-	gateway             *MarketGateway
+	fetcher             OrderFetcher    // 注文情報を取得するための依存
 	processedExecutions map[string]bool // 通知済みの注文IDを記録し、重複検知を防ぐ
 }
 
-func NewKabuMarketAdapter(wsURL string, gateway *MarketGateway) *KabuMarketAdapter {
-	return &KabuMarketAdapter{
+func NewKabuStreamer(wsURL string, fetcher OrderFetcher) *KabuStreamer {
+	return &KabuStreamer{
 		wsURL:               wsURL,
-		gateway:             gateway,
+		fetcher:             fetcher,
 		processedExecutions: make(map[string]bool),
 	}
 }
 
-// Start は market.EventStreamer の実装です
-func (a *KabuMarketAdapter) Start(ctx context.Context) (<-chan market.Tick, <-chan market.ExecutionReport, error) {
+// Start は market.MarketGateway (Streamer) の実装です
+func (s *KabuStreamer) Start(ctx context.Context) (<-chan market.Tick, <-chan market.ExecutionReport, error) {
 	priceCh := make(chan market.Tick, 100)
 	execCh := make(chan market.ExecutionReport, 10)
 
 	// 1. 株価のWebSocketを裏側で起動（既存の WebSocket 処理）
-	go a.startWebSocketLoop(ctx, priceCh)
+	go s.startWebSocketLoop(ctx, priceCh)
 
 	// 2. 約定のポーリングを裏側で起動（先ほど話していた Watcher 処理）
-	go a.startPollingLoop(ctx, execCh)
+	go s.startPollingLoop(ctx, execCh)
 
 	// 呼び出し側（Engine）には、美しく整えられた2つのチャネルだけを返す
 	return priceCh, execCh, nil
 }
 
-func (a *KabuMarketAdapter) startWebSocketLoop(ctx context.Context, tickCh chan market.Tick) {
+func (s *KabuStreamer) startWebSocketLoop(ctx context.Context, tickCh chan market.Tick) {
 	// 既存のWebSocketクライアントを起動
 	rawCh := make(chan PushMessage)
-	wsClient := NewWSClient(a.wsURL)
+	wsClient := NewWSClient(s.wsURL)
 	go wsClient.Listen(rawCh)
 
 	// 🔄 変換層（アダプター処理）
@@ -63,7 +68,7 @@ func (a *KabuMarketAdapter) startWebSocketLoop(ctx context.Context, tickCh chan 
 	}()
 }
 
-func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan market.ExecutionReport) {
+func (s *KabuStreamer) startPollingLoop(ctx context.Context, execCh chan market.ExecutionReport) {
 	ticker := time.NewTicker(3 * time.Second) // 3秒間隔でポーリング
 	defer ticker.Stop()
 
@@ -73,7 +78,8 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 			return
 
 		case <-ticker.C:
-			orders, err := a.gateway.GetOrders(ctx)
+			// 注入されたFetcherを使って注文一覧を取得
+			orders, err := s.fetcher.GetOrders(ctx)
 			if err != nil {
 				fmt.Printf("ポーリングエラー: %v\n", err)
 				continue
@@ -91,7 +97,7 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 					}
 
 					// 🌟 注文IDではなく「約定ID」で通知済みかを判定する
-					if a.processedExecutions[detail.ID] {
+					if s.processedExecutions[detail.ID] {
 						continue
 					}
 
@@ -106,7 +112,7 @@ func (a *KabuMarketAdapter) startPollingLoop(ctx context.Context, execCh chan ma
 					}
 
 					// 🌟 処理完了として「約定ID」を記録する
-					a.processedExecutions[detail.ID] = true
+					s.processedExecutions[detail.ID] = true
 				}
 			}
 		}

@@ -14,7 +14,7 @@ import (
 
 // Engine はシステム全体のライフサイクル（初期化、実行、停止）を管理する司令部です
 type Engine struct {
-	streamer     market.EventStreamer
+	gateway      market.MarketGateway
 	tradeUC      *usecase.TradeUseCase
 	cleaner      *service.PositionCleaner
 	watchSymbols []string
@@ -23,9 +23,9 @@ type Engine struct {
 	apiPassword string
 }
 
-func NewEngine(streamer market.EventStreamer, tradeUC *usecase.TradeUseCase, cleaner *service.PositionCleaner, watchSymbols []string) *Engine {
+func NewEngine(gateway market.MarketGateway, tradeUC *usecase.TradeUseCase, cleaner *service.PositionCleaner, watchSymbols []string) *Engine {
 	return &Engine{
-		streamer:     streamer,
+		gateway:      gateway,
 		tradeUC:      tradeUC,
 		cleaner:      cleaner,
 		watchSymbols: watchSymbols,
@@ -40,7 +40,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 
 	// 起動時処理をユースケースに移譲
-	priceCh, execCh, err := e.streamer.Start(ctx)
+	priceCh, execCh, err := e.gateway.Start(ctx)
 	if err != nil {
 		return err
 	}

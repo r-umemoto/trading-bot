@@ -18,7 +18,7 @@ import (
 // buildPortfolio は、システム全体を俯瞰する「目次」です
 func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 	// 1. インフラ層の構築（泥臭い設定はすべてここへ）
-	streamer, broker, err := buildInfrastructure(cfg)
+	gateway, err := buildInfrastructure(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -28,33 +28,33 @@ func buildEngine(cfg *config.AppConfig) (*Engine, error) {
 
 	// 3. ユースケースとサービスの組み立て
 	analyzer := market.NewDefaultAnalyzer()
-	tradeUC := usecase.NewTradeUseCase(snipers, broker, analyzer)
-	cleaner := service.NewPositionCleaner(snipers, broker)
+	tradeUC := usecase.NewTradeUseCase(snipers, gateway, analyzer)
+	cleaner := service.NewPositionCleaner(snipers, gateway)
 
 	// 4. エンジンの完成
-	return NewEngine(streamer, tradeUC, cleaner, watchSymbols), nil
+	return NewEngine(gateway, tradeUC, cleaner, watchSymbols), nil
 }
 
 // ---------------------------------------------------------
 // ▼ ここから下は「下請け工場（プライベート関数）」に押し込む
 // ---------------------------------------------------------
 
-func buildInfrastructure(cfg *config.AppConfig) (market.EventStreamer, *kabu.MarketGateway, error) {
+func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 	if cfg.BrokerType != "kabu" {
-		return nil, nil, fmt.Errorf("未対応のブローカーです: %s", cfg.BrokerType)
+		return nil, fmt.Errorf("未対応のブローカーです: %s", cfg.BrokerType)
 	}
 
 	client := kabu.NewKabuClient(cfg.Kabu)
 	if err := client.GetToken(); err != nil {
-		return nil, nil, fmt.Errorf("トークン取得エラー: %w", err)
+		return nil, fmt.Errorf("トークン取得エラー: %w", err)
 	}
 
-	broker := kabu.NewKabuOrderBroker(client)
-
 	wsURL := strings.Replace(cfg.Kabu.APIURL, "http://", "ws://", 1)
-	streamer := kabu.NewKabuMarketAdapter(wsURL+"/websocket", broker)
 
-	return streamer, broker, nil
+	// 統合された KabuMarket を生成
+	kabuMarket := kabu.NewKabuMarket(client, wsURL+"/websocket")
+
+	return kabuMarket, nil
 }
 
 func deploySnipers() ([]*sniper.Sniper, []string) {

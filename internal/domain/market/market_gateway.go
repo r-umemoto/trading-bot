@@ -36,12 +36,6 @@ type ExecutionReport struct {
 	Qty         float64 // 実際に約定した数量
 }
 
-// EventStreamer は、市場で発生するあらゆるイベントを受信するための規格です
-type EventStreamer interface {
-	// Start は市場との接続を開始し、2つのイベントチャネルを返します
-	Start(ctx context.Context) (<-chan Tick, <-chan ExecutionReport, error)
-}
-
 type OrderType uint32
 
 const (
@@ -131,8 +125,11 @@ const (
 	SideSell Side = "1"
 )
 
-// OrderBroker は市場へ注文を仲介する規格です（インフラ層で実装します）
+// MarketGateway は市場への統合アクセスポイントです
 type MarketGateway interface {
+	// Start は市場との接続を開始し、リアルタイム情報の受信を開始します
+	Start(ctx context.Context) (<-chan Tick, <-chan ExecutionReport, error)
+
 	SendOrder(ctx context.Context, req OrderRequest) (string, error) // 戻り値は受付OrderID
 	CancelOrder(ctx context.Context, orderID string) error
 	GetPositions(ctx context.Context, product ProductType) ([]Position, error)

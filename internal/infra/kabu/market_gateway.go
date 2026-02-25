@@ -7,17 +7,30 @@ import (
 	"trading-bot/internal/domain/market"
 )
 
-// KabuOrderBroker はカブコムAPIを使って注文を実行します
-type MarketGateway struct {
+// KabuMarket はカブコムAPIへの統合アダプター（ファサード）です
+// HTTP機能とStreamer機能を埋め込むことで、market.MarketGateway インターフェースを満たします
+type KabuMarket struct {
+	*KabuHTTP
+	*KabuStreamer
+}
+
+func NewKabuMarket(client *KabuClient, wsURL string) *KabuMarket {
+	http := &KabuHTTP{client: client}
+	streamer := NewKabuStreamer(wsURL, http)
+
+	return &KabuMarket{
+		KabuHTTP:     http,
+		KabuStreamer: streamer,
+	}
+}
+
+// KabuHTTP はHTTPプロトコルを用いたREST API操作を担当します
+type KabuHTTP struct {
 	client *KabuClient
 }
 
-func NewKabuOrderBroker(client *KabuClient) *MarketGateway {
-	return &MarketGateway{client: client}
-}
-
-// SendOrder は market.OrderBroker の実装です
-func (b *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
+// SendOrder は market.MarketGateway (Orderer) の実装です
+func (m *KabuHTTP) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
 	side := SIDE_SELL // 売
 	cashMargin := 3   // 返却
 	if req.Action == market.ACTION_BUY {
@@ -102,7 +115,7 @@ func (b *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 
 	fmt.Printf("発注完了 %+v\n", kabReq)
 
-	resp, err := b.client.SendOrder(kabReq)
+	resp, err := m.client.SendOrder(kabReq)
 	if err != nil {
 		return "", fmt.Errorf("カブコムAPI発注失敗: %w", err)
 	}
@@ -110,18 +123,18 @@ func (b *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 	return resp.OrderId, nil
 }
 
-// CancelOrder は market.OrderBroker の実装です
-func (b *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
+// CancelOrder は market.MarketGateway (Orderer) の実装です
+func (m *KabuHTTP) CancelOrder(ctx context.Context, orderID string) error {
 	req := CancelRequest{OrderID: orderID}
-	_, err := b.client.CancelOrder(req)
+	_, err := m.client.CancelOrder(req)
 	if err != nil {
 		return fmt.Errorf("キャンセル失敗 (ResultCode: %s)", orderID)
 	}
 	return nil
 }
 
-func (b *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
-	orders, err := b.client.GetOrders()
+func (m *KabuHTTP) GetOrders(ctx context.Context) ([]market.Order, error) {
+	orders, err := m.client.GetOrders()
 	if err != nil {
 		return nil, fmt.Errorf("注文取得失敗)")
 	}
@@ -145,13 +158,13 @@ func (b *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 	return domainOrders, nil
 }
 
-func (b *MarketGateway) GetPositions(ctx context.Context, product market.ProductType) ([]market.Position, error) {
+func (m *KabuHTTP) GetPositions(ctx context.Context, product market.ProductType) ([]market.Position, error) {
 	arg := ProductMargin
 	if product != market.PRODUCT_MARGIN {
 		// 現状は信用取引しかしてない
 		return nil, fmt.Errorf("prodcutが不正です %d", product)
 	}
-	positions, err := b.client.GetPositions(arg)
+	positions, err := m.client.GetPositions(arg)
 	if err != nil {
 		return nil, fmt.Errorf("建玉取得失敗: %d)", product)
 	}
@@ -161,10 +174,10 @@ func (b *MarketGateway) GetPositions(ctx context.Context, product market.Product
 		decodePositons = append(decodePositons, market.Position{
 			ExecutionID: pos.ExecutionID,
 			Symbol:      pos.Symbol,
-			Exchange:    b.toMarketExchange(pos.Exchange),
-			Action:      b.toMakerAction(pos.Side),
-			TradeType:   b.toMakerTradeType(pos.MarginTradeType),
-			AccountType: b.toAccountType(pos.AccountType),
+			Exchange:    m.toMarketExchange(pos.Exchange),
+			Action:      m.toMakerAction(pos.Side),
+			TradeType:   m.toMakerTradeType(pos.MarginTradeType),
+			AccountType: m.toAccountType(pos.AccountType),
 			LeavesQty:   pos.LeavesQty,
 			Price:       pos.Price,
 		})
@@ -173,7 +186,7 @@ func (b *MarketGateway) GetPositions(ctx context.Context, product market.Product
 	return decodePositons, nil
 }
 
-func (b *MarketGateway) toMarketExchange(excahge int32) market.ExchangeMarket {
+func (m *KabuHTTP) toMarketExchange(excahge int32) market.ExchangeMarket {
 	switch excahge {
 	case 1:
 		return market.EXCHANGE_TOSHO
@@ -182,7 +195,7 @@ func (b *MarketGateway) toMarketExchange(excahge int32) market.ExchangeMarket {
 	}
 }
 
-func (b *MarketGateway) toMakerAction(side string) market.Action {
+func (m *KabuHTTP) toMakerAction(side string) market.Action {
 	switch side {
 	case string(SIDE_SELL):
 		return market.ACTION_SELL
@@ -193,7 +206,7 @@ func (b *MarketGateway) toMakerAction(side string) market.Action {
 	}
 }
 
-func (b *MarketGateway) toMakerTradeType(tradeType int32) market.MarginTradeType {
+func (m *KabuHTTP) toMakerTradeType(tradeType int32) market.MarginTradeType {
 	switch tradeType {
 	case 1:
 		return market.TRADE_TYPE_SYSTEM
@@ -206,7 +219,7 @@ func (b *MarketGateway) toMakerTradeType(tradeType int32) market.MarginTradeType
 	}
 }
 
-func (b *MarketGateway) toAccountType(accountType int32) market.AccountType {
+func (m *KabuHTTP) toAccountType(accountType int32) market.AccountType {
 	switch accountType {
 	case 2:
 		return market.ACCOUNT_GENERAL
