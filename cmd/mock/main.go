@@ -11,6 +11,23 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func main() {
+	// エンドポイントのルーティング
+	http.HandleFunc("/kabusapi/websocket", handleWebSocket)
+	http.HandleFunc("/kabusapi/token", handleToken)
+	http.HandleFunc("/kabusapi/positions", handlePositions)
+	http.HandleFunc("/kabusapi/sendorder", handleSendOrder)
+	http.HandleFunc("/kabusapi/orders", handleOrders)
+	http.HandleFunc("/kabusapi/cancelorder", handleCancelOrder)
+	http.HandleFunc("/kabusapi/register", handleRegister)
+	http.HandleFunc("/kabusapi/unregister/all", handleUnregisterAll)
+
+	fmt.Println("[Mock] サーバー起動: モックkabuステーションがポート18082で待機中...")
+	if err := http.ListenAndServe(":18082", nil); err != nil {
+		log.Fatal("サーバー起動エラー:", err)
+	}
+}
+
 type PushMessage struct {
 	Symbol       string  `json:"Symbol"`
 	SymbolName   string  `json:"SymbolName"`
@@ -54,16 +71,17 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		// PushMessageの組み立て
 		msg := map[string]interface{}{
-			"Symbol":       "9434",
-			"SymbolName":   "sbg",
-			"CurrentPrice": currentPrice,
-			"VWAP":         3980,
+			"Symbol":        "7201",
+			"SymbolName":    "sbg",
+			"CurrentPrice":  currentPrice,
+			"VWAP":          3980,
+			"TradingVolume": 3900,
 		}
 		jsonData, _ := json.Marshal(msg)
 		if err := conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
 			break
 		}
-		fmt.Printf("🌊 モック相場変動: %.1f 円\n", currentPrice)
+		fmt.Printf("🌊 モック相場変動: %+v \n", msg)
 
 		tick++
 		time.Sleep(1 * time.Second) // 1秒ごとに価格を更新
@@ -90,7 +108,7 @@ var mockPositions = []map[string]interface{}{
 		"ExecutionID":     "exec_001",
 		"Exchange":        1,
 		"AccountType":     4,
-		"Symbol":          "9434",
+		"Symbol":          "7201",
 		"SymbolName":      "sbg",
 		"Side":            "2",
 		"MarginTradeType": 3,
@@ -239,17 +257,26 @@ func handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func main() {
-	// エンドポイントのルーティング
-	http.HandleFunc("/kabusapi/websocket", handleWebSocket)
-	http.HandleFunc("/kabusapi/token", handleToken)
-	http.HandleFunc("/kabusapi/positions", handlePositions)
-	http.HandleFunc("/kabusapi/sendorder", handleSendOrder)
-	http.HandleFunc("/kabusapi/orders", handleOrders)
-	http.HandleFunc("/kabusapi/cancelorder", handleCancelOrder)
+func handleRegister(w http.ResponseWriter, r *http.Request) {
 
-	fmt.Println("[Mock] サーバー起動: モックkabuステーションがポート18082で待機中...")
-	if err := http.ListenAndServe(":18082", nil); err != nil {
-		log.Fatal("サーバー起動エラー:", err)
+	// API仕様通りのJSONを返す
+	response := map[string]interface{}{
+		"ResultCode": 0,
+		"Token":      "mock_token_99999",
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleUnregisterAll(w http.ResponseWriter, r *http.Request) {
+
+	// API仕様通りのJSONを返す
+	response := map[string]interface{}{
+		"ResultCode": 0,
+		"Token":      "mock_token_99999",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

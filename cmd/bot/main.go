@@ -27,7 +27,7 @@ func main() {
 
 	// 3. アプリケーションの組み立て
 	watchList := []engine.WatchTarget{
-		{Symbol: "9434", StrategyName: "sample"},
+		{Symbol: "7201", StrategyName: "sample"},
 	}
 	engine, err := engine.BuildEngine(cfg, watchList)
 	if err != nil {
