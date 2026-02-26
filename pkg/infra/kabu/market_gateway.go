@@ -57,15 +57,6 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 		return "", fmt.Errorf("口座種別が不正です")
 	}
 
-	exchange := 0
-	switch req.Exchange {
-	case market.EXCHANGE_TOSHO:
-		exchange = 1
-	}
-	if exchange == 0 {
-		return "", fmt.Errorf("市場が不正です")
-	}
-
 	securityType := 0
 	switch req.SecurityType {
 	case market.SECURITY_TYPE_STOCK:
@@ -109,7 +100,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 
 	kabReq := OrderRequest{
 		Symbol:             req.Symbol,
-		Exchange:           exchange,
+		Exchange:           m.toKabuExchageType(req.Exchange),
 		SecurityType:       securityType,
 		Side:               string(side),
 		CashMargin:         cashMargin,
@@ -187,7 +178,7 @@ func (m *MarketGateway) GetPositions(ctx context.Context, product market.Product
 		decodePositons = append(decodePositons, market.Position{
 			ExecutionID: pos.ExecutionID,
 			Symbol:      pos.Symbol,
-			Exchange:    m.toMarketExchange(pos.Exchange),
+			Exchange:    m.toMarketExchageType(pos.Exchange),
 			Action:      m.toMakerAction(pos.Side),
 			TradeType:   m.toMakerTradeType(pos.MarginTradeType),
 			AccountType: m.toAccountType(pos.AccountType),
@@ -197,15 +188,6 @@ func (m *MarketGateway) GetPositions(ctx context.Context, product market.Product
 	}
 
 	return decodePositons, nil
-}
-
-func (m *MarketGateway) toMarketExchange(excahge int32) market.ExchangeMarket {
-	switch excahge {
-	case 1:
-		return market.EXCHANGE_TOSHO
-	default:
-		return market.EXCHANGE_NONE
-	}
 }
 
 func (m *MarketGateway) toMakerAction(side string) market.Action {
@@ -328,16 +310,11 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 
 func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterSymbolRequest) error {
 
-	exchage := 0
-	switch req.Exchange {
-	case market.EXCHANGE_TOSHO:
-		exchage = 1
-	}
 	clientReq := RegisterSymbolRequest{
 		Symbols: []RegisterSymbolsItem{
 			{
 				Symbol:   req.Symbol,
-				Exchange: int32(exchage),
+				Exchange: m.toKabuExchageType(req.Exchange),
 			},
 		},
 	}
@@ -355,4 +332,24 @@ func (m *MarketGateway) UnregisterSymbolAll(ctx context.Context) error {
 		return fmt.Errorf("銘柄登録全解除失敗)")
 	}
 	return nil
+}
+
+func (m *MarketGateway) toMarketExchageType(exchange ExchageType) market.ExchangeMarket {
+	switch exchange {
+	case EXCHANGE_TYPE_TOSHO_PLS:
+		return market.EXCHANGE_TOSHO
+	case EXCHANGE_TYPE_TOSHO_SOR:
+		return market.EXCHANGE_SOR
+	}
+	return market.EXCHANGE_SOR
+}
+
+func (m *MarketGateway) toKabuExchageType(exchange market.ExchangeMarket) ExchageType {
+	switch exchange {
+	case market.EXCHANGE_TOSHO:
+		return EXCHANGE_TYPE_TOSHO_PLS
+	case market.EXCHANGE_SOR:
+		return EXCHANGE_TYPE_TOSHO_SOR
+	}
+	return EXCHANGE_TYPE_TOSHO_SOR
 }

@@ -44,22 +44,29 @@ type PushMessage struct {
 	// まずは現在値の監視に必要な項目だけ定義します。
 }
 
+type ExchageType int32
+
+const (
+	EXCHANGE_TYPE_TOSHO_PLS ExchageType = 1 // 27 TODO 2/28から使えなくなる
+	EXCHANGE_TYPE_TOSHO_SOR ExchageType = 9
+)
+
 // OrderRequest は新規・決済注文を発注するためのリクエストデータです
 // https://kabucom.github.io/kabusapi/reference/index.html#operation/sendorderPost
 type OrderRequest struct {
-	Symbol             string  `json:"Symbol"`             // 銘柄コード (例: "9434")
-	Exchange           int     `json:"Exchange"`           // 市場コード (1: 東証)
-	SecurityType       int     `json:"SecurityType"`       // 商品種別 (1: 株式)
-	Side               string  `json:"Side"`               // 売買区分 ("1": 売, "2": 買)
-	CashMargin         int     `json:"CashMargin"`         // 信用区分 (1: 現物, 2: 信用新規, 3: 信用返済)
-	MarginTradeType    int     `json:"MarginTradeType"`    // 信用取引区分 (1: 制度信用, 3: 一般信用デイトレ)
-	AccountType        int     `json:"AccountType"`        // 口座種別 (4: 特定口座)
-	Qty                float64 `json:"Qty"`                // 注文数量
-	Price              float64 `json:"Price"`              // 注文価格 (0: 成行)
-	ExpireDay          int     `json:"ExpireDay"`          // 注文有効期限 (0: 当日)
-	FrontOrderType     int32   `json:"FrontOrderType"`     // 執行条件 (10: 成行, 20: 指値)
-	DelivType          int32   `json:"DelivType"`          // 受渡区分 (0: 指定なし, 2: お預かり金, 3: Auマネーコネクト)
-	ClosePositionOrder int32   `json:"ClosePositionOrder"` // 決済順序
+	Symbol             string      `json:"Symbol"`             // 銘柄コード (例: "9434")
+	Exchange           ExchageType `json:"Exchange"`           // 市場コード (1: 東証)
+	SecurityType       int         `json:"SecurityType"`       // 商品種別 (1: 株式)
+	Side               string      `json:"Side"`               // 売買区分 ("1": 売, "2": 買)
+	CashMargin         int         `json:"CashMargin"`         // 信用区分 (1: 現物, 2: 信用新規, 3: 信用返済)
+	MarginTradeType    int         `json:"MarginTradeType"`    // 信用取引区分 (1: 制度信用, 3: 一般信用デイトレ)
+	AccountType        int         `json:"AccountType"`        // 口座種別 (4: 特定口座)
+	Qty                float64     `json:"Qty"`                // 注文数量
+	Price              float64     `json:"Price"`              // 注文価格 (0: 成行)
+	ExpireDay          int         `json:"ExpireDay"`          // 注文有効期限 (0: 当日)
+	FrontOrderType     int32       `json:"FrontOrderType"`     // 執行条件 (10: 成行, 20: 指値)
+	DelivType          int32       `json:"DelivType"`          // 受渡区分 (0: 指定なし, 2: お預かり金, 3: Auマネーコネクト)
+	ClosePositionOrder int32       `json:"ClosePositionOrder"` // 決済順序
 }
 
 // OrderResponse は発注後のレスポンスデータです
@@ -70,20 +77,20 @@ type OrderResponse struct {
 
 // Position は1つの建玉（現在保有しているポジション）を表します
 type Position struct {
-	ExecutionID     string  `json:"ExecutionID"`     // 約定番号（決済指定時に使う）
-	Exchange        int32   `json:"Exchange"`        //
-	AccountType     int32   `json:"AccountType"`     //
-	MarginTradeType int32   `json:"MarginTradeType"` //
-	Side            string  `json:"Side"`            //
-	Symbol          string  `json:"Symbol"`          // 銘柄コード (例: "7012")
-	SymbolName      string  `json:"SymbolName"`      // 銘柄名
-	LeavesQty       float64 `json:"LeavesQty"`       // 残数量（いま決済できる株数）
-	HoldQty         float64 `json:"HoldQty"`         // 拘束数量（すでに売り注文を出して待機中の株数）
-	Price           float64 `json:"Price"`           // 建値（平均取得単価） ★0.2%計算の基準！
-	CurrentPrice    float64 `json:"CurrentPrice"`    // 現在値
-	Valuation       float64 `json:"Valuation"`       // 評価金額
-	ProfitLoss      float64 `json:"ProfitLoss"`      // 評価損益
-	ProfitLossRate  float64 `json:"ProfitLossRate"`  // 評価損益率
+	ExecutionID     string      `json:"ExecutionID"`     // 約定番号（決済指定時に使う）
+	Exchange        ExchageType `json:"Exchange"`        //
+	AccountType     int32       `json:"AccountType"`     //
+	MarginTradeType int32       `json:"MarginTradeType"` //
+	Side            string      `json:"Side"`            //
+	Symbol          string      `json:"Symbol"`          // 銘柄コード (例: "7012")
+	SymbolName      string      `json:"SymbolName"`      // 銘柄名
+	LeavesQty       float64     `json:"LeavesQty"`       // 残数量（いま決済できる株数）
+	HoldQty         float64     `json:"HoldQty"`         // 拘束数量（すでに売り注文を出して待機中の株数）
+	Price           float64     `json:"Price"`           // 建値（平均取得単価） ★0.2%計算の基準！
+	CurrentPrice    float64     `json:"CurrentPrice"`    // 現在値
+	Valuation       float64     `json:"Valuation"`       // 評価金額
+	ProfitLoss      float64     `json:"ProfitLoss"`      // 評価損益
+	ProfitLossRate  float64     `json:"ProfitLossRate"`  // 評価損益率
 }
 
 // ※kabuステーションAPIの /positions は、このオブジェクトの「配列」を返してきます。
@@ -105,17 +112,6 @@ const (
 	SIDE_BUY  Side = "2"
 	SIDE_SELL Side = "1"
 )
-
-func (s Side) print() string {
-	switch s {
-	case SIDE_BUY:
-		return "Buy"
-	case SIDE_SELL:
-		return "Sell"
-	default:
-		return "unknown"
-	}
-}
 
 func (s Side) toAction() market.Action {
 	switch s {
@@ -157,8 +153,8 @@ type Order struct {
 }
 
 type RegisterSymbolsItem struct {
-	Symbol   string `json:"Symbol"`
-	Exchange int32  `json:"Exchange"`
+	Symbol   string      `json:"Symbol"`
+	Exchange ExchageType `json:"Exchange"`
 }
 
 type RegisterSymbolRequest struct {
@@ -166,8 +162,8 @@ type RegisterSymbolRequest struct {
 }
 
 type RegistListItem struct {
-	Symbol   string `json:"Symbol"`
-	Exchange int32  `json:"Exchange"`
+	Symbol   string      `json:"Symbol"`
+	Exchange ExchageType `json:"Exchange"`
 }
 
 type RegisterSymbolResponse struct {
