@@ -6,9 +6,10 @@ import (
 
 // Tick はシステム共通の価格データ（カブコムの仕様を一切知らない純粋なデータ）
 type Tick struct {
-	Symbol string
-	Price  float64
-	VWAP   float64
+	Symbol        string
+	Price         float64
+	VWAP          float64
+	TradingVolume float64 // 売買高
 }
 
 type Action string

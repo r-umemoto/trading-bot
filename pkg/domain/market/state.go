@@ -10,6 +10,7 @@ type MarketState struct {
 	ShortMA float64
 	LongMA  float64
 	VWAP    float64
+	Sigma   float64
 
 	// B: 急落検知（将来拡張）
 	// DropVelocity float64

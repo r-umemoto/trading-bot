@@ -299,9 +299,10 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 					fmt.Printf("現在の指標 %+v\n", msg)
 				}
 				tickCh <- market.Tick{
-					Symbol: msg.Symbol,
-					Price:  msg.CurrentPrice,
-					VWAP:   msg.VWAP,
+					Symbol:        msg.Symbol,
+					Price:         msg.CurrentPrice,
+					VWAP:          msg.VWAP,
+					TradingVolume: msg.TradingVolume,
 				}
 			}
 		}
