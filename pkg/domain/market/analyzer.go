@@ -41,6 +41,13 @@ func (a *DefaultAnalyzer) UpdateTick(tick Tick) {
 	state.CurrentPrice = tick.Price
 	state.VWAP = tick.VWAP
 
+	// 3. 出来高の差分計算の前に、初回起動（または再起動）の判定を入れる
+	if calc.prevVolume == 0 {
+		// 起動直後の1Tick目は、現在までの総出来高を記録するだけ（計算はしない）
+		calc.prevVolume = tick.TradingVolume
+		return
+	}
+
 	// 3. 出来高（tick.Volumeは当日の累積出来高を想定）の差分からTick出来高を算出
 	tickVolume := tick.TradingVolume - calc.prevVolume
 	if tickVolume > 0 {
