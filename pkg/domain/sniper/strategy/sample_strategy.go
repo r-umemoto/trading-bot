@@ -1,6 +1,8 @@
 package strategy
 
-import "github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
+import (
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
+)
 
 // SampleStrategy is a simple strategy that does nothing.
 type SampleStrategy struct{}

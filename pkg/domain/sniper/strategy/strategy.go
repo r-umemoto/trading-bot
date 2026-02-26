@@ -14,6 +14,8 @@ type StrategyInput struct {
 	ShortMA float64 // 短期移動平均線（例: 5分）
 	LongMA  float64 // 長期移動平均線（例: 25分）
 	VWAP    float64 // 出来高加重平均価格
+	Sigma   float64 // 標準偏差
+
 }
 
 type Strategy interface {

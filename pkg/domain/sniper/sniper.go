@@ -95,6 +95,7 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 		ShortMA:       state.ShortMA,
 		LongMA:        state.LongMA,
 		VWAP:          state.VWAP,
+		Sigma:         state.Sigma,
 	}
 
 	// 1. 頭脳に価格を渡して判断を仰ぐ
