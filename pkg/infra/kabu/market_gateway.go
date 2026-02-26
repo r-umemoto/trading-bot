@@ -320,3 +320,34 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 		}
 	}()
 }
+
+func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterSymbolRequest) error {
+
+	exchage := 0
+	switch req.Exchange {
+	case market.EXCHANGE_TOSHO:
+		exchage = 1
+	}
+	clientReq := RegisterSymbolRequest{
+		Symbols: []RegisterSymbolsItem{
+			{
+				Symbol:   req.Symbol,
+				Exchange: int32(exchage),
+			},
+		},
+	}
+
+	_, err := m.client.RegisterSymbol(clientReq)
+	if err != nil {
+		return fmt.Errorf("銘柄登録失敗: %+v)", req)
+	}
+	return nil
+}
+
+func (m *MarketGateway) UnregisterSymbolAll(ctx context.Context) error {
+	_, err := m.client.UnregisterSymbolAll()
+	if err != nil {
+		return fmt.Errorf("銘柄登録全解除失敗)")
+	}
+	return nil
+}

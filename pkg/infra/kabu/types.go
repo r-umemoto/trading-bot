@@ -155,3 +155,25 @@ type Order struct {
 	Price    float64     `json:"Price"`    // 値段
 	Details  []Execution `json:"Details"`  // 値段
 }
+
+type RegisterSymbolsItem struct {
+	Symbol   string `json:"Symbol"`
+	Exchange int32  `json:"Exchange"`
+}
+
+type RegisterSymbolRequest struct {
+	Symbols []RegisterSymbolsItem `json:"Symbols"`
+}
+
+type RegistListItem struct {
+	Symbol   string `json:"Symbol"`
+	Exchange int32  `json:"Exchange"`
+}
+
+type RegisterSymbolResponse struct {
+	RegistList []RegistListItem `json:"RegistList"`
+}
+
+type UnregisterSymbolAllResponse struct {
+	RegistList []RegistListItem `json:"RegistList"`
+}

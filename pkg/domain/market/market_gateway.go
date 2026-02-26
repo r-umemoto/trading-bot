@@ -125,6 +125,11 @@ const (
 	SideSell Side = "1"
 )
 
+type ResisterSymbolRequest struct {
+	Symbol   string
+	Exchange ExchangeMarket
+}
+
 // MarketGateway は市場への統合アクセスポイントです
 type MarketGateway interface {
 	// Start は市場との接続を開始し、リアルタイム情報の受信を開始します
@@ -134,4 +139,6 @@ type MarketGateway interface {
 	CancelOrder(ctx context.Context, orderID string) error
 	GetPositions(ctx context.Context, product ProductType) ([]Position, error)
 	GetOrders(ctx context.Context) ([]Order, error)
+	RegisterSymbol(ctx context.Context, req ResisterSymbolRequest) error
+	UnregisterSymbolAll(ctx context.Context) error
 }

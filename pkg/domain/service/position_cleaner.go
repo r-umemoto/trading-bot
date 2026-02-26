@@ -11,14 +11,14 @@ import (
 
 // PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するサービスです。
 type PositionCleaner struct {
-	snipers []*sniper.Sniper
-	broker  market.MarketGateway
+	snipers       []*sniper.Sniper
+	marketGateway market.MarketGateway
 }
 
-func NewPositionCleaner(snipers []*sniper.Sniper, broker market.MarketGateway) *PositionCleaner {
+func NewPositionCleaner(snipers []*sniper.Sniper, marketGateway market.MarketGateway) *PositionCleaner {
 	return &PositionCleaner{
-		snipers: snipers,
-		broker:  broker,
+		snipers:       snipers,
+		marketGateway: marketGateway,
 	}
 }
 
@@ -26,7 +26,7 @@ func NewPositionCleaner(snipers []*sniper.Sniper, broker market.MarketGateway) *
 func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	fmt.Println("🧹 起動時のシステム状態チェックを開始します...")
 
-	initialPositions, err := c.broker.GetPositions(ctx, market.PRODUCT_MARGIN)
+	initialPositions, err := c.marketGateway.GetPositions(ctx, market.PRODUCT_MARGIN)
 	if err != nil {
 		return fmt.Errorf("建玉取得エラー: %w", err)
 	}
@@ -48,7 +48,7 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 				Qty:                pos.LeavesQty,
 				Price:              0,
 			}
-			if _, err := c.broker.SendOrder(ctx, req); err != nil {
+			if _, err := c.marketGateway.SendOrder(ctx, req); err != nil {
 				return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.Symbol, err)
 			}
 			cleaned = true
@@ -59,7 +59,7 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 		fmt.Println("⏳ クリーンアップの約定処理を待機中 (3秒)...")
 		time.Sleep(3 * time.Second)
 
-		finalPositions, err := c.broker.GetPositions(ctx, market.PRODUCT_MARGIN)
+		finalPositions, err := c.marketGateway.GetPositions(ctx, market.PRODUCT_MARGIN)
 		if err != nil {
 			return fmt.Errorf("最終確認での建玉取得エラー: %w", err)
 		}
@@ -73,11 +73,29 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 		fmt.Println("✅ 残存建玉はありません。クリーンな状態で起動します。")
 	}
 
+	// 監視銘柄を登録　TODOいったん仮でここに実装
+	for _, sniper := range c.snipers {
+		req := market.ResisterSymbolRequest{
+			Symbol:   sniper.Symbol,
+			Exchange: sniper.Exchange,
+		}
+		err := c.marketGateway.RegisterSymbol(ctx, req)
+		if err != nil {
+			return fmt.Errorf("銘柄登録失敗")
+		}
+		fmt.Printf("✅ 銘柄登録 %s \n", sniper.Symbol)
+	}
+
 	return nil
 }
 
 // CleanAllPositions は終了時に全スナイパーを撤収させ、ノーポジになるまで見届けます
 func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
+
+	// 銘柄解除 TODO いったんここで
+	fmt.Println("\n🚨 銘柄登録全解除")
+	c.marketGateway.UnregisterSymbolAll(ctx)
+
 	fmt.Println("\n🚨 全スナイパーに緊急撤退命令を出します...")
 
 	for _, s := range c.snipers {
@@ -85,7 +103,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 		for _, cancel := range s.Orders {
 			if !cancel.IsCanceled {
 				fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Symbol, cancel.ID)
-				err := c.broker.CancelOrder(ctx, cancel.ID)
+				err := c.marketGateway.CancelOrder(ctx, cancel.ID)
 				if err != nil {
 					fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Symbol, err)
 				} else {
@@ -98,7 +116,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 	// --- 第二段階：証券会社側でのロック解除を待機 ---
 	time.Sleep(2 * time.Second)
 
-	positions, err := c.broker.GetPositions(ctx, market.PRODUCT_MARGIN)
+	positions, err := c.marketGateway.GetPositions(ctx, market.PRODUCT_MARGIN)
 	if err != nil {
 		fmt.Printf("❌ 建玉取得エラー: %v\n", err)
 		return nil
@@ -106,7 +124,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 
 	for _, ramainOrder := range positions {
 		// 成り行きで売る
-		c.broker.SendOrder(ctx, market.OrderRequest{
+		c.marketGateway.SendOrder(ctx, market.OrderRequest{
 			Symbol: ramainOrder.Symbol,
 			Action: market.ACTION_SELL,
 			Qty:    ramainOrder.LeavesQty,
@@ -119,7 +137,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 	safety := 0
 	for {
 		fmt.Println("🔍 最終ポジション確認を実行します...")
-		remainPpsitions, err := c.broker.GetPositions(ctx, market.PRODUCT_MARGIN)
+		remainPpsitions, err := c.marketGateway.GetPositions(ctx, market.PRODUCT_MARGIN)
 		if err == nil {
 			remainingCount := 0
 			for _, pos := range remainPpsitions {

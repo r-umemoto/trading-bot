@@ -187,3 +187,38 @@ func (c *KabuClient) GetOrders() ([]Order, error) {
 
 	return orders, nil
 }
+
+func (c *KabuClient) RegisterSymbol(req RegisterSymbolRequest) (*RegisterSymbolResponse, error) {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("銘柄登録のJSON変換エラー: %v", err)
+	}
+
+	resp, err := c.doRequest("PUT", "/register", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("銘柄登録API通信エラー: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var regResp RegisterSymbolResponse
+	if err := json.NewDecoder(resp.Body).Decode(&regResp); err != nil {
+		return nil, fmt.Errorf("銘柄登録レスポンス解析エラー: %v", err)
+	}
+
+	return &regResp, nil
+}
+
+func (c *KabuClient) UnregisterSymbolAll() (*UnregisterSymbolAllResponse, error) {
+	resp, err := c.doRequest("PUT", "/unregister/all", nil)
+	if err != nil {
+		return nil, fmt.Errorf("銘柄登録全解除API通信エラー: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var regResp UnregisterSymbolAllResponse
+	if err := json.NewDecoder(resp.Body).Decode(&regResp); err != nil {
+		return nil, fmt.Errorf("銘柄登録全解除レスポンス解析エラー: %v", err)
+	}
+
+	return &regResp, nil
+}

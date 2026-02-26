@@ -18,6 +18,7 @@ import (
 type WatchTarget struct {
 	Symbol       string
 	StrategyName string
+	Exchange     uint32
 }
 
 // BuildEngine は、システム全体を俯瞰する「目次」です
