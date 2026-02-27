@@ -286,18 +286,12 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 	// 🔄 変換層（アダプター処理）
 	go func() {
 		defer close(tickCh)
-		counter := 0
 		for {
 			select {
 			case <-ctx.Done():
 				// システム終了時は安全にゴルーチンを抜ける
 				return
 			case msg := <-rawCh:
-				counter++
-				if counter > 100 {
-					counter = 0
-					fmt.Printf("現在の指標 %+v\n", msg)
-				}
 				tickCh <- market.Tick{
 					Symbol:        msg.Symbol,
 					Price:         msg.CurrentPrice,

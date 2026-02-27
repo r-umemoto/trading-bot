@@ -65,17 +65,19 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tick := 0
+	tv := 3900
 	for {
 		// 配列のインデックスをループさせる
 		currentPrice := priceWave[tick%len(priceWave)]
 
 		// PushMessageの組み立て
+		tv++
 		msg := map[string]interface{}{
 			"Symbol":        "7201",
 			"SymbolName":    "sbg",
 			"CurrentPrice":  currentPrice,
 			"VWAP":          3980,
-			"TradingVolume": 3900,
+			"TradingVolume": tv,
 		}
 		jsonData, _ := json.Marshal(msg)
 		if err := conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {

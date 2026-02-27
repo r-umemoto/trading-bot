@@ -2,21 +2,22 @@
 package market
 
 import (
-	"math"
 	"sync"
+
+	"github.com/r-umemoto/trading-bot/pkg/domain/market/calculator"
 )
 
 // DefaultAnalyzer は Analyzer インターフェースの標準実装です
 type DefaultAnalyzer struct {
 	states     map[string]MarketState
-	calcStates map[string]*vwapCalcState // 銘柄ごとの計算用状態を保持
-	mu         sync.RWMutex              // 複数ゴルーチンからのアクセスに備えてロックを用意
+	calcStates map[string]*calculator.SigmaCalculator // calculatorパッケージのものに置き換え
+	mu         sync.RWMutex                           // 複数ゴルーチンからのアクセスに備えてロックを用意
 }
 
 func NewDefaultAnalyzer() *DefaultAnalyzer {
 	return &DefaultAnalyzer{
 		states:     make(map[string]MarketState),
-		calcStates: make(map[string]*vwapCalcState),
+		calcStates: make(map[string]*calculator.SigmaCalculator),
 	}
 }
 
@@ -31,40 +32,24 @@ func (a *DefaultAnalyzer) UpdateTick(tick Tick) {
 		state = MarketState{Symbol: tick.Symbol}
 	}
 
-	// 2. 内部計算用状態の取得・初期化
+	// 2. 内部計算用状態(SigmaCalculator)の取得・初期化
 	calc, calcExists := a.calcStates[tick.Symbol]
 	if !calcExists {
-		calc = &vwapCalcState{}
+		// 初回起動直後の1Tick目は、現在までの総出来高をセットして初期化するだけ
+		calc = calculator.NewSigmaCalculator(tick.TradingVolume)
 		a.calcStates[tick.Symbol] = calc
-	}
 
-	state.CurrentPrice = tick.Price
-	state.VWAP = tick.VWAP
-
-	// 3. 出来高の差分計算の前に、初回起動（または再起動）の判定を入れる
-	if calc.prevVolume == 0 {
-		// 起動直後の1Tick目は、現在までの総出来高を記録するだけ（計算はしない）
-		calc.prevVolume = tick.TradingVolume
+		// 状態を記録して、計算自体はスキップして終了
+		state.CurrentPrice = tick.Price
+		state.VWAP = tick.VWAP
+		a.states[tick.Symbol] = state
 		return
 	}
 
-	// 3. 出来高（tick.Volumeは当日の累積出来高を想定）の差分からTick出来高を算出
-	tickVolume := tick.TradingVolume - calc.prevVolume
-	if tickVolume > 0 {
-		// 約定が発生した場合のみ Σ(P^2 * V) を更新
-		calc.sumPrice2Volume += (tick.Price * tick.Price) * tickVolume
-		calc.prevVolume = tick.TradingVolume
-	}
-
-	// 4. σ（標準偏差）の計算: 分散 = (Σ(P^2 * V) / 総出来高) - VWAP^2
-	if tick.TradingVolume > 0 {
-		variance := (calc.sumPrice2Volume / tick.TradingVolume) - (tick.VWAP * tick.VWAP)
-		if variance > 0 {
-			state.Sigma = math.Sqrt(variance)
-		} else {
-			state.Sigma = 0
-		}
-	}
+	// 3. 2回目以降のTick処理：計算をSigmaCalculatorに完全委譲
+	state.CurrentPrice = tick.Price
+	state.VWAP = tick.VWAP
+	state.Sigma = calc.UpdateAndGetSigma(tick.TradingVolume, tick.Price)
 
 	// 更新した状態を保存
 	a.states[tick.Symbol] = state
@@ -75,10 +60,4 @@ func (a *DefaultAnalyzer) GetState(symbol string) MarketState {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.states[symbol] // 存在しない場合はゼロ値の構造体が返ります
-}
-
-// σ計算用に保持する内部状態
-type vwapCalcState struct {
-	prevVolume      float64
-	sumPrice2Volume float64
 }
