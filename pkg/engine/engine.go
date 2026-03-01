@@ -45,6 +45,9 @@ func (e *Engine) Run(ctx context.Context) error {
 		return err
 	}
 
+	// 各銘柄のTick処理ワーカーを起動
+	e.tradeUC.StartWorkers(ctx)
+
 	// 時間指定キルスイッチ用のタイマー（1秒周期）
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
