@@ -42,6 +42,10 @@ func (a *DefaultAnalyzer) UpdateTick(tick Tick) {
 		// 状態を記録して、計算自体はスキップして終了
 		state.CurrentPrice = tick.Price
 		state.VWAP = tick.VWAP
+		state.Recent10Prices = append(state.Recent10Prices, tick.Price)
+		if len(state.Recent10Prices) > 10 {
+			state.Recent10Prices = state.Recent10Prices[len(state.Recent10Prices)-10:]
+		}
 		a.states[tick.Symbol] = state
 		return
 	}
@@ -50,6 +54,10 @@ func (a *DefaultAnalyzer) UpdateTick(tick Tick) {
 	state.CurrentPrice = tick.Price
 	state.VWAP = tick.VWAP
 	state.Sigma = calc.UpdateAndGetSigma(tick.TradingVolume, tick.Price)
+	state.Recent10Prices = append(state.Recent10Prices, tick.Price)
+	if len(state.Recent10Prices) > 10 {
+		state.Recent10Prices = state.Recent10Prices[len(state.Recent10Prices)-10:]
+	}
 
 	// 更新した状態を保存
 	a.states[tick.Symbol] = state

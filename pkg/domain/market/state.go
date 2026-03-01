@@ -7,10 +7,11 @@ type MarketState struct {
 	CurrentPrice float64
 
 	// A: テクニカル指標
-	ShortMA float64
-	LongMA  float64
-	VWAP    float64
-	Sigma   float64
+	ShortMA        float64
+	LongMA         float64
+	VWAP           float64
+	Sigma          float64
+	Recent10Prices []float64
 
 	// B: 急落検知（将来拡張）
 	// DropVelocity float64
