@@ -74,7 +74,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		tv++
 		msg := map[string]interface{}{
 			"Symbol":        "7201",
-			"SymbolName":    "sbg",
+			"SymbolName":    "nissan",
 			"CurrentPrice":  currentPrice,
 			"VWAP":          3980,
 			"TradingVolume": tv,
@@ -84,6 +84,19 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		fmt.Printf("🌊 モック相場変動: %+v \n", msg)
+
+		msg2 := map[string]interface{}{
+			"Symbol":        "9434",
+			"SymbolName":    "softbank",
+			"CurrentPrice":  currentPrice,
+			"VWAP":          3970,
+			"TradingVolume": tv,
+		}
+		jsonData2, _ := json.Marshal(msg2)
+		if err := conn.WriteMessage(websocket.TextMessage, jsonData2); err != nil {
+			break
+		}
+		fmt.Printf("🌊 モック相場変動: %+v \n", msg2)
 
 		tick++
 		time.Sleep(1 * time.Second) // 1秒ごとに価格を更新

@@ -14,7 +14,8 @@ type TradeUseCase struct {
 	snipers      []*sniper.Sniper
 	gateway      market.MarketGateway
 	analyzer     market.Analyzer
-	tickChannels map[string]chan market.Tick // 銘柄ごとのTick処理チャネル
+	tickChannels map[string]chan market.Tick            // 銘柄ごとのTick処理チャネル
+	execChannels map[string]chan market.ExecutionReport // 銘柄ごとの約定処理チャネル
 }
 
 func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, analyzer market.Analyzer) *TradeUseCase {
@@ -23,6 +24,7 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, ana
 		gateway:      gateway,
 		analyzer:     analyzer,
 		tickChannels: make(map[string]chan market.Tick),
+		execChannels: make(map[string]chan market.ExecutionReport),
 	}
 
 	// 銘柄ごとにチャネルを作成
@@ -30,6 +32,7 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, ana
 		if _, exists := uc.tickChannels[s.Symbol]; !exists {
 			// バッファサイズは適宜調整（ここでは100）
 			uc.tickChannels[s.Symbol] = make(chan market.Tick, 100)
+			uc.execChannels[s.Symbol] = make(chan market.ExecutionReport, 100)
 		}
 	}
 
@@ -39,20 +42,23 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, ana
 // StartWorkers は銘柄ごとのワーカー（Goroutine）を起動します
 // Engineの起動時（Run）などに呼ばれることを想定しています
 func (u *TradeUseCase) StartWorkers(ctx context.Context) {
-	for symbol, ch := range u.tickChannels {
-		go u.worker(ctx, symbol, ch)
+	for symbol := range u.tickChannels {
+		go u.worker(ctx, symbol, u.tickChannels[symbol], u.execChannels[symbol])
 	}
 }
 
-// worker は特定の銘柄のTickを専用に処理するGoroutineです
-func (u *TradeUseCase) worker(ctx context.Context, symbol string, ch <-chan market.Tick) {
+// worker は特定の銘柄のTickや約定通知を専用に処理するGoroutineです
+func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan market.Tick, execCh <-chan market.ExecutionReport) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case tick := <-ch:
-			// この銘柄を担当するスナイパーを探して処理を実行
+		case tick := <-tickCh:
+			// この銘柄を担当するスナイパーを探してTick処理を実行
 			u.processTickForSymbol(ctx, tick, symbol)
+		case report := <-execCh:
+			// この銘柄を担当するスナイパーを探して約定処理を実行
+			u.processExecutionForSymbol(report, symbol)
 		}
 	}
 }
@@ -98,10 +104,23 @@ func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
 	}
 }
 
-// HandleExecution は、インフラ層から流れてきた約定通知を該当するスナイパーにルーティングします
+// HandleExecution は、インフラ層から流れてきた約定通知を該当銘柄のチャネルへルーティングします
 func (u *TradeUseCase) HandleExecution(report market.ExecutionReport) {
+	if ch, ok := u.execChannels[report.Symbol]; ok {
+		select {
+		case ch <- report:
+			// 正常にキューイング完了
+		default:
+			// チャネルが詰まっている場合
+			fmt.Printf("⚠️ 警告: %s のExecutionチャネルがフルです。処理がスキップされるか遅延します。\n", report.Symbol)
+			ch <- report // ブロックさせる
+		}
+	}
+}
+
+func (u *TradeUseCase) processExecutionForSymbol(report market.ExecutionReport, symbol string) {
 	for _, s := range u.snipers {
-		if s.Symbol == report.Symbol {
+		if s.Symbol == symbol {
 			s.OnExecution(report)
 			return // 該当銘柄は1つと想定し、見つけたら終了
 		}
