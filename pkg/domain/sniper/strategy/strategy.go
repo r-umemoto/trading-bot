@@ -11,11 +11,11 @@ type StrategyInput struct {
 	TotalExposure float64 // 現在の総投資額（平均単価 × 保有数量）
 
 	// 以下、テクニカル判定のために追加
-	ShortMA float64 // 短期移動平均線（例: 5分）
-	LongMA  float64 // 長期移動平均線（例: 25分）
-	VWAP    float64 // 出来高加重平均価格
-	Sigma   float64 // 標準偏差
-
+	ShortMA        float64 // 短期移動平均線（例: 5分）
+	LongMA         float64 // 長期移動平均線（例: 25分）
+	VWAP           float64 // 出来高加重平均価格
+	Sigma          float64 // 標準偏差
+	Recent10Prices []float64
 }
 
 type Strategy interface {

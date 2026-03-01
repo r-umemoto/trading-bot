@@ -88,14 +88,15 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 	}
 
 	input := strategy.StrategyInput{
-		CurrentPrice:  state.CurrentPrice,
-		HoldQty:       freeQty,
-		AveragePrice:  averagePrice,
-		TotalExposure: totalExposure,
-		ShortMA:       state.ShortMA,
-		LongMA:        state.LongMA,
-		VWAP:          state.VWAP,
-		Sigma:         state.Sigma,
+		CurrentPrice:   state.CurrentPrice,
+		HoldQty:        freeQty,
+		AveragePrice:   averagePrice,
+		TotalExposure:  totalExposure,
+		ShortMA:        state.ShortMA,
+		LongMA:         state.LongMA,
+		VWAP:           state.VWAP,
+		Sigma:          state.Sigma,
+		Recent10Prices: state.Recent10Prices,
 	}
 
 	// 1. 頭脳に価格を渡して判断を仰ぐ
