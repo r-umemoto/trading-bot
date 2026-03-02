@@ -48,7 +48,7 @@ type PushMessage struct {
 type ExchageType int32
 
 const (
-	EXCHANGE_TYPE_TOSHO_PLS ExchageType = 1 // 27 TODO 2/28から使えなくなる
+	EXCHANGE_TYPE_TOSHO_PLS ExchageType = 27
 	EXCHANGE_TYPE_TOSHO_SOR ExchageType = 9
 )
 
