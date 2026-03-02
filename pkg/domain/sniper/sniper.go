@@ -46,14 +46,14 @@ func NewSniper(symbol string, strategy Strategy) *Sniper {
 }
 
 // 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
+func (s *Sniper) Tick(state market.MarketState) (*market.Order, *market.OrderRequest) {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
 
 	// すでにキルスイッチが作動（撤収中）なら、価格更新はすべて無視！
 	if s.isExiting {
-		return nil
+		return nil, nil
 	}
 
 	// 1. 現在の建玉から必要なパラメータを計算（抽出）する
@@ -64,14 +64,16 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 		totalExposure += p.Price * float64(p.LeavesQty) // 取得単価 × 数量
 	}
 
-	// 発注済みで、まだ約定していない売り注文の「未約定数量」を合計する
+	// 発注済みで、まだ約定していない注文の「未約定数量」を合計する
 	var pendingSellQty float64
+	var pendingBuyQty float64
 	for _, order := range s.Orders { // スナイパーが管理している現在の注文リスト
-		if order.Action == market.ACTION_SELL {
-			// 注文した総数から、すでに約定した数を引く = まだ板に残っている数
-			unexecutedQty := order.OrderQty - order.FilledQty()
-			if unexecutedQty > 0 {
+		unexecutedQty := order.OrderQty - order.FilledQty()
+		if unexecutedQty > 0 {
+			if order.Action == market.ACTION_SELL {
 				pendingSellQty += unexecutedQty
+			} else if order.Action == market.ACTION_BUY {
+				pendingBuyQty += unexecutedQty
 			}
 		}
 	}
@@ -103,16 +105,22 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 	signal := s.Strategy.Evaluate(input)
 
 	if signal.Action == brain.ACTION_HOLD {
-		return nil // 何もしない
+		return nil, nil // 何もしない
+	}
+
+	// スナイパー（執行役）側で重複発注をブロックする
+	// ※ 将来的に高度な注文管理を行う場合は、専用の「OrderManager」に委譲する想定
+	if signal.Action == brain.ACTION_BUY && pendingBuyQty > 0 {
+		return nil, nil
 	}
 
 	marketAction, err := signal.Action.ToMarketAction()
 	if err != nil {
 		fmt.Println("トラップできていないエラーがあります")
-		return nil
+		return nil, nil
 	}
 
-	return &market.OrderRequest{
+	req := &market.OrderRequest{
 		Symbol:             s.Symbol,
 		Exchange:           s.Exchange,
 		SecurityType:       market.SECURITY_TYPE_STOCK,
@@ -124,14 +132,35 @@ func (s *Sniper) Tick(state market.MarketState) *market.OrderRequest {
 		Qty:                signal.Quantity,
 		Price:              signal.Price,
 	}
+
+	// 🌟 IDが空（または仮）の本物の注文データを作ってOrdersに混ぜておく
+	pendingOrder := market.NewOrder("PENDING", req.Symbol, req.Action, req.Price, req.Qty)
+	ptr := &pendingOrder
+	s.Orders = append(s.Orders, ptr)
+
+	return ptr, req
 }
 
-// RecordOrder は、ユースケースが発注を完了した後に呼ばれ、状態を記録します
-func (s *Sniper) RecordOrder(order market.Order) {
+// ConfirmOrder は、ユースケースが発注を完了した後に呼ばれ、仮注文のIDを正式なAPIのIDで更新します
+func (s *Sniper) ConfirmOrder(order *market.Order, realID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.Orders = append(s.Orders, &order)
+	order.ID = realID
+}
+
+// FailSendingOrder は発注失敗時に呼ばれ、Ordersリストから仮注文をクリアします
+func (s *Sniper) FailSendingOrder(order *market.Order) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, o := range s.Orders {
+		if o == order {
+			// 該当するポインタをリストから削除
+			s.Orders = append(s.Orders[:i], s.Orders[i+1:]...)
+			break
+		}
+	}
 }
 
 // ForceExit はキルスイッチ作動時に呼ばれ、自身の未約定注文のキャンセルと成行決済を行います

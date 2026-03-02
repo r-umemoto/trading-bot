@@ -172,12 +172,13 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 		case "2":
 			// 今回はシンプルに新しい建玉データとして追加します
 			mockPositions = append(mockPositions, map[string]interface{}{
-				"ExecutionID": fmt.Sprintf("exec_%d", time.Now().UnixNano()),
-				"Symbol":      req.Symbol,
-				"SymbolName":  "シミュレーション銘柄",
-				"LeavesQty":   req.Qty,
-				"Price":       req.Price,
-				"AccountType": req.AccountType,
+				"ExecutionID":     fmt.Sprintf("exec_%d", time.Now().UnixNano()),
+				"Symbol":          req.Symbol,
+				"SymbolName":      "シミュレーション銘柄",
+				"LeavesQty":       req.Qty,
+				"Price":           req.Price,
+				"AccountType":     req.AccountType,
+				"MarginTradeType": 3,
 			})
 			fmt.Printf("[Mock] 📈 %s の建玉が %.0f株 追加されました。\n", req.Symbol, req.Qty)
 

@@ -69,20 +69,20 @@ func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tic
 
 	for _, s := range u.snipers {
 		if s.Symbol == symbol {
-			// 1. スナイパーに考えさせる（純粋な関数）
-			req := s.Tick(state)
+			// 1. スナイパーに考えさせる
+			orderPtr, req := s.Tick(state)
 
 			if req != nil {
 				// 2. 要求があれば、市場（インフラ）に発注する
 				orderID, err := u.gateway.SendOrder(ctx, *req)
 				if err != nil {
 					fmt.Printf("❌ 発注失敗: %v\n", err)
+					s.FailSendingOrder(orderPtr) // 通信失敗時は仮注文をリストから消去
 					continue
 				}
-				order := market.NewOrder(orderID, req.Symbol, req.Action, req.Price, req.Qty)
 
-				// 3. 発注が成功したら、スナイパーにIDを覚えさせる
-				s.RecordOrder(order)
+				// 3. 発注が成功したら、スナイパー側の仮注文オブジェクトIDを正式なものに更新する
+				s.ConfirmOrder(orderPtr, orderID)
 				fmt.Printf("✅ 注文受付IDを記録しました: %s\n", orderID)
 			}
 		}
