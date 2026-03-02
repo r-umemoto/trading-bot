@@ -40,7 +40,7 @@ func NewSniper(symbol string, strategy Strategy) *Sniper {
 		Orders:          make([]*market.Order, 0),
 		positions:       []market.Position{}, // 初期状態は空
 		AccountType:     market.ACCOUNT_SPECIAL,
-		Exchange:        market.EXCHANGE_TOSHO,
+		Exchange:        market.EXCHANGE_TOSHO_PLUS,
 		MarginTradeType: market.TRADE_TYPE_GENERAL_DAY,
 	}
 }

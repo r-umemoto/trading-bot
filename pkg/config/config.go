@@ -4,13 +4,13 @@ package config
 import (
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
-	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 )
 
 // AppConfig はシステム全体の設定です
 type AppConfig struct {
-	BrokerType string      `envconfig:"BROKER_TYPE" default:"kabu"`
-	Kabu       kabu.Config // ネストされた構造体も、タグに従って自動で読み込まれます
+	BrokerType string     `envconfig:"BROKER_TYPE" default:"kabu"`
+	Kabu       api.Config // ネストされた構造体も、タグに従って自動で読み込まれます
 }
 
 // Load は環境変数から設定を自動でマッピングして返します

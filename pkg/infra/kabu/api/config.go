@@ -1,5 +1,4 @@
-// internal/infra/kabu/config.go （または client.go の上部）
-package kabu
+package api
 
 // Config はカブコムAPIを動かすために必要な設定です
 type Config struct {

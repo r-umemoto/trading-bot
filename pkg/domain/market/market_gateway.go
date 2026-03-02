@@ -56,9 +56,10 @@ const (
 type ExchangeMarket uint32
 
 const (
-	EXCHANGE_NONE  ExchangeMarket = iota
-	EXCHANGE_TOSHO                // 東証
-	EXCHANGE_SOR                  // SOR
+	EXCHANGE_NONE       ExchangeMarket = iota
+	EXCHANGE_TOSHO                     // 東証
+	EXCHANGE_SOR                       // SOR
+	EXCHANGE_TOSHO_PLUS                // 東証
 )
 
 // これ間違えると手数料かかってくるから注意

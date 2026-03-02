@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 )
 
-func NewMarketGateway(client *KabuClient, wsClient *WSClient) *MarketGateway {
+func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
 	return &MarketGateway{
 		client:              client,
 		wsClient:            wsClient,
@@ -19,8 +21,8 @@ func NewMarketGateway(client *KabuClient, wsClient *WSClient) *MarketGateway {
 
 // MarketGateway はHTTPプロトコルを用いたREST API操作を担当します
 type MarketGateway struct {
-	client              *KabuClient
-	wsClient            *WSClient
+	client              *api.KabuClient
+	wsClient            *api.WSClient
 	processedExecutions map[string]bool // 通知済みの注文IDを記録し、重複検知を防ぐ
 }
 
@@ -41,11 +43,11 @@ func (m *MarketGateway) Start(ctx context.Context) (<-chan market.Tick, <-chan m
 
 // SendOrder は market.MarketGateway (Orderer) の実装です
 func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
-	side := SIDE_SELL // 売
-	cashMargin := 3   // 返却
+	side := api.SIDE_SELL // 売
+	cashMargin := 3       // 返却
 	if req.Action == market.ACTION_BUY {
-		cashMargin = 2  // 新規
-		side = SIDE_BUY // 買
+		cashMargin = 2      // 新規
+		side = api.SIDE_BUY // 買
 	}
 
 	AccountType := 0
@@ -98,7 +100,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 		}
 	}
 
-	kabReq := OrderRequest{
+	kabReq := api.OrderRequest{
 		Symbol:             req.Symbol,
 		Exchange:           m.toKabuExchageType(req.Exchange),
 		SecurityType:       securityType,
@@ -126,7 +128,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 
 // CancelOrder は market.MarketGateway (Orderer) の実装です
 func (m *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
-	req := CancelRequest{OrderID: orderID}
+	req := api.CancelRequest{OrderID: orderID}
 	_, err := m.client.CancelOrder(req)
 	if err != nil {
 		return fmt.Errorf("キャンセル失敗 (ResultCode: %s)", orderID)
@@ -143,7 +145,7 @@ func (m *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 	domainOrders := make([]market.Order, 0, len(orders))
 	for _, order := range orders {
 		action := market.ACTION_BUY
-		if order.Side == SIDE_SELL {
+		if order.Side == api.SIDE_SELL {
 			action = market.ACTION_SELL
 		}
 		o := market.NewOrder(order.ID, order.Symbol, action, order.Price, order.CumQty)
@@ -163,7 +165,7 @@ func (m *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 }
 
 func (m *MarketGateway) GetPositions(ctx context.Context, product market.ProductType) ([]market.Position, error) {
-	arg := ProductMargin
+	arg := api.ProductMargin
 	if product != market.PRODUCT_MARGIN {
 		// 現状は信用取引しかしてない
 		return nil, fmt.Errorf("prodcutが不正です %d", product)
@@ -192,9 +194,9 @@ func (m *MarketGateway) GetPositions(ctx context.Context, product market.Product
 
 func (m *MarketGateway) toMakerAction(side string) market.Action {
 	switch side {
-	case string(SIDE_SELL):
+	case string(api.SIDE_SELL):
 		return market.ACTION_SELL
-	case string(SIDE_BUY):
+	case string(api.SIDE_BUY):
 		return market.ACTION_BUY
 	default:
 		return ""
@@ -280,7 +282,7 @@ func (m *MarketGateway) startPollingLoop(ctx context.Context, execCh chan market
 
 func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan market.Tick) {
 	// 既存のWebSocketクライアントを起動
-	rawCh := make(chan PushMessage)
+	rawCh := make(chan api.PushMessage)
 	go s.wsClient.Listen(rawCh)
 
 	// 🔄 変換層（アダプター処理）
@@ -305,11 +307,11 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 
 func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterSymbolRequest) error {
 
-	clientReq := RegisterSymbolRequest{
-		Symbols: []RegisterSymbolsItem{
+	clientReq := api.RegisterSymbolRequest{
+		Symbols: []api.RegisterSymbolsItem{
 			{
 				Symbol:   req.Symbol,
-				Exchange: m.toKabuExchageType(req.Exchange),
+				Exchange: m.toRegisterSymbolKabuExchageType(req.Exchange),
 			},
 		},
 	}
@@ -329,22 +331,36 @@ func (m *MarketGateway) UnregisterSymbolAll(ctx context.Context) error {
 	return nil
 }
 
-func (m *MarketGateway) toMarketExchageType(exchange ExchageType) market.ExchangeMarket {
+func (m *MarketGateway) toMarketExchageType(exchange api.ExchageType) market.ExchangeMarket {
 	switch exchange {
-	case EXCHANGE_TYPE_TOSHO_PLS:
+	case api.EXCHANGE_TYPE_TOSHO:
 		return market.EXCHANGE_TOSHO
-	case EXCHANGE_TYPE_TOSHO_SOR:
+	case api.EXCHANGE_TYPE_TOSHO_PLS:
+		return market.EXCHANGE_TOSHO_PLUS
+	case api.EXCHANGE_TYPE_TOSHO_SOR:
 		return market.EXCHANGE_SOR
 	}
 	return market.EXCHANGE_SOR
 }
 
-func (m *MarketGateway) toKabuExchageType(exchange market.ExchangeMarket) ExchageType {
+func (m *MarketGateway) toKabuExchageType(exchange market.ExchangeMarket) api.ExchageType {
 	switch exchange {
 	case market.EXCHANGE_TOSHO:
-		return EXCHANGE_TYPE_TOSHO_PLS
+		return api.EXCHANGE_TYPE_TOSHO
+	case market.EXCHANGE_TOSHO_PLUS:
+		return api.EXCHANGE_TYPE_TOSHO_PLS
 	case market.EXCHANGE_SOR:
-		return EXCHANGE_TYPE_TOSHO_SOR
+		return api.EXCHANGE_TYPE_TOSHO_SOR
 	}
-	return EXCHANGE_TYPE_TOSHO_SOR
+	return api.EXCHANGE_TYPE_TOSHO_SOR
+}
+
+func (m *MarketGateway) toRegisterSymbolKabuExchageType(exchange market.ExchangeMarket) api.ExchageType {
+	switch exchange {
+	case market.EXCHANGE_TOSHO, market.EXCHANGE_TOSHO_PLUS: // API仕様で東証+はない
+		return api.EXCHANGE_TYPE_TOSHO
+	case market.EXCHANGE_SOR:
+		return api.EXCHANGE_TYPE_TOSHO_SOR
+	}
+	return api.EXCHANGE_TYPE_TOSHO_SOR
 }

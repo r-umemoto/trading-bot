@@ -8,7 +8,7 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
-	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
 
@@ -19,7 +19,7 @@ type Engine struct {
 	cleaner      *service.PositionCleaner
 	watchSymbols []string
 
-	client      *kabu.KabuClient // クリーンアップと最終確認用
+	client      *api.KabuClient // クリーンアップと最終確認用
 	apiPassword string
 }
 

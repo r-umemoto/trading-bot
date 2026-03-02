@@ -11,6 +11,7 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
 
@@ -53,13 +54,13 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 		return nil, fmt.Errorf("未対応のブローカーです: %s", cfg.BrokerType)
 	}
 
-	client := kabu.NewKabuClient(cfg.Kabu)
+	client := api.NewKabuClient(cfg.Kabu)
 	if err := client.GetToken(); err != nil {
 		return nil, fmt.Errorf("トークン取得エラー: %w", err)
 	}
 
 	wsURL := strings.Replace(cfg.Kabu.APIURL, "http://", "ws://", 1) + "/websocket"
-	wsClient := kabu.NewWSClient(wsURL)
+	wsClient := api.NewWSClient(wsURL)
 
 	// 統合された KabuMarket を生成
 	marketGateway := kabu.NewMarketGateway(client, wsClient)
