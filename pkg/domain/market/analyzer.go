@@ -45,7 +45,7 @@ func (a *DefaultAnalyzer) UpdateTick(tick Tick) {
 
 		// 状態を記録して、計算自体はスキップして終了
 		state.CurrentPrice = tick.Price
-		state.VWAP = tick.VWAP
+		state.VWAP = tick.Price // APIのVWAPではなく、現在の価格を初期値としてセット
 
 		a.states[tick.Symbol] = state
 		return
@@ -53,8 +53,7 @@ func (a *DefaultAnalyzer) UpdateTick(tick Tick) {
 
 	// 3. 2回目以降のTick処理：計算をSigmaCalculatorに完全委譲
 	state.CurrentPrice = tick.Price
-	state.VWAP = tick.VWAP
-	state.Sigma = calc.UpdateAndGetSigma(tick.TradingVolume, tick.Price)
+	state.Sigma, state.VWAP = calc.UpdateAndGetMetrics(tick.TradingVolume, tick.Price)
 
 	// 更新した状態を保存
 	a.states[tick.Symbol] = state
