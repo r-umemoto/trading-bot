@@ -37,8 +37,8 @@ func BuildEngine(cfg *config.AppConfig, watchList []WatchTarget) (*Engine, error
 	}
 
 	// 3. ユースケースとサービスの組み立て
-	analyzer := market.NewDefaultAnalyzer()
-	tradeUC := usecase.NewTradeUseCase(snipers, gateway, analyzer)
+	dataPool := market.NewDefaultDataPool()
+	tradeUC := usecase.NewTradeUseCase(snipers, gateway, dataPool)
 	cleaner := service.NewPositionCleaner(snipers, gateway)
 
 	// 4. エンジンの完成

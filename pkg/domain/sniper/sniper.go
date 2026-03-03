@@ -46,7 +46,7 @@ func NewSniper(symbol string, strategy Strategy) *Sniper {
 }
 
 // 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick(state market.MarketState) (*market.Order, *market.OrderRequest) {
+func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderRequest) {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
@@ -55,6 +55,8 @@ func (s *Sniper) Tick(state market.MarketState) (*market.Order, *market.OrderReq
 	if s.isExiting {
 		return nil, nil
 	}
+
+	state := dataPool.GetState(s.Symbol)
 
 	// 1. 現在の建玉から必要なパラメータを計算（抽出）する
 	var holdQty float64
@@ -70,9 +72,10 @@ func (s *Sniper) Tick(state market.MarketState) (*market.Order, *market.OrderReq
 	for _, order := range s.Orders { // スナイパーが管理している現在の注文リスト
 		unexecutedQty := order.OrderQty - order.FilledQty()
 		if unexecutedQty > 0 {
-			if order.Action == market.ACTION_SELL {
+			switch order.Action {
+			case market.ACTION_SELL:
 				pendingSellQty += unexecutedQty
-			} else if order.Action == market.ACTION_BUY {
+			case market.ACTION_BUY:
 				pendingBuyQty += unexecutedQty
 			}
 		}
@@ -90,15 +93,13 @@ func (s *Sniper) Tick(state market.MarketState) (*market.Order, *market.OrderReq
 	}
 
 	input := strategy.StrategyInput{
-		CurrentPrice:   state.CurrentPrice,
+		CurrentPrice:   state.LatestTick.Price,
 		HoldQty:        freeQty,
 		AveragePrice:   averagePrice,
 		TotalExposure:  totalExposure,
-		ShortMA:        state.ShortMA,
-		LongMA:         state.LongMA,
-		VWAP:           state.VWAP,
-		Sigma:          state.Sigma,
+		LatestTick:     state.LatestTick,
 		Recent10Prices: state.Recent10Prices,
+		DataPool:       dataPool,
 	}
 
 	// 1. 頭脳に価格を渡して判断を仰ぐ

@@ -13,16 +13,16 @@ import (
 type TradeUseCase struct {
 	snipers      []*sniper.Sniper
 	gateway      market.MarketGateway
-	analyzer     market.Analyzer
+	dataPool     market.DataPool
 	tickChannels map[string]chan market.Tick            // 銘柄ごとのTick処理チャネル
 	execChannels map[string]chan market.ExecutionReport // 銘柄ごとの約定処理チャネル
 }
 
-func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, analyzer market.Analyzer) *TradeUseCase {
+func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dataPool market.DataPool) *TradeUseCase {
 	uc := &TradeUseCase{
 		snipers:      snipers,
 		gateway:      gateway,
-		analyzer:     analyzer,
+		dataPool:     dataPool,
 		tickChannels: make(map[string]chan market.Tick),
 		execChannels: make(map[string]chan market.ExecutionReport),
 	}
@@ -64,13 +64,12 @@ func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan 
 }
 
 func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tick, symbol string) {
-	u.analyzer.UpdateTick(tick)
-	state := u.analyzer.GetState(symbol)
+	u.dataPool.PushTick(tick)
 
 	for _, s := range u.snipers {
 		if s.Symbol == symbol {
 			// 1. スナイパーに考えさせる
-			orderPtr, req := s.Tick(state)
+			orderPtr, req := s.Tick(u.dataPool)
 
 			if req != nil {
 				// 2. 要求があれば、市場（インフラ）に発注する
