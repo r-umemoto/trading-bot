@@ -123,20 +123,25 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 	}
 
 	for _, ramainPos := range positions {
-		// 成り行きで売る
-		req := market.OrderRequest{
-			Symbol:             ramainPos.Symbol,
-			Exchange:           ramainPos.Exchange,
-			SecurityType:       market.SECURITY_TYPE_STOCK,
-			Action:             market.ACTION_SELL,
-			MarginTradeType:    ramainPos.TradeType,
-			AccountType:        ramainPos.AccountType,
-			ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
-			OrderType:          market.ORDER_TYPE_MARKET,
-			Qty:                ramainPos.LeavesQty,
-			Price:              0,
+		if ramainPos.LeavesQty > 0 {
+			// 成り行きで売る
+			req := market.OrderRequest{
+				Symbol:             ramainPos.Symbol,
+				Exchange:           ramainPos.Exchange,
+				SecurityType:       market.SECURITY_TYPE_STOCK,
+				Action:             market.ACTION_SELL,
+				MarginTradeType:    ramainPos.TradeType,
+				AccountType:        ramainPos.AccountType,
+				ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
+				OrderType:          market.ORDER_TYPE_MARKET,
+				Qty:                ramainPos.LeavesQty,
+				Price:              0,
+			}
+			_, err := c.marketGateway.SendOrder(ctx, req)
+			if err != nil {
+				fmt.Printf("❌ [%s] 強制決済エラー: %v\n", ramainPos.Symbol, err)
+			}
 		}
-		c.marketGateway.SendOrder(ctx, req)
 	}
 
 	fmt.Println("⏳ 撤収完了。取引所の約定データ反映を待機中 (3秒)...")
@@ -165,7 +170,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 			fmt.Printf("❌ 最終確認での建玉取得エラー: %v\n", err)
 		}
 
-		fmt.Println("🔄 30秒後に強制決済プロセスをリトライします...")
+		fmt.Println("🔄 10秒後に強制決済プロセスをリトライします...")
 		time.Sleep(30 * time.Second)
 		safety++
 		if safety > 2 {
