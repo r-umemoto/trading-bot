@@ -119,10 +119,17 @@ func (u *TradeUseCase) HandleExecution(report market.ExecutionReport) {
 }
 
 func (u *TradeUseCase) processExecutionForSymbol(report market.ExecutionReport, symbol string) {
+	handled := false
 	for _, s := range u.snipers {
 		if s.Symbol == symbol {
-			s.OnExecution(report)
-			return // 該当銘柄は1つと想定し、見つけたら終了
+			if s.OnExecution(report) {
+				handled = true
+				break // 該当の注文を出したスナイパーが見つかり、処理が完了したため終了
+			}
 		}
+	}
+
+	if !handled {
+		fmt.Printf("⚠️ [%s] どのスナイパーにも属さない未知の注文ID(%s)の約定通知を受信しました\n", symbol, report.OrderID)
 	}
 }

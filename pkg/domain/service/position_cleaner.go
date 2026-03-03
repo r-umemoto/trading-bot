@@ -122,13 +122,21 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 		return nil
 	}
 
-	for _, ramainOrder := range positions {
+	for _, ramainPos := range positions {
 		// 成り行きで売る
-		c.marketGateway.SendOrder(ctx, market.OrderRequest{
-			Symbol: ramainOrder.Symbol,
-			Action: market.ACTION_SELL,
-			Qty:    ramainOrder.LeavesQty,
-		})
+		req := market.OrderRequest{
+			Symbol:             ramainPos.Symbol,
+			Exchange:           ramainPos.Exchange,
+			SecurityType:       market.SECURITY_TYPE_STOCK,
+			Action:             market.ACTION_SELL,
+			MarginTradeType:    ramainPos.TradeType,
+			AccountType:        ramainPos.AccountType,
+			ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
+			OrderType:          market.ORDER_TYPE_MARKET,
+			Qty:                ramainPos.LeavesQty,
+			Price:              0,
+		}
+		c.marketGateway.SendOrder(ctx, req)
 	}
 
 	fmt.Println("⏳ 撤収完了。取引所の約定データ反映を待機中 (3秒)...")

@@ -200,8 +200,8 @@ func (s *Sniper) reducePositions(sellQty float64) {
 	s.positions = newPositions
 }
 
-// OnExecution は、証券会社から約定通知を受信した際に呼び出されます
-func (s *Sniper) OnExecution(report market.ExecutionReport) {
+// OnExecution は、証券会社から約定通知を受信した際に呼び出されます。担当する注文であればtrueを返します。
+func (s *Sniper) OnExecution(report market.ExecutionReport) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -217,8 +217,8 @@ func (s *Sniper) OnExecution(report market.ExecutionReport) {
 	}
 
 	if matchedOrder == nil {
-		fmt.Printf("⚠️ [%s] 未知の注文ID(%s)の約定通知を受信しました\n", s.Symbol, report.OrderID)
-		return
+		// 自身の注文ではないためスキップ
+		return false
 	}
 
 	// 注文エンティティに約定を追加
@@ -248,4 +248,6 @@ func (s *Sniper) OnExecution(report market.ExecutionReport) {
 		s.reducePositions(report.Qty)
 		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Symbol, report.Qty)
 	}
+
+	return true
 }

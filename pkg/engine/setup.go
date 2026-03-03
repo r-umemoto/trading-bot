@@ -71,6 +71,7 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 func deploySnipers(watchList []WatchTarget) ([]*sniper.Sniper, []string, error) {
 	var snipers []*sniper.Sniper
 	var watchSymbols []string
+	symbolMap := make(map[string]bool)
 
 	for _, t := range watchList {
 		// 戦略レジストリから戦略を取得
@@ -81,7 +82,11 @@ func deploySnipers(watchList []WatchTarget) ([]*sniper.Sniper, []string, error) 
 
 		s := sniper.NewSniper(t.Symbol, st)
 		snipers = append(snipers, s)
-		watchSymbols = append(watchSymbols, t.Symbol)
+
+		if !symbolMap[t.Symbol] {
+			symbolMap[t.Symbol] = true
+			watchSymbols = append(watchSymbols, t.Symbol)
+		}
 	}
 
 	return snipers, watchSymbols, nil
