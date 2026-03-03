@@ -3,6 +3,8 @@ package market
 
 import (
 	"sync"
+
+	"github.com/r-umemoto/trading-bot/pkg/domain/market/calculator"
 )
 
 // MarketState は、特定銘柄の「今の市場環境」の生データを保持するものです
@@ -22,17 +24,21 @@ type MarketState struct {
 type DataPool interface {
 	PushTick(tick Tick)
 	GetState(symbol string) MarketState
+	GetSigma(symbol string) float64
+	GetVWAP(symbol string) float64
 }
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
 type DefaultDataPool struct {
-	states map[string]MarketState
-	mu     sync.RWMutex
+	states     map[string]MarketState
+	calcStates map[string]*calculator.SigmaCalculator
+	mu         sync.RWMutex
 }
 
 func NewDefaultDataPool() *DefaultDataPool {
 	return &DefaultDataPool{
-		states: make(map[string]MarketState),
+		states:     make(map[string]MarketState),
+		calcStates: make(map[string]*calculator.SigmaCalculator),
 	}
 }
 
@@ -58,6 +64,15 @@ func (a *DefaultDataPool) PushTick(tick Tick) {
 
 	// 状態を保存
 	a.states[tick.Symbol] = state
+
+	// 指標計算用の累積状態を更新（計算自体は行わない）
+	calc, calcExists := a.calcStates[tick.Symbol]
+	if !calcExists {
+		calc = calculator.NewSigmaCalculator(tick.TradingVolume)
+		a.calcStates[tick.Symbol] = calc
+	} else {
+		calc.Update(tick.TradingVolume, tick.Price)
+	}
 }
 
 // GetState は指定銘柄の最新の市場状態を返します
@@ -65,4 +80,25 @@ func (a *DefaultDataPool) GetState(symbol string) MarketState {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.states[symbol] // 存在しない場合はゼロ値の構造体が返ります
+}
+
+// GetSigma は指定銘柄の標準偏差（σ）をオンデマンドで評価・計算して返します
+func (a *DefaultDataPool) GetSigma(symbol string) float64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if calc, exists := a.calcStates[symbol]; exists {
+		return calc.GetSigma()
+	}
+	return 0
+}
+
+// GetVWAP は指定銘柄のVWAPをオンデマンドで評価・計算して返します
+func (a *DefaultDataPool) GetVWAP(symbol string) float64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if calc, exists := a.calcStates[symbol]; exists {
+		state := a.states[symbol]
+		return calc.GetVWAP(state.LatestTick.Price)
+	}
+	return 0
 }

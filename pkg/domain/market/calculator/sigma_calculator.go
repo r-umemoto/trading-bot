@@ -21,14 +21,13 @@ func NewSigmaCalculator(initialVolume float64) *SigmaCalculator {
 	}
 }
 
-// UpdateAndGetMetrics はPUSH通知を受信するたびに呼び出してσとVWAPを取得する関数です
-func (s *SigmaCalculator) UpdateAndGetMetrics(tradingVolume float64, currentPrice float64) (sigma float64, vwap float64) {
+// Update は新しいTickデータを受け取り、内部の累積値を更新します（計算自体は行いません）
+func (s *SigmaCalculator) Update(tradingVolume float64, currentPrice float64) {
 	// 1. 今回の通信での差分出来高（Tick Volume）を算出
 	tickVolume := tradingVolume - s.prevVolume
 
-	// 気配値の更新のみで約定が発生していない（出来高増減なし）場合は前回の計算結果を返す
 	if tickVolume <= 0 {
-		return s.calculateSigma(), s.calculateVWAP(currentPrice)
+		return
 	}
 
 	// 2. 約定が発生している場合、起動後からの各種累積値を更新
@@ -36,9 +35,22 @@ func (s *SigmaCalculator) UpdateAndGetMetrics(tradingVolume float64, currentPric
 	s.sumPriceVolume += currentPrice * tickVolume
 	s.sumPrice2Volume += (currentPrice * currentPrice) * tickVolume
 	s.prevVolume = tradingVolume
+}
 
-	// 3. 標準偏差（σ）とVWAPを計算して返す
-	return s.calculateSigma(), s.calculateVWAP(currentPrice)
+// GetSigma は現在の状態に基づき標準偏差（σ）を計算して返します
+func (s *SigmaCalculator) GetSigma() float64 {
+	return s.calculateSigma()
+}
+
+// GetVWAP は現在の状態に基づきVWAPを計算して返します
+func (s *SigmaCalculator) GetVWAP(currentPrice float64) float64 {
+	return s.calculateVWAP(currentPrice)
+}
+
+// UpdateAndGetMetrics はPUSH通知を受信するたびに呼び出してσとVWAPを取得する関数です
+func (s *SigmaCalculator) UpdateAndGetMetrics(tradingVolume float64, currentPrice float64) (sigma float64, vwap float64) {
+	s.Update(tradingVolume, currentPrice)
+	return s.GetSigma(), s.GetVWAP(currentPrice)
 }
 
 // 内部計算用メソッド

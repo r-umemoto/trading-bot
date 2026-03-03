@@ -3,28 +3,26 @@ package strategy
 import (
 	"fmt"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/market/calculator"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 )
 
-// SampleStrategy は指標を内部で計算する戦略のサンプルです
-type SampleStrategy struct {
-	sigmaCalc *calculator.SigmaCalculator
-}
+// SampleStrategy はデータプールから直接指標を取得する戦略のサンプルです
+type SampleStrategy struct{}
 
 func NewSampleStrategy() Strategy {
 	return &SampleStrategy{}
 }
 
 func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
-	// 戦略側で指標を再計算（必要ならば）
-	if s.sigmaCalc == nil {
-		s.sigmaCalc = calculator.NewSigmaCalculator(input.LatestTick.TradingVolume)
-	} else {
-		// 計算を実行（サンプルとして呼び出しているだけ）
-		_, _ = s.sigmaCalc.UpdateAndGetMetrics(input.LatestTick.TradingVolume, input.LatestTick.Price)
-	}
-	fmt.Printf(" input: %+v \n", input)
+	// データプールから自銘柄の最新情報を取得
+	state := input.DataPool.GetState(input.Symbol)
+	tick := state.LatestTick
+
+	// 必要な指標を、計算処理を気にすることなく DataPool からオンデマンドで引き出す
+	sigma := input.DataPool.GetSigma(input.Symbol)
+	vwap := input.DataPool.GetVWAP(input.Symbol)
+
+	fmt.Printf(" input: %+v tick: %+v sigma: %.2f vwap: %.2f\n", input, tick, sigma, vwap)
 	return brain.Signal{
 		Action: brain.ACTION_HOLD,
 	}

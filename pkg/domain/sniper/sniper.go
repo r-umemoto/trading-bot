@@ -56,8 +56,6 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		return nil, nil
 	}
 
-	state := dataPool.GetState(s.Symbol)
-
 	// 1. 現在の建玉から必要なパラメータを計算（抽出）する
 	var holdQty float64
 	var totalExposure float64
@@ -93,13 +91,11 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	}
 
 	input := strategy.StrategyInput{
-		CurrentPrice:   state.LatestTick.Price,
-		HoldQty:        freeQty,
-		AveragePrice:   averagePrice,
-		TotalExposure:  totalExposure,
-		LatestTick:     state.LatestTick,
-		Recent10Prices: state.Recent10Prices,
-		DataPool:       dataPool,
+		Symbol:        s.Symbol,
+		HoldQty:       freeQty,
+		AveragePrice:  averagePrice,
+		TotalExposure: totalExposure,
+		DataPool:      dataPool,
 	}
 
 	// 1. 頭脳に価格を渡して判断を仰ぐ
