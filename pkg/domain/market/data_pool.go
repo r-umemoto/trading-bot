@@ -3,9 +3,29 @@ package market
 
 import (
 	"sync"
+	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market/calculator"
 )
+
+// Tick 価格変動で発生するイベント
+type Tick struct {
+	Symbol           string
+	Price            float64
+	VWAP             float64
+	TradingVolume    float64   // 売買高
+	CurrentPriceTime time.Time // 現値時刻
+}
+
+func NewTick(symbol string, price float64, vwap float64, tradingVolume float64, currentPriceTime time.Time) Tick {
+	return Tick{
+		Symbol:           symbol,
+		Price:            price,
+		VWAP:             vwap,
+		TradingVolume:    tradingVolume,
+		CurrentPriceTime: currentPriceTime,
+	}
+}
 
 // MarketState は、特定銘柄の「今の市場環境」の生データを保持するものです
 type MarketState struct {

@@ -28,14 +28,6 @@ func main() {
 	}
 }
 
-type PushMessage struct {
-	Symbol       string  `json:"Symbol"`
-	SymbolName   string  `json:"SymbolName"`
-	CurrentPrice float64 `json:"CurrentPrice"`
-	Time         string  `json:"Time"`
-	VWAP         float64 `json:"VWAP"`
-}
-
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
@@ -59,7 +51,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		4000.0, 3995.0, 3991.0,
 		3990.0, // 🎯 [シナリオ1] ここで LimitBuy(3990円以下で買い) が発動するはず！
 		3985.0, 3980.0, 3880.0, 2880.0,
-		3985.0, 3990.0, 3995.0, // 底を打って上がり始める
+		2890.0, 2900.0, 2910.0, // 底を打って上がり始める
 		3998.0, // 🎯 [シナリオ2] 3990円の+0.2%(=3997.98円)以上なので、ここで FixedRate が発動して利確するはず！
 		4000.0, 4005.0,
 	}
@@ -73,11 +65,12 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		// PushMessageの組み立て
 		tv++
 		msg := map[string]interface{}{
-			"Symbol":        "7201",
-			"SymbolName":    "nissan",
-			"CurrentPrice":  currentPrice,
-			"VWAP":          3980,
-			"TradingVolume": tv,
+			"Symbol":           "7201",
+			"SymbolName":       "nissan",
+			"CurrentPrice":     currentPrice,
+			"VWAP":             3980,
+			"TradingVolume":    tv,
+			"CurrentPriceTime": time.Now().Format(time.RFC3339),
 		}
 		jsonData, _ := json.Marshal(msg)
 		if err := conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
@@ -86,11 +79,12 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("🌊 モック相場変動: %+v \n", msg)
 
 		msg2 := map[string]interface{}{
-			"Symbol":        "9434",
-			"SymbolName":    "softbank",
-			"CurrentPrice":  currentPrice,
-			"VWAP":          3970,
-			"TradingVolume": tv,
+			"Symbol":           "9434",
+			"SymbolName":       "softbank",
+			"CurrentPrice":     currentPrice,
+			"VWAP":             3970,
+			"TradingVolume":    tv,
+			"CurrentPriceTime": time.Now().Format(time.RFC3339),
 		}
 		jsonData2, _ := json.Marshal(msg2)
 		if err := conn.WriteMessage(websocket.TextMessage, jsonData2); err != nil {

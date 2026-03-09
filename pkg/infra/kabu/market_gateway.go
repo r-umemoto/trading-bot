@@ -294,12 +294,13 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 				// システム終了時は安全にゴルーチンを抜ける
 				return
 			case msg := <-rawCh:
-				tickCh <- market.Tick{
-					Symbol:        msg.Symbol,
-					Price:         msg.CurrentPrice,
-					VWAP:          msg.VWAP,
-					TradingVolume: msg.TradingVolume,
-				}
+				tickCh <- market.NewTick(
+					msg.Symbol,
+					msg.CurrentPrice,
+					msg.VWAP,
+					msg.TradingVolume,
+					msg.CurrentPriceTime,
+				)
 			}
 		}
 	}()

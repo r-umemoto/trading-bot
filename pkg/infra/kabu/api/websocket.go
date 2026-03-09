@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -22,15 +23,12 @@ func NewWSClient(url string) *WSClient {
 }
 
 type PushMessage struct {
-	Symbol        string  `json:"Symbol"`
-	SymbolName    string  `json:"SymbolName"`
-	CurrentPrice  float64 `json:"CurrentPrice"`
-	Time          string  `json:"Time"` // 約定時刻
-	VWAP          float64 `json:"VWAP"`
-	TradingVolume float64 `json:"TradingVolume"` // 売買高
-
-	// ※実際のAPIからはさらに板の気配値なども大量に降ってきますが、
-	// まずは現在値の監視に必要な項目だけ定義します。
+	Symbol           string    `json:"Symbol"`
+	SymbolName       string    `json:"SymbolName"`
+	CurrentPrice     float64   `json:"CurrentPrice"`
+	VWAP             float64   `json:"VWAP"`
+	TradingVolume    float64   `json:"TradingVolume"`    // 売買高
+	CurrentPriceTime time.Time `json:"CurrentPriceTime"` // 現値時刻
 }
 
 // Listen はサーバーに接続し、受信したデータをチャネル(ch)に流し続けます。
@@ -61,7 +59,6 @@ func (w *WSClient) Listen(ch chan<- PushMessage) {
 		}
 
 		// 4. 解析したデータをチャネルを通じてメインロジック（脳）へ送る
-		// ※ここがGoならではの最高に美しいデータ連携です
 		ch <- pushMsg
 	}
 }
