@@ -40,25 +40,37 @@ type MarketState struct {
 	// BuyBoardPressure float64
 }
 
+// FiveMinSummary は5分間の出来高とVWAPのサマリ結果を保持します
+type FiveMinSummary struct {
+	StartTime     time.Time
+	EndTime       time.Time
+	TradingVolume float64
+	VWAP          float64
+}
+
 // DataPool は生の市場データを受け取り、戦略が必要なデータを集約・提供するインタフェースです
 type DataPool interface {
 	PushTick(tick Tick)
 	GetState(symbol string) MarketState
 	GetSigma(symbol string) float64
 	GetVWAP(symbol string) float64
+	GetFiveMinSummaries(symbol string) []calculator.FiveMinSummary
+	GetCurrentFiveMinVWAP(symbol string) float64
 }
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
 type DefaultDataPool struct {
-	states     map[string]MarketState
-	calcStates map[string]*calculator.SigmaCalculator
-	mu         sync.RWMutex
+	states       map[string]MarketState
+	calcStates   map[string]*calculator.SigmaCalculator
+	fiveMinCalcs map[string]*calculator.FiveMinCalculator
+	mu           sync.RWMutex
 }
 
 func NewDefaultDataPool() *DefaultDataPool {
 	return &DefaultDataPool{
-		states:     make(map[string]MarketState),
-		calcStates: make(map[string]*calculator.SigmaCalculator),
+		states:       make(map[string]MarketState),
+		calcStates:   make(map[string]*calculator.SigmaCalculator),
+		fiveMinCalcs: make(map[string]*calculator.FiveMinCalculator),
 	}
 }
 
@@ -93,6 +105,14 @@ func (a *DefaultDataPool) PushTick(tick Tick) {
 	} else {
 		calc.Update(tick.TradingVolume, tick.Price)
 	}
+
+	// 5分足集計の更新
+	fiveMinCalc, fiveMinExists := a.fiveMinCalcs[tick.Symbol]
+	if !fiveMinExists {
+		fiveMinCalc = calculator.NewFiveMinCalculator()
+		a.fiveMinCalcs[tick.Symbol] = fiveMinCalc
+	}
+	fiveMinCalc.Update(tick.Price, tick.TradingVolume, tick.CurrentPriceTime)
 }
 
 // GetState は指定銘柄の最新の市場状態を返します
@@ -119,6 +139,28 @@ func (a *DefaultDataPool) GetVWAP(symbol string) float64 {
 	if calc, exists := a.calcStates[symbol]; exists {
 		state := a.states[symbol]
 		return calc.GetVWAP(state.LatestTick.Price)
+	}
+	return 0
+}
+
+// GetFiveMinSummaries は指定銘柄の5分ごとのサマリ配列を返します
+func (a *DefaultDataPool) GetFiveMinSummaries(symbol string) []calculator.FiveMinSummary {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if calc, exists := a.fiveMinCalcs[symbol]; exists {
+		return calc.GetSummaries()
+	}
+	return []calculator.FiveMinSummary{}
+}
+
+// GetCurrentFiveMinVWAP は現在蓄積中の5分枠のリアルタイムVWAPを返します
+func (a *DefaultDataPool) GetCurrentFiveMinVWAP(symbol string) float64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if calc, exists := a.fiveMinCalcs[symbol]; exists {
+		return calc.GetCurrentVWAP()
 	}
 	return 0
 }
