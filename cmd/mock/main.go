@@ -45,31 +45,50 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("[Mock] 🎯 ボットからのWebSocket接続を受け付けました！")
 
-	// テスト用の価格シナリオ（波）を作る
-	// 4000円から始まり、3990円以下に沈み、その後 4000円付近まで浮上する波
+	// より現実的な変動をするモックの価格データ（数円〜数十円の範囲で動く）
 	priceWave := []float64{
-		4000.0, 3995.0, 3991.0,
-		3990.0, // 🎯 [シナリオ1] ここで LimitBuy(3990円以下で買い) が発動するはず！
-		3985.0, 3980.0, 3880.0, 2880.0,
-		2890.0, 2900.0, 2910.0, // 底を打って上がり始める
-		3998.0, // 🎯 [シナリオ2] 3990円の+0.2%(=3997.98円)以上なので、ここで FixedRate が発動して利確するはず！
+		4000.0, 3998.0, 3995.0,
+		3990.0, // 🎯 [シナリオ1] LimitBuy(3990円以下) が発動
+		3988.0, 3985.0, 3980.0, 3975.0,
+		3970.0, 3965.0, 3975.0, // 底を打って上がり始める
+		3985.0,
+		3998.0, // 🎯 [シナリオ2] 利確など
 		4000.0, 4005.0,
 	}
 
 	tick := 0
-	tv := 3900
+
+	// 動的な計算のための累積値（日産用）
+	var nissanTotalVolume float64
+	var nissanSumPriceVolume float64
+
+	// 動的な計算のための累積値（SBG用）
+	var sbgTotalVolume float64
+	var sbgSumPriceVolume float64
+
 	for {
 		// 配列のインデックスをループさせる
 		currentPrice := priceWave[tick%len(priceWave)]
 
+		// ランダムな出来高（今回は簡単のために価格変動時に100〜500株の約定があったことにする擬似ロジック）
+		// ここではモックなので固定の擬似乱数的な変動として、インデックスを利用しつつ多少ばらけさせます
+		var volumeAdded float64 = float64(100 + (tick%5)*100)
+
+		// 日産用の累積を更新
+		nissanTotalVolume += volumeAdded
+		nissanSumPriceVolume += currentPrice * volumeAdded
+		var nissanVWAP float64 = currentPrice
+		if nissanTotalVolume > 0 {
+			nissanVWAP = nissanSumPriceVolume / nissanTotalVolume
+		}
+
 		// PushMessageの組み立て
-		tv++
 		msg := map[string]interface{}{
 			"Symbol":           "7201",
 			"SymbolName":       "nissan",
 			"CurrentPrice":     currentPrice,
-			"VWAP":             3980,
-			"TradingVolume":    tv,
+			"VWAP":             nissanVWAP,
+			"TradingVolume":    nissanTotalVolume,
 			"CurrentPriceTime": time.Now().Format(time.RFC3339),
 		}
 		jsonData, _ := json.Marshal(msg)
@@ -78,12 +97,21 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("🌊 モック相場変動: %+v \n", msg)
 
+		// ソフトバンク用の累積を更新（少し違う動きにするためvolumeAddedを変える）
+		volSBG := volumeAdded * 1.5
+		sbgTotalVolume += volSBG
+		sbgSumPriceVolume += currentPrice * volSBG
+		var sbgVWAP float64 = currentPrice
+		if sbgTotalVolume > 0 {
+			sbgVWAP = sbgSumPriceVolume / sbgTotalVolume
+		}
+
 		msg2 := map[string]interface{}{
 			"Symbol":           "9434",
 			"SymbolName":       "softbank",
 			"CurrentPrice":     currentPrice,
-			"VWAP":             3970,
-			"TradingVolume":    tv,
+			"VWAP":             sbgVWAP,
+			"TradingVolume":    sbgTotalVolume,
 			"CurrentPriceTime": time.Now().Format(time.RFC3339),
 		}
 		jsonData2, _ := json.Marshal(msg2)

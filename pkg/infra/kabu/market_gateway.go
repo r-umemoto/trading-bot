@@ -4,11 +4,13 @@ package kabu
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/storage"
 )
 
 func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
@@ -285,22 +287,33 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 	rawCh := make(chan api.PushMessage)
 	go s.wsClient.Listen(rawCh)
 
+	today := time.Now().Format("20060102")
+	// "all" というプレフィックスで、./data ディレクトリに保存
+	logger, err := storage.NewCSVLogger("all", today, "./data")
+	if err != nil {
+		log.Fatalf("ロガーの初期化に失敗しました: %v", err)
+	}
+
 	// 🔄 変換層（アダプター処理）
 	go func() {
 		defer close(tickCh)
+		// goroutine終了時（システム終了時など）にログファイルを閉じる
+		defer logger.Close()
 		for {
 			select {
 			case <-ctx.Done():
 				// システム終了時は安全にゴルーチンを抜ける
 				return
 			case msg := <-rawCh:
-				tickCh <- market.NewTick(
+				tick := market.NewTick(
 					msg.Symbol,
 					msg.CurrentPrice,
 					msg.VWAP,
 					msg.TradingVolume,
 					msg.CurrentPriceTime,
 				)
+				logger.Log(tick)
+				tickCh <- tick
 			}
 		}
 	}()
