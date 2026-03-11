@@ -19,7 +19,7 @@ import (
 type WatchTarget struct {
 	Symbol       string
 	StrategyName string
-	Exchange     uint32
+	Exchange     market.ExchangeMarket
 }
 
 // BuildEngine は、システム全体を俯瞰する「目次」です
@@ -80,7 +80,7 @@ func deploySnipers(watchList []WatchTarget) ([]*sniper.Sniper, []string, error) 
 			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
-		s := sniper.NewSniper(t.Symbol, st)
+		s := sniper.NewSniper(t.Symbol, st, t.Exchange)
 		snipers = append(snipers, s)
 
 		if !symbolMap[t.Symbol] {

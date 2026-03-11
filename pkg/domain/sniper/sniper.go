@@ -33,14 +33,14 @@ type Sniper struct {
 }
 
 // NewSniper の引数と戻り値も修正
-func NewSniper(symbol string, strategy Strategy) *Sniper {
+func NewSniper(symbol string, strategy Strategy, exchange market.ExchangeMarket) *Sniper {
 	return &Sniper{
 		Symbol:          symbol,
 		Strategy:        strategy,
 		Orders:          make([]*market.Order, 0),
 		positions:       []market.Position{}, // 初期状態は空
 		AccountType:     market.ACCOUNT_SPECIAL,
-		Exchange:        market.EXCHANGE_TOSHO_PLUS,
+		Exchange:        exchange,
 		MarginTradeType: market.TRADE_TYPE_GENERAL_DAY,
 	}
 }

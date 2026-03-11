@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/r-umemoto/trading-bot/pkg/config"
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/engine"
 )
 
@@ -27,7 +28,7 @@ func main() {
 
 	// 3. アプリケーションの組み立て
 	watchList := []engine.WatchTarget{
-		{Symbol: "7201", StrategyName: "sample"},
+		{Symbol: "7201", StrategyName: "sample", Exchange: market.EXCHANGE_TOSHO_PLUS},
 	}
 	engine, err := engine.BuildEngine(cfg, watchList)
 	if err != nil {
