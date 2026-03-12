@@ -74,16 +74,26 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	}
 
 	// 監視銘柄を登録　TODOいったん仮でここに実装
-	for _, sniper := range c.snipers {
+	registered := make(map[string]bool)
+	for _, s := range c.snipers {
+		key := fmt.Sprintf("%s:%d", s.Symbol, s.Exchange)
+		if registered[key] {
+			continue
+		}
+
 		req := market.ResisterSymbolRequest{
-			Symbol:   sniper.Symbol,
-			Exchange: sniper.Exchange,
+			Symbol:   s.Symbol,
+			Exchange: s.Exchange,
 		}
 		err := c.marketGateway.RegisterSymbol(ctx, req)
 		if err != nil {
-			return fmt.Errorf("銘柄登録失敗")
+			return fmt.Errorf("銘柄登録失敗: %s", s.Symbol)
 		}
-		fmt.Printf("✅ 銘柄登録 %s \n", sniper.Symbol)
+		fmt.Printf("✅ 銘柄登録 %s \n", s.Symbol)
+		registered[key] = true
+
+		// APIの秒間上限を回避するため1秒スリープ
+		time.Sleep(1 * time.Second)
 	}
 
 	return nil
