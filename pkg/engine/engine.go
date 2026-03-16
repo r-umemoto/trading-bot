@@ -63,7 +63,7 @@ Loop:
 			break Loop
 
 		case t := <-ticker.C: // 時間の監視
-			if (t.Hour() == 14 && t.Minute() >= 50) || t.Hour() >= 315 {
+			if t.Hour() == 15 && t.Minute() >= 15 {
 				fmt.Println("\n⏰【キルスイッチ作動】指定時刻到達。全スナイパーに撤収を命じます！")
 				break Loop
 			}
