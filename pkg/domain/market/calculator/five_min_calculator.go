@@ -53,34 +53,51 @@ func (c *FiveMinCalculator) Update(price float64, tradingVolume float64, current
 		return
 	}
 
-	// 時間枠が変わった場合、古い枠のデータをフラッシュしてサマリを作成
+	// 時間枠が変わった場合、古い枠のデータを確定してサマリを作成
 	if currentWindowStart.After(c.windowStart) {
-		c.flush(c.windowStart, currentWindowStart)
+		c.Save(c.windowStart, currentWindowStart)
 
-		// 新しい枠の開始
-		c.windowStart = currentWindowStart
+		// 新しい時間枠の開始地点の出来高を特定（前の枠の最後の出来高）
 		if len(c.ticks) > 0 {
-			lastTick := c.ticks[len(c.ticks)-1]
-			c.windowStartVol = lastTick.TradingVolume
+			c.windowStartVol = c.ticks[len(c.ticks)-1].TradingVolume
 		} else {
 			c.windowStartVol = tradingVolume
 		}
+		c.windowStart = currentWindowStart
+	}
 
-		// 溜まっていたTickをクリアして今回のTickを入れる
-		c.ticks = []tickData{tick}
-	} else {
-		// 同じ時間枠なら追加
-		c.ticks = append(c.ticks, tick)
+	c.ticks = append(c.ticks, tick)
+
+	// バッファの掃除
+	// 「現在の固定枠の開始」と「5分スライディングの開始」のいずれか古い方より前のデータを消去
+	slidingCutoff := currentPriceTime.Add(-5 * time.Minute)
+	fixedCutoff := c.windowStart
+	
+	cutoff := slidingCutoff
+	if fixedCutoff.Before(cutoff) {
+		cutoff = fixedCutoff
+	}
+
+	for len(c.ticks) > 0 && c.ticks[0].CurrentPriceTime.Before(cutoff) {
+		c.ticks = c.ticks[1:]
 	}
 }
 
-// flush は指定期間のサマリを計算し、保存します
-func (c *FiveMinCalculator) flush(windowStart time.Time, windowEnd time.Time) {
-	if len(c.ticks) == 0 {
+// Save は指定期間のサマリを計算し、保存します
+func (c *FiveMinCalculator) Save(windowStart time.Time, windowEnd time.Time) {
+	// 指定されたウィンドウ（[windowStart, windowEnd)）に属するTickのみを抽出
+	var windowTicks []tickData
+	for _, t := range c.ticks {
+		if !t.CurrentPriceTime.Before(windowStart) && t.CurrentPriceTime.Before(windowEnd) {
+			windowTicks = append(windowTicks, t)
+		}
+	}
+
+	if len(windowTicks) == 0 {
 		return
 	}
 
-	lastTick := c.ticks[len(c.ticks)-1]
+	lastTick := windowTicks[len(windowTicks)-1]
 	startVol := c.windowStartVol
 	periodVolume := lastTick.TradingVolume - startVol
 	if periodVolume < 0 {
@@ -90,7 +107,7 @@ func (c *FiveMinCalculator) flush(windowStart time.Time, windowEnd time.Time) {
 	var sumPricedVolume float64
 	var prevVolume = startVol
 
-	for _, t := range c.ticks {
+	for _, t := range windowTicks {
 		tVol := t.TradingVolume - prevVolume
 		if tVol > 0 {
 			sumPricedVolume += t.Price * tVol
@@ -101,7 +118,7 @@ func (c *FiveMinCalculator) flush(windowStart time.Time, windowEnd time.Time) {
 	var vwap float64
 	if periodVolume > 0 {
 		vwap = sumPricedVolume / periodVolume
-	} else if len(c.ticks) > 0 {
+	} else {
 		vwap = lastTick.Price
 	}
 
@@ -123,23 +140,37 @@ func (c *FiveMinCalculator) GetSummaries() []FiveMinSummary {
 	return dst
 }
 
-// GetCurrentVWAP は現在蓄積中の5分枠のリアルタイムなVWAPを計算して返します
+// GetCurrentVWAP は直近5分間のスライディングウィンドウに基づいたリアルタイムなVWAPを計算して返します
 func (c *FiveMinCalculator) GetCurrentVWAP() float64 {
 	if len(c.ticks) == 0 {
 		return 0
 	}
 
 	lastTick := c.ticks[len(c.ticks)-1]
-	startVol := c.windowStartVol
-	periodVolume := lastTick.TradingVolume - startVol
-	if periodVolume < 0 {
-		periodVolume = 0
-	}
+	// スライディングウィンドウの開始時刻（現在から5分前）
+	slidingStart := lastTick.CurrentPriceTime.Add(-5 * time.Minute)
 
+	var startVol float64
 	var sumPricedVolume float64
-	var prevVolume = startVol
+	var prevVolume float64
+	first := true
 
 	for _, t := range c.ticks {
+		// ウィンドウ開始前のデータは、開始時点の出来高（ベースライン）を特定するために使う
+		if t.CurrentPriceTime.Before(slidingStart) {
+			startVol = t.TradingVolume
+			continue
+		}
+
+		if first {
+			// ウィンドウ開始以降の最初のデータ
+			if startVol == 0 {
+				startVol = t.TradingVolume
+			}
+			prevVolume = startVol
+			first = false
+		}
+
 		tVol := t.TradingVolume - prevVolume
 		if tVol > 0 {
 			sumPricedVolume += t.Price * tVol
@@ -147,6 +178,7 @@ func (c *FiveMinCalculator) GetCurrentVWAP() float64 {
 		prevVolume = t.TradingVolume
 	}
 
+	periodVolume := lastTick.TradingVolume - startVol
 	if periodVolume > 0 {
 		return sumPricedVolume / periodVolume
 	}

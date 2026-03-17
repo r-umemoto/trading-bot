@@ -22,7 +22,7 @@ func main() {
 	// 1. 戦略のセットアップ
 	// 実行したい戦略名と対象銘柄を指定します
 	strategyName := "simple" // ← ここを実際の戦略名に書き換えてください
-	factory, err := strategy.Get(strategyName)
+	factory, err := strategy.GetFactory(strategyName)
 	if err != nil {
 		log.Fatalf("戦略が見つかりません: %v", err)
 	}
