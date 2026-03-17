@@ -7,11 +7,22 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 )
 
+// StrategyState は、戦略が銘柄ごとに保持したい固有のステートを表します
+type StrategyState struct {
+	count float64
+}
+
 // SampleStrategy はデータプールから直接指標を取得する戦略のサンプルです
-type SampleStrategy struct{}
+type SampleStrategy struct {
+	state StrategyState
+}
 
 func NewSampleStrategy() Strategy {
-	return &SampleStrategy{}
+	return &SampleStrategy{
+		state: StrategyState{
+			count: 0,
+		},
+	}
 }
 
 func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
@@ -62,18 +73,17 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 	}
 
 	// トレンドに応じたアクションの設定例（シンプル化のためログ出力とアクション仮設定のみ）
-	action := brain.ACTION_HOLD
-	if trend == "upward" {
+	var action brain.Action
+	switch trend {
+	case "upward":
 		action = brain.ACTION_BUY
-	} else if trend == "downward" {
+	case "downward":
 		action = brain.ACTION_SELL
+	default:
+		action = brain.ACTION_HOLD
 	}
 
 	return brain.Signal{
 		Action: action,
 	}
-}
-
-func init() {
-	Register("sample", NewSampleStrategy())
 }

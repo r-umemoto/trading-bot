@@ -24,6 +24,7 @@ type Sniper struct {
 	Symbol          string
 	positions       []market.Position
 	Strategy        Strategy
+	State           strategy.StrategyState // 👈 銘柄ごとの戦略ステート
 	Orders          []*market.Order
 	mu              sync.Mutex // 👈 状態をロックするための鍵
 	isExiting       bool       // 👈 撤収作業中かどうかのフラグ
@@ -167,6 +168,11 @@ func (s *Sniper) ForceExit() {
 	s.mu.Unlock()      // フラグを立てたら、通信で詰まらないように一旦ロック解除
 
 	fmt.Printf("🚨 [%s] 撤収フラグON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Symbol)
+
+	// キルスイッチ機能を備えている戦略なら、発動させる
+	if ks, ok := s.Strategy.(KillSwitchable); ok {
+		_ = ks.Activate()
+	}
 }
 
 // reducePositions は、指定された数量分だけ古い建玉から順に削減します

@@ -2,15 +2,19 @@ package strategy
 
 import "fmt"
 
-var registry = make(map[string]Strategy)
+type StrategyFactory interface {
+	NewStrategy() Strategy
+}
+
+var registry = make(map[string]StrategyFactory)
 
 // Register a strategy with a given name.
-func Register(name string, s Strategy) {
+func Register(name string, s StrategyFactory) {
 	registry[name] = s
 }
 
 // Get a strategy by its name.
-func Get(name string) (Strategy, error) {
+func GetFactory(name string) (StrategyFactory, error) {
 	s, ok := registry[name]
 	if !ok {
 		return nil, fmt.Errorf("strategy not found: %s", name)

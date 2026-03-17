@@ -1,31 +1,40 @@
 package strategy
 
-import "github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
+import (
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
+)
+
+// KillSwitchState は KillSwitch が保持する銘柄ごとの状態
+type KillSwitchState struct {
+	IsTriggered bool
+	HasPosition bool
+	InnerState  StrategyState
+}
 
 // KillSwitch は他の戦略をラップし、発動時に強制決済シグナルを出すデコレーター
 type KillSwitch struct {
-	MainLogic   Strategy // 包み込まれる本来の戦略
-	IsTriggered bool     // キルスイッチが押されたか
-	HasPosition bool     // 現在建玉を持っているか（全決済のため）
-	Quantity    float64
+	MainLogic Strategy // 包み込まれる本来の戦略
+	Quantity  float64
+	State     KillSwitchState
 }
 
 // NewKillSwitch は本来の戦略を渡してキルスイッチ付き戦略を作ります
 func NewKillSwitch(mainLogic Strategy, qty float64) Strategy {
 	return &KillSwitch{
-		MainLogic:   mainLogic,
-		IsTriggered: false,
-		HasPosition: false,
-		Quantity:    qty,
+		MainLogic: mainLogic,
+		Quantity:  qty,
 	}
 }
 
 // 外部（main.goのCtrl+Cなど）から手動でキルスイッチを起動する
+// 注: 状態を分離したため、どの銘柄のKillSwitchをActivateするかを指定する必要があります。
+// SniperがKillSwitchableを解釈する際にこのStateを渡すように設計変更が必要ですが、
+// 一旦インターフェースに合わせて修正します。
 func (k *KillSwitch) Activate() brain.Signal {
-	k.IsTriggered = true
+	k.State.IsTriggered = true
 
-	if k.HasPosition {
-		k.HasPosition = false
+	if k.State.HasPosition {
+		k.State.HasPosition = false
 		return brain.Signal{Action: brain.ACTION_SELL, Quantity: k.Quantity}
 	}
 
@@ -34,7 +43,7 @@ func (k *KillSwitch) Activate() brain.Signal {
 
 func (k *KillSwitch) Evaluate(input StrategyInput) brain.Signal {
 	// 🚨 キルスイッチ発動中！
-	if k.IsTriggered {
+	if k.State.IsTriggered {
 		// 既にキルスイッチ起動済みの場合は気絶しておく
 		return brain.Signal{Action: brain.ACTION_HOLD}
 	}
@@ -45,14 +54,10 @@ func (k *KillSwitch) Evaluate(input StrategyInput) brain.Signal {
 	// 本来の戦略が出したシグナルを見て、ポジション状態を同期しておく
 	switch sig.Action {
 	case brain.ACTION_BUY:
-		k.HasPosition = true
+		k.State.HasPosition = true
 	case brain.ACTION_SELL:
-		k.HasPosition = false
+		k.State.HasPosition = false
 	}
 
 	return sig
-}
-
-func init() {
-	Register("kill", NewSampleStrategy())
 }

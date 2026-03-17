@@ -21,14 +21,14 @@ func main() {
 
 	// 1. 戦略のセットアップ
 	// 実行したい戦略名と対象銘柄を指定します
-	strategyName := "sample" // ← ここを実際の戦略名に書き換えてください
-	st, err := strategy.Get(strategyName)
+	strategyName := "simple" // ← ここを実際の戦略名に書き換えてください
+	factory, err := strategy.Get(strategyName)
 	if err != nil {
 		log.Fatalf("戦略が見つかりません: %v", err)
 	}
 
 	targetSymbol := "7201" // CSV内の銘柄と一致させる必要があります
-	s := sniper.NewSniper(targetSymbol, st, market.EXCHANGE_TOSHO_PLUS)
+	s := sniper.NewSniper(targetSymbol, factory.NewStrategy(), market.EXCHANGE_TOSHO_PLUS)
 	snipers := []*sniper.Sniper{s}
 
 	// 2. バックテスト用インフラ（Mock Gateway）と DataPool の準備

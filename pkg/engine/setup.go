@@ -74,12 +74,12 @@ func deploySnipers(watchList []WatchTarget) ([]*sniper.Sniper, []string, error) 
 	symbolMap := make(map[string]bool)
 
 	for _, t := range watchList {
-		// 戦略レジストリから戦略を取得
-		st, err := strategy.Get(t.StrategyName)
+		factory, err := strategy.GetFactory(t.StrategyName)
 		if err != nil {
 			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
+		st := factory.NewStrategy()
 		s := sniper.NewSniper(t.Symbol, st, t.Exchange)
 		snipers = append(snipers, s)
 
