@@ -78,7 +78,8 @@ func (c *FiveMinCalculator) Update(price float64, tradingVolume float64, current
 		cutoff = fixedCutoff
 	}
 
-	for len(c.ticks) > 0 && c.ticks[0].CurrentPriceTime.Before(cutoff) {
+	// ウィンドウ開始のベースラインとなるデータを1つだけ残すように調整
+	for len(c.ticks) > 1 && c.ticks[1].CurrentPriceTime.Before(cutoff) {
 		c.ticks = c.ticks[1:]
 	}
 }
@@ -153,22 +154,23 @@ func (c *FiveMinCalculator) GetCurrentVWAP() float64 {
 	var startVol float64
 	var sumPricedVolume float64
 	var prevVolume float64
-	first := true
+	foundBaseline := false
 
 	for _, t := range c.ticks {
-		// ウィンドウ開始前のデータは、開始時点の出来高（ベースライン）を特定するために使う
+		// ウィンドウ開始前のデータがある場合、それをベースライン（開始出来高）として使用
 		if t.CurrentPriceTime.Before(slidingStart) {
 			startVol = t.TradingVolume
+			prevVolume = t.TradingVolume
+			foundBaseline = true
 			continue
 		}
 
-		if first {
-			// ウィンドウ開始以降の最初のデータ
-			if startVol == 0 {
-				startVol = t.TradingVolume
-			}
-			prevVolume = startVol
-			first = false
+		if !foundBaseline {
+			// ウィンドウ開始前のデータがない場合、ウィンドウ内の最初のデータをベースライン（開始出来高）とする
+			startVol = t.TradingVolume
+			prevVolume = t.TradingVolume
+			foundBaseline = true
+			continue
 		}
 
 		tVol := t.TradingVolume - prevVolume

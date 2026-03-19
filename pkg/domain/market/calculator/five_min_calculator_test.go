@@ -39,8 +39,9 @@ func TestFiveMinCalculator_Update(t *testing.T) {
 		t.Errorf("expected 1 summary, got %d", len(summaries))
 	}
 	
-	//集計結果の確認
-	// 110.0 * (1100-1000) + 120.0 * (1200-1100) = 110*100 + 120*100 = 11000 + 12000 = 23000
+	// 集計結果の確認 (10:00:00〜10:05:00)
+	// 110.0 * (1100-1000) + 120.0 * (1200-1100) = 11000 + 12000 = 23000
+	// 10:05:01のデータは次のバーなので含まれない
 	// volume = 1200 - 1000 = 200
 	// vwap = 23000 / 200 = 115.0
 	expectedVWAP := 115.0
@@ -53,21 +54,53 @@ func TestFiveMinCalculator_Update(t *testing.T) {
 		t.Errorf("expected windowStart %v, got %v", nextBaseTime, calc.windowStart)
 	}
 	
-	// ticks にはスライディングVWAPのために、前の枠のデータも一部残っているはず
-	// (10:05:01時点では、10:00:01以降のデータが残っている)
+	// ticks にはスライディングVWAPのために、前の枠のデータも1つ残っているはず
+	// (10:05:01時点では、10:00:00がベースラインとして残っているべき)
 	if len(calc.ticks) <= 1 {
 		t.Errorf("expected more ticks for sliding window, got %d", len(calc.ticks))
 	}
 
 	// GetCurrentVWAP がスライディングになっているか確認
 	// 10:05:01時点での直近5分間(10:00:01〜10:05:01)のデータ
-	// 10:01:00 (110.0, 1100.0) -> vol: 1100-1100 = 0
+	// 現在のティック:
+	// 10:00:00 (100.0, 1000.0) -> ベースライン
+	// 10:01:00 (110.0, 1100.0) -> vol: 1100-1000 = 100
 	// 10:02:00 (120.0, 1200.0) -> vol: 1200-1100 = 100
 	// 10:05:01 (130.0, 1300.0) -> vol: 1300-1200 = 100
-	// vwap = (120*100 + 130*100) / 200 = (12000 + 13000) / 200 = 25000 / 200 = 125.0
+	// vwap = (110*100 + 120*100 + 130*100) / 300 = 36000 / 300 = 120.0
 	slidingVWAP := calc.GetCurrentVWAP()
-	expectedSlidingVWAP := 125.0
+	expectedSlidingVWAP := 120.0
 	if slidingVWAP != expectedSlidingVWAP {
 		t.Errorf("expected sliding VWAP %f, got %f", expectedSlidingVWAP, slidingVWAP)
+	}
+}
+
+func TestFiveMinCalculator_GetCurrentVWAP_EdgeCases(t *testing.T) {
+	calc := NewFiveMinCalculator()
+	baseTime := time.Date(2026, 3, 17, 10, 0, 0, 0, time.UTC)
+
+	// 1. 最初
+	if vwap := calc.GetCurrentVWAP(); vwap != 0 {
+		t.Errorf("expected 0, got %f", vwap)
+	}
+
+	// 2. 1つ目のデータ（増分不明なので直近価格を返す）
+	calc.Update(100.0, 1000.0, baseTime)
+	if vwap := calc.GetCurrentVWAP(); vwap != 100.0 {
+		t.Errorf("expected 100.0, got %f", vwap)
+	}
+
+	// 3. ウィンドウ外に押し出されるケース
+	calc.Update(110.0, 1100.0, baseTime.Add(1*time.Minute))
+	calc.Update(120.0, 1200.0, baseTime.Add(2*time.Minute))
+	calc.Update(130.0, 1300.0, baseTime.Add(7*time.Minute)) // 10:07:00, slidingStart = 10:02:00
+
+	// 10:02:00 (120.0, 1200.0) は time >= slidingStart なのでウィンドウに含まれる
+	// 10:01:00 (110.0, 1100.0) がベースラインになる
+	// 10:02:00 (120.0, 1200.0) -> vol: 1200-1100 = 100
+	// 10:07:00 (130.0, 1300.0) -> vol: 1300-1200 = 100
+	// VWAP = (120*100 + 130*100) / 200 = 125.0
+	if vwap := calc.GetCurrentVWAP(); vwap != 125.0 {
+		t.Errorf("expected 125.0, got %f", vwap)
 	}
 }
