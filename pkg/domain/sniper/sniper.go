@@ -118,6 +118,11 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		return nil, nil
 	}
 
+	orderType := market.ORDER_TYPE_LIMIT
+	if signal.Action == brain.ACTION_SELL {
+		orderType = market.ORDER_TYPE_MARKET
+	}
+
 	req := &market.OrderRequest{
 		Symbol:             s.Symbol,
 		Exchange:           s.Exchange,
@@ -125,7 +130,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		Action:             marketAction,
 		MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
 		AccountType:        market.ACCOUNT_SPECIAL,
-		OrderType:          market.ORDER_TYPE_LIMIT,
+		OrderType:          orderType,
 		ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
 		Qty:                signal.Quantity,
 		Price:              signal.Price,
