@@ -119,8 +119,8 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	}
 
 	orderType := market.ORDER_TYPE_MARKET
-	if signal.Price > 0 {
-		orderType = market.ORDER_TYPE_LIMIT
+	if signal.OrderType != 0 {
+		orderType = signal.OrderType
 	}
 
 	req := &market.OrderRequest{
