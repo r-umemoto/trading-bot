@@ -8,5 +8,5 @@ func (f *SimpleStrategyFactory) NewStrategy() Strategy {
 }
 
 func init() {
-	Register("simple", &SimpleStrategyFactory{})
+	Register("sample", &SimpleStrategyFactory{})
 }
