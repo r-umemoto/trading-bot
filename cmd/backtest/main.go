@@ -33,6 +33,12 @@ func main() {
 	// 2. バックテスト用インフラ（Mock Gateway）と DataPool の準備
 	gateway := backtest.NewBacktestGateway()
 	dataPool := market.NewDefaultDataPool()
+	
+	// 各スナイパー（の戦略）が要求するインジケーターをDataPool経由で初期化＆共有設定する
+	for _, s := range snipers {
+		s.Strategy.BindIndicators(s.Symbol, dataPool)
+	}
+
 	tickCh, execCh, _ := gateway.Start(context.Background())
 
 	// 3. ユースケースの構築（バイパスするため削除し、PositionCleanerのみ保持）

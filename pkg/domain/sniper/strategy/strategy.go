@@ -18,4 +18,6 @@ type StrategyInput struct {
 
 type Strategy interface {
 	Evaluate(input StrategyInput) brain.Signal
+	// BindIndicators は登録時に呼ばれ、DataPool（キャッシュ）から必要なインジケーターのポインタを取得して保持します
+	BindIndicators(symbol string, pool market.DataPool)
 }

@@ -57,8 +57,7 @@ type DataPool interface {
 	GetCurrentFiveMinVWAP(symbol string) float64
 
 	// 新規汎用指標システム
-	RegisterIndicator(symbol string, indicator Indicator)
-	GetIndicatorValue(symbol, id string) interface{}
+	GetOrCreateIndicator(symbol, id string, factory func() Indicator) Indicator
 }
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
@@ -114,10 +113,8 @@ func (a *DefaultDataPool) PushTick(tick Tick) {
 	fiveMinCalc.Update(tick.Price, tick.TradingVolume, tick.CurrentPriceTime)
 
 	// 登録されている汎用指標があればすべて更新
-	if inds, ok := a.indicators[tick.Symbol]; ok {
-		for _, ind := range inds {
-			ind.Update(tick)
-		}
+	for _, ind := range a.indicators[tick.Symbol] {
+		ind.Update(tick)
 	}
 }
 
@@ -171,26 +168,20 @@ func (a *DefaultDataPool) GetCurrentFiveMinVWAP(symbol string) float64 {
 	return 0
 }
 
-// RegisterIndicator は特定の銘柄に対して新しい指標を登録します
-func (a *DefaultDataPool) RegisterIndicator(symbol string, indicator Indicator) {
+// GetOrCreateIndicator は指定した銘柄とIDの指標を取得し、無ければ生成して登録します
+func (a *DefaultDataPool) GetOrCreateIndicator(symbol, id string, factory func() Indicator) Indicator {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if _, exists := a.indicators[symbol]; !exists {
 		a.indicators[symbol] = make(map[string]Indicator)
 	}
-	a.indicators[symbol][indicator.ID()] = indicator
-}
 
-// GetIndicatorValue は指定した銘柄とIDの指標の値を取得します
-func (a *DefaultDataPool) GetIndicatorValue(symbol, id string) interface{} {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	if inds, exists := a.indicators[symbol]; exists {
-		if ind, ok := inds[id]; ok {
-			return ind.Value()
-		}
+	if ind, exists := a.indicators[symbol][id]; exists {
+		return ind
 	}
-	return nil
+
+	newInd := factory()
+	a.indicators[symbol][id] = newInd
+	return newInd
 }

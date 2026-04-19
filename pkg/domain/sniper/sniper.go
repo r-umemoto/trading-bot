@@ -12,6 +12,7 @@ import (
 // すべての戦略が満たすべき頭脳の規格
 type Strategy interface {
 	Evaluate(input strategy.StrategyInput) brain.Signal
+	BindIndicators(symbol string, pool market.DataPool)
 }
 
 // ★ スナイパー内で定義する「オプショナルな機能」の規格

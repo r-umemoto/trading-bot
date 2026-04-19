@@ -38,6 +38,12 @@ func BuildEngine(cfg *config.AppConfig, watchList []WatchTarget) (*Engine, error
 
 	// 3. ユースケースとサービスの組み立て
 	dataPool := market.NewDefaultDataPool()
+
+	// 各戦略が要求するインジケーターをDataPool経由で初期化＆共有設定する
+	for _, s := range snipers {
+		s.Strategy.BindIndicators(s.Symbol, dataPool)
+	}
+
 	tradeUC := usecase.NewTradeUseCase(snipers, gateway, dataPool)
 	cleaner := service.NewPositionCleaner(snipers, gateway)
 

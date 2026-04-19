@@ -4,7 +4,7 @@ type SimpleStrategyFactory struct {
 }
 
 func (f *SimpleStrategyFactory) NewStrategy() Strategy {
-	return &SampleStrategy{}
+	return NewSampleStrategy()
 }
 
 func init() {
