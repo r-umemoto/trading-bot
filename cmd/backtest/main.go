@@ -18,15 +18,14 @@ func main() {
 	// 読み込むCSVファイルのパス（収集したデータ）
 	csvPath := "./data/all_20260403.csv" // プロジェクトルートから実行した場合のパス
 
-	// 1. 戦略のセットアップ
-	// 実行したい戦略名と対象銘柄を指定します
-	strategyName := "simple" // ← ここを実際の戦略名に書き換えてください
+	// 検証する銘柄と戦略を指定
+	targetSymbol := "7201" // 日産自動車
+	strategyName := "sample" // ← ここを実際の戦略名に書き換えてください
 	factory, err := strategy.GetFactory(strategyName)
 	if err != nil {
 		log.Fatalf("戦略が見つかりません: %v", err)
 	}
 
-	targetSymbol := "7201" // CSV内の銘柄と一致させる必要があります
 	s := sniper.NewSniper(targetSymbol, factory.NewStrategy(), market.EXCHANGE_TOSHO_PLUS)
 	snipers := []*sniper.Sniper{s}
 

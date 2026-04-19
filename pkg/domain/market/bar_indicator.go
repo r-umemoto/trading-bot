@@ -1,6 +1,8 @@
 package market
 
-import "time"
+import (
+	"time"
+)
 
 // OneMinBarIndicator は Tick データから1分足の Bar を生成・蓄積するインジケーターです。
 type OneMinBarIndicator struct {
@@ -84,8 +86,8 @@ func (i *OneMinBarIndicator) Update(tick Tick) {
 	}
 }
 
-// Value はこれまでに確定したバーと、計算中の現在のバーをすべて含んだ要素のリスト([]Bar)を返します。
-func (i *OneMinBarIndicator) Value() interface{} {
+// Bars はこれまでに生成されたバーのリストを返します。
+func (i *OneMinBarIndicator) Bars() []Bar {
 	result := make([]Bar, 0, len(i.bars)+1)
 	result = append(result, i.bars...)
 	if i.currentBar != nil {

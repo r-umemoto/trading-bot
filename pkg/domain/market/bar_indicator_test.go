@@ -38,11 +38,7 @@ func TestOneMinBarIndicator(t *testing.T) {
 		TradingVolume:    1600,
 	})
 
-	val := indicator.Value()
-	bars, ok := val.([]Bar)
-	if !ok {
-		t.Fatalf("expected []Bar, got %T", val)
-	}
+	bars := indicator.Bars()
 
 	if len(bars) != 2 {
 		t.Fatalf("expected 2 bars, got %d", len(bars))

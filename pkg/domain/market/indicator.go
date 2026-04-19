@@ -6,8 +6,6 @@ type Indicator interface {
 	ID() string
 	// Update は新しいTickデータを受け取り、内部状態を更新します
 	Update(tick Tick)
-	// Value は現在の指標値を返します。利用時にアサーションして使用します。
-	Value() interface{}
 }
 
 // StaticFloatIndicator は、外部から値をセットされる静的な指標です（例: 前日からのSMAなど、Tickで更新されないもの）
