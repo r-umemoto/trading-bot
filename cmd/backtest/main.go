@@ -12,12 +12,11 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/infra/backtest"
 	"github.com/r-umemoto/trading-bot/pkg/infra/feed"
-	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
 
 func main() {
 	// 読み込むCSVファイルのパス（収集したデータ）
-	csvPath := "./data/all_20260311.csv" // プロジェクトルートから実行した場合のパス
+	csvPath := "./data/all_20260403.csv" // プロジェクトルートから実行した場合のパス
 
 	// 1. 戦略のセットアップ
 	// 実行したい戦略名と対象銘柄を指定します
@@ -36,8 +35,7 @@ func main() {
 	dataPool := market.NewDefaultDataPool()
 	tickCh, execCh, _ := gateway.Start(context.Background())
 
-	// 3. ユースケース（ワーカー）の構築と起動
-	tradeUC := usecase.NewTradeUseCase(snipers, gateway, dataPool)
+	// 3. ユースケースの構築（バイパスするため削除し、PositionCleanerのみ保持）
 	_ = service.NewPositionCleaner(snipers, gateway)
 
 	// 4. Feederの準備
@@ -54,16 +52,6 @@ func main() {
 	fmt.Println("バックテストを開始します...")
 	tickCount := 0
 
-	// 銘柄のワーカーを裏で回しておく（BacktestGatewayが発火するexecChなどを処理）
-	tradeUC.StartWorkers(context.Background())
-
-	// executionレポートをルーティングするGoroutine
-	go func() {
-		for report := range execCh {
-			tradeUC.HandleExecution(report)
-		}
-	}()
-
 	// 5. メインループ: CSVから送られてくるTickを限界速度でGatewayへ流し込む
 	for tick := range csvTickChan {
 		tickCount++
@@ -71,9 +59,34 @@ func main() {
 		// ここでバックテストGatewayにTickを流し、同時に注文の約定判定をさせる
 		gateway.ProcessTick(tick)
 
-		// ゲートウェイから転送されてきたTickをユースケースに流す
+		// ゲートウェイの中で発生した約定（execCh）を全て吸い出して同期処理する
+		for len(execCh) > 0 {
+			report := <-execCh
+			for _, s := range snipers {
+				if s.Symbol == report.Symbol {
+					s.OnExecution(report)
+				}
+			}
+		}
+
+		// ゲートウェイから転送されてきたTickを受け取る
 		t := <-tickCh
-		tradeUC.HandleTick(context.Background(), t)
+
+		// TradeUseCase をバイパスし、直接 DataPool 更新と Sniper 評価を行う（完全に同期的）
+		dataPool.PushTick(t)
+		for _, s := range snipers {
+			if s.Symbol == t.Symbol {
+				orderPtr, req := s.Tick(dataPool)
+				if req != nil {
+					orderID, err := gateway.SendOrder(context.Background(), *req)
+					if err != nil {
+						s.FailSendingOrder(orderPtr)
+					} else {
+						s.ConfirmOrder(orderPtr, orderID)
+					}
+				}
+			}
+		}
 
 		// 進捗確認用のログ（10万件ごとに出力）
 		if tickCount%100000 == 0 {
