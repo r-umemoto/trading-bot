@@ -29,9 +29,8 @@ func NewTick(symbol string, price float64, vwap float64, tradingVolume float64, 
 
 // MarketState は、特定銘柄の「今の市場環境」の生データを保持するものです
 type MarketState struct {
-	Symbol         string
-	LatestTick     Tick      // 最新のTickデータ（出来高等を含む）
-	Recent10Prices []float64 // 直近10回の価格履歴
+	Symbol     string
+	LatestTick Tick // 最新のTickデータ（出来高等を含む）
 
 	// B: 急落検知（将来拡張）
 	// DropVelocity float64
@@ -56,6 +55,10 @@ type DataPool interface {
 	GetVWAP(symbol string) float64
 	GetFiveMinSummaries(symbol string) []calculator.FiveMinSummary
 	GetCurrentFiveMinVWAP(symbol string) float64
+
+	// 新規汎用指標システム
+	RegisterIndicator(symbol string, indicator Indicator)
+	GetIndicatorValue(symbol, id string) interface{}
 }
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
@@ -63,6 +66,7 @@ type DefaultDataPool struct {
 	states       map[string]MarketState
 	calcStates   map[string]*calculator.SigmaCalculator
 	fiveMinCalcs map[string]*calculator.FiveMinCalculator
+	indicators   map[string]map[string]Indicator // symbol -> id -> Indicator
 	mu           sync.RWMutex
 }
 
@@ -71,6 +75,7 @@ func NewDefaultDataPool() *DefaultDataPool {
 		states:       make(map[string]MarketState),
 		calcStates:   make(map[string]*calculator.SigmaCalculator),
 		fiveMinCalcs: make(map[string]*calculator.FiveMinCalculator),
+		indicators:   make(map[string]map[string]Indicator),
 	}
 }
 
@@ -87,12 +92,6 @@ func (a *DefaultDataPool) PushTick(tick Tick) {
 
 	// 最新のTickを保持
 	state.LatestTick = tick
-
-	// 履歴を保持
-	state.Recent10Prices = append(state.Recent10Prices, tick.Price)
-	if len(state.Recent10Prices) > 10 {
-		state.Recent10Prices = state.Recent10Prices[len(state.Recent10Prices)-10:]
-	}
 
 	// 状態を保存
 	a.states[tick.Symbol] = state
@@ -113,6 +112,13 @@ func (a *DefaultDataPool) PushTick(tick Tick) {
 		a.fiveMinCalcs[tick.Symbol] = fiveMinCalc
 	}
 	fiveMinCalc.Update(tick.Price, tick.TradingVolume, tick.CurrentPriceTime)
+
+	// 登録されている汎用指標があればすべて更新
+	if inds, ok := a.indicators[tick.Symbol]; ok {
+		for _, ind := range inds {
+			ind.Update(tick)
+		}
+	}
 }
 
 // GetState は指定銘柄の最新の市場状態を返します
@@ -163,4 +169,28 @@ func (a *DefaultDataPool) GetCurrentFiveMinVWAP(symbol string) float64 {
 		return calc.GetCurrentVWAP()
 	}
 	return 0
+}
+
+// RegisterIndicator は特定の銘柄に対して新しい指標を登録します
+func (a *DefaultDataPool) RegisterIndicator(symbol string, indicator Indicator) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if _, exists := a.indicators[symbol]; !exists {
+		a.indicators[symbol] = make(map[string]Indicator)
+	}
+	a.indicators[symbol][indicator.ID()] = indicator
+}
+
+// GetIndicatorValue は指定した銘柄とIDの指標の値を取得します
+func (a *DefaultDataPool) GetIndicatorValue(symbol, id string) interface{} {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if inds, exists := a.indicators[symbol]; exists {
+		if ind, ok := inds[id]; ok {
+			return ind.Value()
+		}
+	}
+	return nil
 }
