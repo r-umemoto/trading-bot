@@ -30,18 +30,13 @@ func BuildEngine(cfg *config.AppConfig, watchList []WatchTarget) (*Engine, error
 		return nil, err
 	}
 
-	// 2. ドメイン層（スナイパー）の配備
-	snipers, watchSymbols, err := deploySnipers(watchList)
-	if err != nil {
-		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
-	}
-
-	// 3. ユースケースとサービスの組み立て
+	// 2. ユースケースとサービスの組み立て用のDataPool準備
 	dataPool := market.NewDefaultDataPool()
 
-	// 各戦略が要求するインジケーターをDataPool経由で初期化＆共有設定する
-	for _, s := range snipers {
-		s.Strategy.BindIndicators(s.Symbol, dataPool)
+	// 3. ドメイン層（スナイパー）の配備
+	snipers, watchSymbols, err := deploySnipers(watchList, dataPool)
+	if err != nil {
+		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
 	}
 
 	tradeUC := usecase.NewTradeUseCase(snipers, gateway, dataPool)
@@ -74,7 +69,7 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 	return marketGateway, nil
 }
 
-func deploySnipers(watchList []WatchTarget) ([]*sniper.Sniper, []string, error) {
+func deploySnipers(watchList []WatchTarget, dataPool market.DataPool) ([]*sniper.Sniper, []string, error) {
 	var snipers []*sniper.Sniper
 	var watchSymbols []string
 	symbolMap := make(map[string]bool)
@@ -85,7 +80,7 @@ func deploySnipers(watchList []WatchTarget) ([]*sniper.Sniper, []string, error) 
 			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
-		st := factory.NewStrategy()
+		st := factory.NewStrategy(t.Symbol, dataPool)
 		s := sniper.NewSniper(t.Symbol, st, t.Exchange)
 		snipers = append(snipers, s)
 

@@ -1,9 +1,12 @@
 package strategy
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+)
 
 type StrategyFactory interface {
-	NewStrategy() Strategy
+	NewStrategy(symbol string, dataPool market.DataPool) Strategy
 }
 
 var registry = make(map[string]StrategyFactory)

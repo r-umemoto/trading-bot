@@ -17,24 +17,20 @@ type SampleStrategy struct {
 	highPrice float64
 }
 
-func NewSampleStrategy() Strategy {
+func NewSampleStrategy(oneMinBar *market.OneMinBarIndicator) Strategy {
 	return &SampleStrategy{
 		state: StrategyState{
 			count: 0,
 		},
+		oneMinBar: oneMinBar,
 	}
 }
 
-func (s *SampleStrategy) BindIndicators(symbol string, pool market.DataPool) {
-	s.oneMinBar = pool.GetOrCreateIndicator(symbol, "1min_bar", func() market.Indicator {
-		return market.NewOneMinBarIndicator("1min_bar")
-	}).(*market.OneMinBarIndicator)
-}
-
+// Evaluate is purely functional
 func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 
 	if input.HoldQty > 0 {
-		curretPrice := input.DataPool.GetState(input.Symbol).LatestTick.Price
+		curretPrice := input.LatestTick.Price
 		if s.highPrice == 0 {
 			s.highPrice = curretPrice
 		}

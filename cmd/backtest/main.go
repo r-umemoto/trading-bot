@@ -109,8 +109,7 @@ func main() {
 	}
 	var snipers []*sniper.Sniper
 	for _, sym := range watchList {
-		s := sniper.NewSniper(sym.Symbol, factory.NewStrategy(), sym.Exchange)
-		s.Strategy.BindIndicators(sym.Symbol, dataPool)
+		s := sniper.NewSniper(sym.Symbol, factory.NewStrategy(sym.Symbol, dataPool), sym.Exchange)
 		snipers = append(snipers, s)
 	}
 

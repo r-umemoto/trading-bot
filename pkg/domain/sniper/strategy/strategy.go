@@ -13,11 +13,9 @@ type StrategyInput struct {
 	AveragePrice  float64 // 平均取得単価
 	TotalExposure float64 // 現在の総投資額（平均単価 × 保有数量）
 
-	DataPool market.DataPool // データプールへの参照（市場データや履歴にアクセスするため）
+	LatestTick market.Tick // 最新のTick（DataPoolへの依存を排除）
 }
 
 type Strategy interface {
 	Evaluate(input StrategyInput) brain.Signal
-	// BindIndicators は登録時に呼ばれ、DataPool（キャッシュ）から必要なインジケーターのポインタを取得して保持します
-	BindIndicators(symbol string, pool market.DataPool)
 }

@@ -1,7 +1,6 @@
 package strategy
 
 import (
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 )
 
@@ -40,10 +39,6 @@ func (k *KillSwitch) Activate() brain.Signal {
 	}
 
 	return brain.Signal{Action: brain.ACTION_HOLD}
-}
-
-func (k *KillSwitch) BindIndicators(symbol string, pool market.DataPool) {
-	k.MainLogic.BindIndicators(symbol, pool)
 }
 
 func (k *KillSwitch) Evaluate(input StrategyInput) brain.Signal {

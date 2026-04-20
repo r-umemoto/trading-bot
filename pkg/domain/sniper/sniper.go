@@ -9,10 +9,8 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 )
 
-// すべての戦略が満たすべき頭脳の規格
 type Strategy interface {
 	Evaluate(input strategy.StrategyInput) brain.Signal
-	BindIndicators(symbol string, pool market.DataPool)
 }
 
 // ★ スナイパー内で定義する「オプショナルな機能」の規格
@@ -92,12 +90,13 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		averagePrice = totalExposure / float64(freeQty)
 	}
 
+	state := dataPool.GetState(s.Symbol)
 	input := strategy.StrategyInput{
 		Symbol:        s.Symbol,
 		HoldQty:       freeQty,
 		AveragePrice:  averagePrice,
 		TotalExposure: totalExposure,
-		DataPool:      dataPool,
+		LatestTick:    state.LatestTick,
 	}
 
 	// 1. 頭脳に価格を渡して判断を仰ぐ
