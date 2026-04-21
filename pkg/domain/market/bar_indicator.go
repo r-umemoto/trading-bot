@@ -95,3 +95,7 @@ func (i *OneMinBarIndicator) Bars() []Bar {
 	}
 	return result
 }
+
+func (i *OneMinBarIndicator) Dependencies() []Indicator {
+	return nil
+}

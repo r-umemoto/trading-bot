@@ -6,6 +6,8 @@ type Indicator interface {
 	ID() string
 	// Update は新しいTickデータを受け取り、内部状態を更新します
 	Update(tick Tick)
+	// Dependencies は、この指標が依存している他の指標のリストを返します（無い場合はnil）
+	Dependencies() []Indicator
 }
 
 // StaticFloatIndicator は、外部から値をセットされる静的な指標です（例: 前日からのSMAなど、Tickで更新されないもの）
@@ -35,4 +37,8 @@ func (i *StaticFloatIndicator) Value() interface{} {
 
 func (i *StaticFloatIndicator) SetValue(val float64) {
 	i.value = val
+}
+
+func (i *StaticFloatIndicator) Dependencies() []Indicator {
+	return nil
 }

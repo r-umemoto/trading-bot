@@ -2,6 +2,7 @@
 package market
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -62,19 +63,21 @@ type DataPool interface {
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
 type DefaultDataPool struct {
-	states       map[string]MarketState
-	calcStates   map[string]*calculator.SigmaCalculator
-	fiveMinCalcs map[string]*calculator.FiveMinCalculator
-	indicators   map[string]map[string]Indicator // symbol -> id -> Indicator
-	mu           sync.RWMutex
+	states          map[string]MarketState
+	calcStates      map[string]*calculator.SigmaCalculator
+	fiveMinCalcs    map[string]*calculator.FiveMinCalculator
+	indicators      map[string]map[string]Indicator // symbol -> id -> Indicator
+	indicatorsOrder map[string][]Indicator          // symbol -> 登録順のIndicatorリスト（決定論的なUpdate順序を保証）
+	mu              sync.RWMutex
 }
 
 func NewDefaultDataPool() *DefaultDataPool {
 	return &DefaultDataPool{
-		states:       make(map[string]MarketState),
-		calcStates:   make(map[string]*calculator.SigmaCalculator),
-		fiveMinCalcs: make(map[string]*calculator.FiveMinCalculator),
-		indicators:   make(map[string]map[string]Indicator),
+		states:          make(map[string]MarketState),
+		calcStates:      make(map[string]*calculator.SigmaCalculator),
+		fiveMinCalcs:    make(map[string]*calculator.FiveMinCalculator),
+		indicators:      make(map[string]map[string]Indicator),
+		indicatorsOrder: make(map[string][]Indicator),
 	}
 }
 
@@ -112,8 +115,8 @@ func (a *DefaultDataPool) PushTick(tick Tick) {
 	}
 	fiveMinCalc.Update(tick.Price, tick.TradingVolume, tick.CurrentPriceTime)
 
-	// 登録されている汎用指標があればすべて更新
-	for _, ind := range a.indicators[tick.Symbol] {
+	// 登録されている順序で汎用指標をすべて更新する（順序不定による1Tick遅延バグを防止）
+	for _, ind := range a.indicatorsOrder[tick.Symbol] {
 		ind.Update(tick)
 	}
 }
@@ -183,5 +186,54 @@ func (a *DefaultDataPool) GetOrCreateIndicator(symbol, id string, factory func()
 
 	newInd := factory()
 	a.indicators[symbol][id] = newInd
+	
+	// 依存関係に基づいてトポロジカルソートを実行し、決定論的な更新順序を保証する
+	a.rebuildOrder(symbol)
+	
 	return newInd
+}
+
+// rebuildOrder はシンボル内の全インジケーターの依存グラフを解析し、
+// 依存先が必ず先に更新されるように indicatorsOrder を再構築します（トポロジカルソート）
+func (a *DefaultDataPool) rebuildOrder(symbol string) {
+	indicators := a.indicators[symbol]
+
+	var order []Indicator
+	visited := make(map[string]bool)
+	inProgress := make(map[string]bool)
+
+	var visit func(ind Indicator) error
+	visit = func(ind Indicator) error {
+		if inProgress[ind.ID()] {
+			return fmt.Errorf("circular dependency detected involving %s", ind.ID())
+		}
+		if visited[ind.ID()] {
+			return nil
+		}
+		inProgress[ind.ID()] = true
+
+		for _, dep := range ind.Dependencies() {
+			if dep != nil {
+				if err := visit(dep); err != nil {
+					return err
+				}
+			}
+		}
+
+		inProgress[ind.ID()] = false
+		visited[ind.ID()] = true
+		order = append(order, ind)
+		return nil
+	}
+
+	for _, ind := range indicators {
+		if !visited[ind.ID()] {
+			if err := visit(ind); err != nil {
+				// 循環参照などの致命的な設計エラーは、沈黙させずにPanicさせて開発者に直させる
+				panic(fmt.Sprintf("Fatal: Indicator TopoSort failed for %s: %v", symbol, err))
+			}
+		}
+	}
+
+	a.indicatorsOrder[symbol] = order
 }
