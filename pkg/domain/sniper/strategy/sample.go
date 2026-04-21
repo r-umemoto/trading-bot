@@ -17,15 +17,6 @@ type SampleStrategy struct {
 	highPrice float64
 }
 
-func NewSampleStrategy(oneMinBar *market.OneMinBarIndicator) Strategy {
-	return &SampleStrategy{
-		state: StrategyState{
-			count: 0,
-		},
-		oneMinBar: oneMinBar,
-	}
-}
-
 // Evaluate is purely functional
 func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 
@@ -92,7 +83,12 @@ func (f *SimpleStrategyFactory) NewStrategy(symbol string, dataPool market.DataP
 		return market.NewOneMinBarIndicator("1min_bar")
 	}).(*market.OneMinBarIndicator)
 
-	return NewSampleStrategy(oneMinBar)
+	return &SampleStrategy{
+		state: StrategyState{
+			count: 0,
+		},
+		oneMinBar: oneMinBar,
+	}
 }
 
 func init() {
