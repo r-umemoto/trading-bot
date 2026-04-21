@@ -174,17 +174,28 @@ func (a *DefaultDataPool) GetCurrentFiveMinVWAP(symbol string) float64 {
 // GetOrCreateIndicator は指定した銘柄とIDの指標を取得し、無ければ生成して登録します
 func (a *DefaultDataPool) GetOrCreateIndicator(symbol, id string, factory func() Indicator) Indicator {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	if _, exists := a.indicators[symbol]; !exists {
 		a.indicators[symbol] = make(map[string]Indicator)
 	}
 
 	if ind, exists := a.indicators[symbol][id]; exists {
+		a.mu.Unlock()
 		return ind
 	}
 
+	// ファクトリー関数の中でさらに GetOrCreateIndicator が呼ばれた場合（複合インジケーターなど）に
+	// デッドロックするのを防ぐため、一旦ロックを解除してからファクトリーを実行する（Double-Checked Locking）
+	a.mu.Unlock()
 	newInd := factory()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// ロック解除中に別のゴルーチンが作成していた場合の再チェック
+	if ind, exists := a.indicators[symbol][id]; exists {
+		return ind
+	}
+
 	a.indicators[symbol][id] = newInd
 	
 	// 依存関係に基づいてトポロジカルソートを実行し、決定論的な更新順序を保証する
