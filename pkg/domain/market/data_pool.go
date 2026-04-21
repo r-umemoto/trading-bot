@@ -48,85 +48,110 @@ type DataPool interface {
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
 type DefaultDataPool struct {
-	states          map[string]MarketState
-	indicators      map[string]map[string]Indicator // symbol -> id -> Indicator
-	indicatorsOrder map[string][]Indicator          // symbol -> 登録順のIndicatorリスト（決定論的なUpdate順序を保証）
+	symbols map[string]*symbolData
+	mu      sync.RWMutex // symbols マップ自体の操作（新しい銘柄の登録時）を保護
+}
+
+// symbolData は銘柄ごとのデータを保持し、個別にロックを制御します
+type symbolData struct {
+	state           MarketState
+	indicators      map[string]Indicator // id -> Indicator
+	indicatorsOrder []Indicator          // 登録順のIndicatorリスト
 	mu              sync.RWMutex
+}
+
+func newSymbolData(symbol string) *symbolData {
+	return &symbolData{
+		state:      MarketState{Symbol: symbol},
+		indicators: make(map[string]Indicator),
+	}
 }
 
 func NewDefaultDataPool() *DefaultDataPool {
 	return &DefaultDataPool{
-		states:          make(map[string]MarketState),
-		indicators:      make(map[string]map[string]Indicator),
-		indicatorsOrder: make(map[string][]Indicator),
+		symbols: make(map[string]*symbolData),
 	}
+}
+
+func (a *DefaultDataPool) getOrCreateSymbolData(symbol string) *symbolData {
+	a.mu.RLock()
+	data, exists := a.symbols[symbol]
+	a.mu.RUnlock()
+
+	if exists {
+		return data
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Double check
+	if data, exists = a.symbols[symbol]; exists {
+		return data
+	}
+
+	data = newSymbolData(symbol)
+	a.symbols[symbol] = data
+	return data
 }
 
 // PushTick は新しいTickデータを受け取り、内部のデータプールを更新します
 func (a *DefaultDataPool) PushTick(tick Tick) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// 1. 公開用状態の取得・初期化
-	state, exists := a.states[tick.Symbol]
-	if !exists {
-		state = MarketState{Symbol: tick.Symbol}
-	}
+	data := a.getOrCreateSymbolData(tick.Symbol)
+	data.mu.Lock()
+	defer data.mu.Unlock()
 
 	// 最新のTickを保持
-	state.LatestTick = tick
-	a.states[tick.Symbol] = state
+	data.state.LatestTick = tick
 
-	// 登録されている順序で汎用指標をすべて更新する（順序不定による1Tick遅延バグを防止）
-	for _, ind := range a.indicatorsOrder[tick.Symbol] {
+	// 登録されている順序で汎用指標をすべて更新する
+	for _, ind := range data.indicatorsOrder {
 		ind.Update(tick)
 	}
 }
 
 // GetState は指定銘柄の最新の市場状態を返します
 func (a *DefaultDataPool) GetState(symbol string) MarketState {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.states[symbol] // 存在しない場合はゼロ値の構造体が返ります
+	data := a.getOrCreateSymbolData(symbol)
+	data.mu.RLock()
+	defer data.mu.RUnlock()
+	return data.state
 }
 
 // GetOrCreateIndicator は指定した銘柄とIDの指標を取得し、無ければ生成して登録します
 func (a *DefaultDataPool) GetOrCreateIndicator(symbol, id string, factory func() Indicator) Indicator {
-	a.mu.Lock()
+	data := a.getOrCreateSymbolData(symbol)
 
-	if _, exists := a.indicators[symbol]; !exists {
-		a.indicators[symbol] = make(map[string]Indicator)
-	}
-
-	if ind, exists := a.indicators[symbol][id]; exists {
-		a.mu.Unlock()
+	data.mu.Lock()
+	if ind, exists := data.indicators[id]; exists {
+		data.mu.Unlock()
 		return ind
 	}
 
 	// ファクトリー関数の中でさらに GetOrCreateIndicator が呼ばれた場合（複合インジケーターなど）に
 	// デッドロックするのを防ぐため、一旦ロックを解除してからファクトリーを実行する（Double-Checked Locking）
-	a.mu.Unlock()
+	data.mu.Unlock()
 	newInd := factory()
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	data.mu.Lock()
+	defer data.mu.Unlock()
 
 	// ロック解除中に別のゴルーチンが作成していた場合の再チェック
-	if ind, exists := a.indicators[symbol][id]; exists {
+	if ind, exists := data.indicators[id]; exists {
 		return ind
 	}
 
-	a.indicators[symbol][id] = newInd
+	data.indicators[id] = newInd
 
 	// 依存関係に基づいてトポロジカルソートを実行し、決定論的な更新順序を保証する
-	a.rebuildOrder(symbol)
+	data.rebuildOrder()
 
 	return newInd
 }
 
 // rebuildOrder はシンボル内の全インジケーターの依存グラフを解析し、
 // 依存先が必ず先に更新されるように indicatorsOrder を再構築します（トポロジカルソート）
-func (a *DefaultDataPool) rebuildOrder(symbol string) {
-	indicators := a.indicators[symbol]
+func (s *symbolData) rebuildOrder() {
+	indicators := s.indicators
 
 	var order []Indicator
 	visited := make(map[string]bool)
@@ -160,10 +185,10 @@ func (a *DefaultDataPool) rebuildOrder(symbol string) {
 		if !visited[ind.ID()] {
 			if err := visit(ind); err != nil {
 				// 循環参照などの致命的な設計エラーは、沈黙させずにPanicさせて開発者に直させる
-				panic(fmt.Sprintf("Fatal: Indicator TopoSort failed for %s: %v", symbol, err))
+				panic(fmt.Sprintf("Fatal: Indicator TopoSort failed for %s: %v", s.state.Symbol, err))
 			}
 		}
 	}
 
-	a.indicatorsOrder[symbol] = order
+	s.indicatorsOrder = order
 }
