@@ -77,7 +77,25 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 		}
 	}
 
-	return brain.Signal{
-		Action: brain.ACTION_HOLD,
-	}
+	return brain.Signal{Action: brain.ACTION_HOLD}
+}
+
+// ----------------------------------------------------------------------------
+// Factory & Registration
+// ----------------------------------------------------------------------------
+
+type SimpleStrategyFactory struct{}
+
+func (f *SimpleStrategyFactory) NewStrategy(symbol string, dataPool market.DataPool) Strategy {
+	// Sample戦略が必要とするインジケーター（1分足）をDataPoolに要求・生成する
+	oneMinBar := dataPool.GetOrCreateIndicator(symbol, "1min_bar", func() market.Indicator {
+		return market.NewOneMinBarIndicator("1min_bar")
+	}).(*market.OneMinBarIndicator)
+
+	return NewSampleStrategy(oneMinBar)
+}
+
+func init() {
+	// "sample" という名前でこのファクトリをシステム全体に登録する
+	Register("sample", &SimpleStrategyFactory{})
 }

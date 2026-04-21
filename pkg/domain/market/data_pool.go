@@ -57,7 +57,7 @@ type DataPool interface {
 	GetFiveMinSummaries(symbol string) []calculator.FiveMinSummary
 	GetCurrentFiveMinVWAP(symbol string) float64
 
-	// 新規汎用指標システム
+	// 新規汎用指標システム Indicatorをシングルトンで管理する
 	GetOrCreateIndicator(symbol, id string, factory func() Indicator) Indicator
 }
 
@@ -197,10 +197,10 @@ func (a *DefaultDataPool) GetOrCreateIndicator(symbol, id string, factory func()
 	}
 
 	a.indicators[symbol][id] = newInd
-	
+
 	// 依存関係に基づいてトポロジカルソートを実行し、決定論的な更新順序を保証する
 	a.rebuildOrder(symbol)
-	
+
 	return newInd
 }
 
