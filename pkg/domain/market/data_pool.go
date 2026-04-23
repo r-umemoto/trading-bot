@@ -50,6 +50,18 @@ type Tick struct {
 	UnderBuyQty        float64 // UNDER気配数量
 }
 
+// IsExecution は「今、取引が行われたか」を判定します
+func (t Tick) IsExecution() bool {
+	// 1:現値, 3:寄付, 4:前引, 5:大引
+	statusMatch := t.CurrentPriceStatus == 1 ||
+		t.CurrentPriceStatus == 3 ||
+		t.CurrentPriceStatus == 4 ||
+		t.CurrentPriceStatus == 5
+
+	// 価格と出来高が正であることも含めて「約定」と定義する
+	return statusMatch && t.Price > 0 && t.TradingVolume > 0
+}
+
 func NewTick(
 	symbol string,
 	price float64,
