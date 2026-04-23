@@ -37,7 +37,13 @@ type Tick struct {
 	SellBoard []Quote
 	BuyBoard  []Quote
 
-	// 集計・その他
+	// 現在値ステータス・比較
+	CurrentPriceStatus       int    // 現値ステータス
+	CurrentPriceChangeStatus string // 現値前値比較
+
+	// 四本値・集計
+	OpeningPrice       float64 // 始値
+	TradingValue       float64 // 売買代金
 	MarketOrderSellQty float64 // 売成行数量
 	MarketOrderBuyQty  float64 // 買成行数量
 	OverSellQty        float64 // OVER気配数量
@@ -54,25 +60,33 @@ func NewTick(
 	bestBid FirstQuote,
 	sellBoard []Quote,
 	buyBoard []Quote,
+	currentPriceStatus int,
+	currentPriceChangeStatus string,
+	openingPrice float64,
+	tradingValue float64,
 	marketOrderSellQty float64,
 	marketOrderBuyQty float64,
 	overSellQty float64,
 	underBuyQty float64,
 ) Tick {
 	return Tick{
-		Symbol:             symbol,
-		Price:              price,
-		VWAP:               vwap,
-		TradingVolume:      tradingVolume,
-		CurrentPriceTime:   currentPriceTime,
-		BestAsk:            bestAsk,
-		BestBid:            bestBid,
-		SellBoard:          sellBoard,
-		BuyBoard:           buyBoard,
-		MarketOrderSellQty: marketOrderSellQty,
-		MarketOrderBuyQty:  marketOrderBuyQty,
-		OverSellQty:        overSellQty,
-		UnderBuyQty:        underBuyQty,
+		Symbol:                   symbol,
+		Price:                    price,
+		VWAP:                     vwap,
+		TradingVolume:            tradingVolume,
+		CurrentPriceTime:         currentPriceTime,
+		BestAsk:                  bestAsk,
+		BestBid:                  bestBid,
+		SellBoard:                sellBoard,
+		BuyBoard:                 buyBoard,
+		CurrentPriceStatus:       currentPriceStatus,
+		CurrentPriceChangeStatus: currentPriceChangeStatus,
+		OpeningPrice:             openingPrice,
+		TradingValue:             tradingValue,
+		MarketOrderSellQty:       marketOrderSellQty,
+		MarketOrderBuyQty:        marketOrderBuyQty,
+		OverSellQty:              overSellQty,
+		UnderBuyQty:              underBuyQty,
 	}
 }
 
