@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -22,14 +21,9 @@ func NewWSClient(url string) *WSClient {
 	}
 }
 
-type PushMessage struct {
-	Symbol           string    `json:"Symbol"`
-	SymbolName       string    `json:"SymbolName"`
-	CurrentPrice     float64   `json:"CurrentPrice"`
-	VWAP             float64   `json:"VWAP"`
-	TradingVolume    float64   `json:"TradingVolume"`    // 売買高
-	CurrentPriceTime time.Time `json:"CurrentPriceTime"` // 現値時刻
-}
+// PushMessage はWebSocket経由で受信する時価・板情報メッセージです
+// REST APIの BoardResponse と共通の構造を持ちます
+type PushMessage BoardResponse
 
 // Listen はサーバーに接続し、受信したデータをチャネル(ch)に流し続けます。
 // この関数はGoroutineで非同期に実行されることを想定しています。
