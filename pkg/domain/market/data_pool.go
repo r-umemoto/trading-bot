@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+// Quote は板の各気配情報（値段と数量）を表します
+type Quote struct {
+	Price float64
+	Qty   float64
+}
+
+// FirstQuote は最良気配の情報（値段、数量、時刻、フラグ）を表します
+type FirstQuote struct {
+	Price float64
+	Qty   float64
+	Time  time.Time
+	Sign  string
+}
+
 // Tick 価格変動で発生するイベント
 type Tick struct {
 	Symbol           string
@@ -14,15 +28,51 @@ type Tick struct {
 	VWAP             float64
 	TradingVolume    float64   // 売買高
 	CurrentPriceTime time.Time // 現値時刻
+
+	// 最良気配 (売り・買い)
+	BestAsk FirstQuote // 最良売気配 (Sell1)
+	BestBid FirstQuote // 最良買気配 (Buy1)
+
+	// 板情報 (10本目まで)
+	SellBoard []Quote
+	BuyBoard  []Quote
+
+	// 集計・その他
+	MarketOrderSellQty float64 // 売成行数量
+	MarketOrderBuyQty  float64 // 買成行数量
+	OverSellQty        float64 // OVER気配数量
+	UnderBuyQty        float64 // UNDER気配数量
 }
 
-func NewTick(symbol string, price float64, vwap float64, tradingVolume float64, currentPriceTime time.Time) Tick {
+func NewTick(
+	symbol string,
+	price float64,
+	vwap float64,
+	tradingVolume float64,
+	currentPriceTime time.Time,
+	bestAsk FirstQuote,
+	bestBid FirstQuote,
+	sellBoard []Quote,
+	buyBoard []Quote,
+	marketOrderSellQty float64,
+	marketOrderBuyQty float64,
+	overSellQty float64,
+	underBuyQty float64,
+) Tick {
 	return Tick{
-		Symbol:           symbol,
-		Price:            price,
-		VWAP:             vwap,
-		TradingVolume:    tradingVolume,
-		CurrentPriceTime: currentPriceTime,
+		Symbol:             symbol,
+		Price:              price,
+		VWAP:               vwap,
+		TradingVolume:      tradingVolume,
+		CurrentPriceTime:   currentPriceTime,
+		BestAsk:            bestAsk,
+		BestBid:            bestBid,
+		SellBoard:          sellBoard,
+		BuyBoard:           buyBoard,
+		MarketOrderSellQty: marketOrderSellQty,
+		MarketOrderBuyQty:  marketOrderBuyQty,
+		OverSellQty:        overSellQty,
+		UnderBuyQty:        underBuyQty,
 	}
 }
 

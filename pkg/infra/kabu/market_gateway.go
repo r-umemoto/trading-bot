@@ -305,12 +305,56 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 				// システム終了時は安全にゴルーチンを抜ける
 				return
 			case msg := <-rawCh:
+				// 板情報を集約
+				sellBoard := []market.Quote{
+					{Price: msg.Sell1.Price, Qty: msg.Sell1.Qty},
+					{Price: msg.Sell2.Price, Qty: msg.Sell2.Qty},
+					{Price: msg.Sell3.Price, Qty: msg.Sell3.Qty},
+					{Price: msg.Sell4.Price, Qty: msg.Sell4.Qty},
+					{Price: msg.Sell5.Price, Qty: msg.Sell5.Qty},
+					{Price: msg.Sell6.Price, Qty: msg.Sell6.Qty},
+					{Price: msg.Sell7.Price, Qty: msg.Sell7.Qty},
+					{Price: msg.Sell8.Price, Qty: msg.Sell8.Qty},
+					{Price: msg.Sell9.Price, Qty: msg.Sell9.Qty},
+					{Price: msg.Sell10.Price, Qty: msg.Sell10.Qty},
+				}
+				buyBoard := []market.Quote{
+					{Price: msg.Buy1.Price, Qty: msg.Buy1.Qty},
+					{Price: msg.Buy2.Price, Qty: msg.Buy2.Qty},
+					{Price: msg.Buy3.Price, Qty: msg.Buy3.Qty},
+					{Price: msg.Buy4.Price, Qty: msg.Buy4.Qty},
+					{Price: msg.Buy5.Price, Qty: msg.Buy5.Qty},
+					{Price: msg.Buy6.Price, Qty: msg.Buy6.Qty},
+					{Price: msg.Buy7.Price, Qty: msg.Buy7.Qty},
+					{Price: msg.Buy8.Price, Qty: msg.Buy8.Qty},
+					{Price: msg.Buy9.Price, Qty: msg.Buy9.Qty},
+					{Price: msg.Buy10.Price, Qty: msg.Buy10.Qty},
+				}
+
 				tick := market.NewTick(
 					msg.Symbol,
 					msg.CurrentPrice,
 					msg.VWAP,
 					msg.TradingVolume,
 					msg.CurrentPriceTime,
+					market.FirstQuote{
+						Price: msg.Sell1.Price,
+						Qty:   msg.Sell1.Qty,
+						Time:  msg.Sell1.Time,
+						Sign:  msg.Sell1.Sign,
+					},
+					market.FirstQuote{
+						Price: msg.Buy1.Price,
+						Qty:   msg.Buy1.Qty,
+						Time:  msg.Buy1.Time,
+						Sign:  msg.Buy1.Sign,
+					},
+					sellBoard,
+					buyBoard,
+					msg.MarketOrderSellQty,
+					msg.MarketOrderBuyQty,
+					msg.OverSellQty,
+					msg.UnderBuyQty,
 				)
 				logger.Log(tick)
 				tickCh <- tick
