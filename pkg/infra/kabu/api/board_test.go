@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
 )
 
 func TestBoardResponse_UnmarshalJSON(t *testing.T) {
@@ -83,7 +82,7 @@ func TestBoardResponse_UnmarshalJSON(t *testing.T) {
 	if resp.CurrentPrice != 2408.0 {
 		t.Errorf("Expected CurrentPrice 2408.0, got %f", resp.CurrentPrice)
 	}
-	
+
 	// Check time parsing
 	expectedTime, _ := time.Parse(time.RFC3339, "2022-04-04T15:00:00+09:00")
 	if !expectedTime.Equal(resp.CurrentPriceTime) {
@@ -111,7 +110,7 @@ func TestBoardResponse_UnmarshalJSON(t *testing.T) {
 	if resp.Buy1.Price != 2407.0 {
 		t.Errorf("Expected Buy1.Price 2407.0, got %f", resp.Buy1.Price)
 	}
-	
+
 	if resp.OverSellQty != 50000.0 {
 		t.Errorf("Expected OverSellQty 50000.0, got %f", resp.OverSellQty)
 	}

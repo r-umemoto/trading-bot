@@ -15,100 +15,37 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
-	"github.com/r-umemoto/trading-bot/pkg/engine"
 	"github.com/r-umemoto/trading-bot/pkg/infra/backtest"
+	"github.com/r-umemoto/trading-bot/pkg/portfolio"
 )
 
 func main() {
 	var csvPath string
 	flag.StringVar(&csvPath, "csv", "./data/all_20260409.csv", "バックテスト用CSVファイルのパス")
+	var portfolioPath string
+	flag.StringVar(&portfolioPath, "portfolio", "./configs/portfolio.json", "ポートフォリオJSONファイルのパス")
 	flag.Parse()
 
 	fmt.Printf("Private 戦略のバックテストを開始します... (データ: %s)\n", csvPath)
 
 	// 2. 監視銘柄（Sniper）のセットアップ
-	strategyName := "sample" // ← ここを実際の戦略名に書き換えてください
-	watchList := []engine.WatchTarget{
-		// 銀行・金融（単価が安く、うねりが比較的素直）
-		{Symbol: "8306", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mitsubishi ufj (約15万円)
-		{Symbol: "8411", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mizuho (約30万円)
-		{Symbol: "8308", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // resona (約10万円)
-		{Symbol: "7182", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // japan post bank (約15万円)
-		{Symbol: "7167", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mebuki fg (約6万円)
-		//{Symbol: "8332", StrategyName:strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // concordia fg (約8万円)
-		{Symbol: "8593", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mitsubishi hc capital (約10万円)
-		{Symbol: "8473", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // sbi (約30万円)
-		{Symbol: "8604", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // nomura (約9万円)
-		{Symbol: "8601", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // daiwa (約11万円)
-
-		// 通信・IT・サービス
-		{Symbol: "9432", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // ntt (約2万円)
-		{Symbol: "9434", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // softbank (約20万円)
-		{Symbol: "4689", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // ly corp / line (約4万円)
-		{Symbol: "4755", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // rakuten (約8万円)
-		{Symbol: "3659", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // nexon (約25万円)
-
-		// 自動車・輸送用機器
-		{Symbol: "7201", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // nissan (約6万円)
-		{Symbol: "7211", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mitsubishi motors (約5万円)
-		{Symbol: "7261", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mazda (約15万円)
-		{Symbol: "7272", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // yamaha motor (約13万円)
-		{Symbol: "7269", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // suzuki (約16万円)
-
-		// 鉄鋼・非鉄金属
-		{Symbol: "5406", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // kobe steel (約20万円)
-		{Symbol: "5411", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // jfe (約23万円)
-		{Symbol: "5401", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // nippon steel (約35万円)
-		{Symbol: "5711", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mitsubishi materials (約25万円)
-		{Symbol: "5802", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // sumitomo electric (約25万円)
-
-		// 化学・エネルギー
-		{Symbol: "4188", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mitsubishi chemical (約9万円)
-		{Symbol: "4005", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // sumitomo chemical (約4万円)
-		{Symbol: "3402", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // toray (約8万円)
-		{Symbol: "3407", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // asahi kasei (約11万円)
-		{Symbol: "4004", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // resonac (約35万円)
-		{Symbol: "5020", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // eneos (約8万円)
-		{Symbol: "5019", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // idemitsu (約10万円)
-
-		// 電機・精密
-		{Symbol: "6752", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // panasonic (約14万円)
-		{Symbol: "6753", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // sharp (約10万円)
-		{Symbol: "7752", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // ricoh (約13万円)
-		{Symbol: "6503", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mitsubishi electric (約25万円)
-		{Symbol: "7733", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // olympus (約22万円)
-
-		// 医薬品・食品
-		{Symbol: "4503", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // astellas (約16万円)
-		{Symbol: "2503", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // kirin (約22万円)
-		{Symbol: "2002", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // nisshin seifun (約18万円)
-
-		// 商社・小売
-		{Symbol: "8002", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // marubeni (約25万円)
-		{Symbol: "8053", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // sumitomo corp (約35万円)
-		{Symbol: "3382", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // seven & i (約20万円)
-		{Symbol: "3099", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // mitsukoshi isetan (約20万円)
-		{Symbol: "8267", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // aeon (約35万円)
-
-		// インフラ・建設
-		{Symbol: "9501", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // tepco (約8万円)
-		{Symbol: "9502", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // chubu electric (約19万円)
-		{Symbol: "9503", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // kansai electric (約25万円)
-		{Symbol: "1802", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // obayashi (約18万円)
-		{Symbol: "1803", StrategyName: strategyName, Exchange: market.EXCHANGE_TOSHO_PLUS}, // shimizu (約10万円)
+	targets, err := portfolio.LoadFromJSON(portfolioPath)
+	if err != nil {
+		log.Fatalf("ポートフォリオの読み込みに失敗しました: %v", err)
 	}
+	watchList := portfolio.BuildWatchList(targets)
 
 	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
 	gateway := backtest.NewBacktestGateway()
 	dataPool := market.NewDefaultDataPool()
 	tickCh, execCh, _ := gateway.Start(context.Background())
 
-	factory, err := strategy.GetFactory(strategyName)
-	if err != nil {
-		log.Fatalf("戦略が見つかりません: %v", err)
-	}
 	var snipers []*sniper.Sniper
 	for _, sym := range watchList {
+		factory, err := strategy.GetFactory(sym.StrategyName)
+		if err != nil {
+			log.Fatalf("戦略 '%s' が見つかりません: %v", sym.StrategyName, err)
+		}
 		s := sniper.NewSniper(sym.Symbol, factory.NewStrategy(sym.Symbol, dataPool), sym.Exchange)
 		snipers = append(snipers, s)
 	}

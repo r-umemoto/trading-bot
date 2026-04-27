@@ -9,8 +9,8 @@ import (
 	"syscall"
 
 	"github.com/r-umemoto/trading-bot/pkg/config"
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/engine"
+	"github.com/r-umemoto/trading-bot/pkg/portfolio"
 )
 
 func main() {
@@ -26,10 +26,18 @@ func main() {
 		log.Fatalf("❌ 設定の読み込みに失敗しました: %v", err)
 	}
 
-	// 3. アプリケーションの組み立て
-	watchList := []engine.WatchTarget{
-		{Symbol: "7201", StrategyName: "sample", Exchange: market.EXCHANGE_TOSHO_PLUS},
+	// 2. ポートフォリオの読み込み
+	portfolioPath := "configs/portfolio.json"
+	if p := os.Getenv("PORTFOLIO_PATH"); p != "" {
+		portfolioPath = p
 	}
+	targets, err := portfolio.LoadFromJSON(portfolioPath)
+	if err != nil {
+		log.Fatalf("❌ ポートフォリオの読み込みに失敗しました: %v", err)
+	}
+
+	// 3. アプリケーションの組み立て
+	watchList := portfolio.BuildWatchList(targets)
 	engine, err := engine.BuildEngine(cfg, watchList)
 	if err != nil {
 		log.Fatalf("❌ engineの組み立て失敗: %v", err)

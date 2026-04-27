@@ -1,0 +1,394 @@
+[
+  {
+    "symbol": "8306",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8411",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8308",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7182",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7167",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8593",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8473",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8604",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8601",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "9432",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "9434",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "4689",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "4755",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "3659",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7201",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7211",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7261",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7272",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7269",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "5406",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "5411",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "5401",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "5711",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "5802",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "4188",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "4005",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "3402",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "3407",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "4004",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "5020",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "5019",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "6752",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "6753",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7752",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "6503",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "7733",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "4503",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "2503",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "2002",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8002",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8053",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "3382",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "3099",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "8267",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "9501",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "9502",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "9503",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "1802",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  },
+  {
+    "symbol": "1803",
+    "exchange": 3,
+    "strategies": [
+      "sample"
+    ],
+    "sector": ""
+  }
+]
