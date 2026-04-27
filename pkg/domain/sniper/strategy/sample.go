@@ -20,6 +20,12 @@ type SampleStrategy struct {
 // Evaluate is purely functional
 func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 
+	if !input.LatestTick.IsExecution() {
+		return brain.Signal{
+			Action: brain.ACTION_HOLD,
+		}
+	}
+
 	if input.HoldQty > 0 {
 		curretPrice := input.LatestTick.Price
 		if s.highPrice == 0 {

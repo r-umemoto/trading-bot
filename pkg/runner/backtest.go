@@ -1,0 +1,245 @@
+package runner
+
+import (
+	"context"
+	"encoding/csv"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/service"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
+	"github.com/r-umemoto/trading-bot/pkg/infra/backtest"
+	"github.com/r-umemoto/trading-bot/pkg/portfolio"
+)
+
+// RunBacktest はバックテストの初期化と実行をカプセル化した関数です。
+func RunBacktest() error {
+	var csvPath string
+	flag.StringVar(&csvPath, "csv", "./data/all_20260409.csv", "バックテスト用CSVファイルのパス")
+	var portfolioPath string
+	flag.StringVar(&portfolioPath, "portfolio", "./configs/portfolio.json", "ポートフォリオJSONファイルのパス")
+	flag.Parse()
+
+	fmt.Printf("戦略のバックテストを開始します... (データ: %s)\n", csvPath)
+
+	// 2. 監視銘柄（Sniper）のセットアップ
+	targets, err := portfolio.LoadFromJSON(portfolioPath)
+	if err != nil {
+		return fmt.Errorf("ポートフォリオの読み込みに失敗しました: %w", err)
+	}
+	watchList := portfolio.BuildWatchList(targets)
+
+	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
+	gateway := backtest.NewBacktestGateway()
+	dataPool := market.NewDefaultDataPool()
+	tickCh, execCh, _ := gateway.Start(context.Background())
+
+	var snipers []*sniper.Sniper
+	for _, sym := range watchList {
+		factory, err := strategy.GetFactory(sym.StrategyName)
+		if err != nil {
+			return fmt.Errorf("戦略 '%s' が見つかりません: %w", sym.StrategyName, err)
+		}
+		s := sniper.NewSniper(sym.Symbol, factory.NewStrategy(sym.Symbol, dataPool), sym.Exchange)
+		snipers = append(snipers, s)
+	}
+
+	// PositionCleaner の起動 (Gatewayに依存するため)
+	_ = service.NewPositionCleaner(snipers, gateway)
+
+	// 5. Feederの準備
+	csvTickChan := make(chan market.Tick, 1000)
+
+	// Feederを別ゴルーチンで起動し、CSVの読み込みを開始
+	go func() {
+		if err := runCustomCSVFeeder(csvPath, csvTickChan); err != nil {
+			fmt.Printf("Feeder実行エラー: %v\n", err)
+		}
+	}()
+
+	tickCount := 0
+
+	// 6. メインループ
+	for tick := range csvTickChan {
+		tickCount++
+
+		gateway.ProcessTick(tick)
+
+		for len(execCh) > 0 {
+			report := <-execCh
+			for _, s := range snipers {
+				if s.Symbol == report.Symbol {
+					s.OnExecution(report)
+				}
+			}
+		}
+
+		t := <-tickCh
+
+		dataPool.PushTick(t)
+		for _, s := range snipers {
+			if s.Symbol == t.Symbol {
+				orderPtr, req := s.Tick(dataPool)
+				if req != nil {
+					orderID, err := gateway.SendOrder(context.Background(), *req)
+					if err != nil {
+						s.FailSendingOrder(orderPtr)
+					} else {
+						s.ConfirmOrder(orderPtr, orderID)
+					}
+				}
+			}
+		}
+
+		if tickCount%100000 == 0 {
+			fmt.Printf("%d件のTickを処理完了...\n", tickCount)
+		}
+	}
+
+	// 7. 取引終了後のクリーンアップ
+	ordersToMopUp, _ := gateway.GetOrders(context.Background())
+	fmt.Printf("クリーンアップ開始: 未約定の可能性がある注文数 %d件\n", len(ordersToMopUp))
+	for _, o := range ordersToMopUp {
+		if !o.IsCompleted() {
+			state := dataPool.GetState(o.Symbol)
+			if !state.LatestTick.CurrentPriceTime.IsZero() {
+				gateway.ProcessTick(state.LatestTick)
+				for len(execCh) > 0 {
+					report := <-execCh
+					for _, s := range snipers {
+						if s.Symbol == report.Symbol {
+							s.OnExecution(report)
+						}
+					}
+				}
+				<-tickCh
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	fmt.Printf("バックテスト完了: 総処理Tick数 %d件\n", tickCount)
+
+	// 結果の出力
+	positions, _ := gateway.GetPositions(context.Background(), market.PRODICT_CASH)
+	orders, _ := gateway.GetOrders(context.Background())
+	fmt.Println("=== バックテスト結果 ===")
+	for _, p := range positions {
+		fmt.Printf("最終建玉: 銘柄 %s, 数量 %.f\n", p.Symbol, p.LeavesQty)
+	}
+	fmt.Printf("総発注数: %d件\n", len(orders))
+
+	var realizedPnL float64
+	type PositionState struct {
+		Qty      float64
+		AvgPrice float64
+	}
+	posMap := make(map[string]*PositionState)
+
+	for _, o := range orders {
+		if !o.IsCompleted() {
+			continue
+		}
+
+		state, exists := posMap[o.Symbol]
+		if !exists {
+			state = &PositionState{}
+			posMap[o.Symbol] = state
+		}
+
+		if o.Action == market.ACTION_BUY {
+			totalCost := (state.Qty * state.AvgPrice) + (o.FilledQty() * o.AveragePrice())
+			state.Qty += o.FilledQty()
+			state.AvgPrice = totalCost / state.Qty
+		} else if o.Action == market.ACTION_SELL {
+			sellQty := o.FilledQty()
+			if state.Qty < sellQty {
+				sellQty = state.Qty
+			}
+
+			tradePnL := (o.AveragePrice() - state.AvgPrice) * sellQty
+			realizedPnL += tradePnL
+
+			state.Qty -= sellQty
+			if state.Qty <= 0 {
+				state.Qty = 0
+				state.AvgPrice = 0
+			}
+		}
+	}
+
+	var unrealizedPnL float64
+	for symbol, state := range posMap {
+		if state.Qty > 0 {
+			marketState := dataPool.GetState(symbol)
+			if !marketState.LatestTick.CurrentPriceTime.IsZero() {
+				latestPrice := marketState.LatestTick.Price
+				unrealized := (latestPrice - state.AvgPrice) * state.Qty
+				unrealizedPnL += unrealized
+			}
+		}
+	}
+
+	fmt.Printf("実現損益: %+.0f 円\n", realizedPnL)
+	fmt.Printf("含み損益: %+.0f 円\n", unrealizedPnL)
+	fmt.Printf("合計損益: %+.0f 円\n", realizedPnL+unrealizedPnL)
+
+	return nil
+}
+
+func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
+	file, err := os.Open(csvPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+
+	if _, err := reader.Read(); err != nil {
+		return err
+	}
+
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		parsedTime, _ := time.Parse("15:04:05.000", record[0])
+		price, _ := strconv.ParseFloat(record[2], 64)
+		volume, _ := strconv.ParseFloat(record[3], 64)
+		vwap, _ := strconv.ParseFloat(record[4], 64)
+		
+		status := 1
+		if len(record) > 9 {
+			if s, err := strconv.Atoi(record[9]); err == nil {
+				status = s
+			}
+		}
+
+		tick := market.Tick{
+			Symbol:             record[1],
+			Price:              price,
+			TradingVolume:      volume,
+			VWAP:               vwap,
+			CurrentPriceTime:   parsedTime,
+			CurrentPriceStatus: status,
+		}
+
+		tickChan <- tick
+	}
+
+	close(tickChan)
+	return nil
+}
