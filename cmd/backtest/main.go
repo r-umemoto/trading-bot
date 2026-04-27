@@ -237,19 +237,28 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 		}
 
 		// CSVの各カラムを元の型にパース
-		// フォーマット: "Time", "Symbol", "Price", "TradingVolume", "VWAP"
+		// フォーマット: "Time", "Symbol", "Price", "TradingVolume", "VWAP", ...
 		// 時刻を正しくパースしてセットすることで、条件クラス(UpTrend)で正しく動くようにする
 		parsedTime, _ := time.Parse("15:04:05.000", record[0])
 		price, _ := strconv.ParseFloat(record[2], 64)
 		volume, _ := strconv.ParseFloat(record[3], 64)
 		vwap, _ := strconv.ParseFloat(record[4], 64)
+		
+		// 新しく追加されたカラムから CurrentPriceStatus も取得する
+		status := 1 // デフォルト値 (1:現値)
+		if len(record) > 9 {
+			if s, err := strconv.Atoi(record[9]); err == nil {
+				status = s
+			}
+		}
 
 		tick := market.Tick{
-			Symbol:           record[1],
-			Price:            price,
-			TradingVolume:    volume,
-			VWAP:             vwap,
-			CurrentPriceTime: parsedTime, // ここが重要
+			Symbol:             record[1],
+			Price:              price,
+			TradingVolume:      volume,
+			VWAP:               vwap,
+			CurrentPriceTime:   parsedTime, // ここが重要
+			CurrentPriceStatus: status,
 		}
 
 		// バックテストエンジン（またはAnalyzer）に向けてTickを送信
