@@ -2,6 +2,8 @@ package market
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 )
 
 type Action string
@@ -53,6 +55,48 @@ const (
 	EXCHANGE_SOR                       // SOR
 	EXCHANGE_TOSHO_PLUS                // 東証
 )
+
+func (e ExchangeMarket) String() string {
+	switch e {
+	case EXCHANGE_TOSHO:
+		return "TOSHO"
+	case EXCHANGE_SOR:
+		return "SOR"
+	case EXCHANGE_TOSHO_PLUS:
+		return "TOSHO_PLUS"
+	default:
+		return "NONE"
+	}
+}
+
+func (e ExchangeMarket) MarshalJSON() ([]byte, error) {
+	return json.Marshal(e.String())
+}
+
+func (e *ExchangeMarket) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		// フォールバック: もし既存の数値形式(3など)が含まれていた場合のため
+		var i int
+		if err2 := json.Unmarshal(data, &i); err2 == nil {
+			*e = ExchangeMarket(i)
+			return nil
+		}
+		return err
+	}
+
+	switch strings.ToUpper(s) {
+	case "TOSHO":
+		*e = EXCHANGE_TOSHO
+	case "SOR":
+		*e = EXCHANGE_SOR
+	case "TOSHO_PLUS":
+		*e = EXCHANGE_TOSHO_PLUS
+	default:
+		*e = EXCHANGE_NONE
+	}
+	return nil
+}
 
 // これ間違えると手数料かかってくるから注意
 type MarginTradeType uint32

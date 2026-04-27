@@ -5,8 +5,6 @@ import (
 	"os"
 )
 
-
-
 // LoadFromJSON は、指定されたJSONファイルから監視銘柄リストを読み込みます。
 //
 // JSONファイルの形式例:
