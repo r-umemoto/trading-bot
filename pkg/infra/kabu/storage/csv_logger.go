@@ -40,7 +40,14 @@ func NewCSVLogger(symbol string, date string, outputDir string) (*CSVLogger, err
 	// ファイルが空（新規作成）の場合はヘッダーを書き込む
 	stat, _ := file.Stat()
 	if stat.Size() == 0 {
-		header := []string{"Time", "Symbol", "Price", "TradingVolume", "VWAP"}
+		header := []string{
+			"Time", "Symbol", "Price", "TradingVolume", "VWAP",
+			"BestAskPrice", "BestAskQty", "BestBidPrice", "BestBidQty",
+			"CurrentPriceStatus", "CurrentPriceChangeStatus",
+			"OpeningPrice", "TradingValue",
+			"MarketOrderSellQty", "MarketOrderBuyQty",
+			"OverSellQty", "UnderBuyQty",
+		}
 		writer.Write(header)
 		writer.Flush()
 	}
@@ -73,6 +80,18 @@ func (l *CSVLogger) startWriting() {
 			strconv.FormatFloat(tick.Price, 'f', -1, 64),
 			strconv.FormatFloat(tick.TradingVolume, 'f', -1, 64),
 			strconv.FormatFloat(tick.VWAP, 'f', -1, 64),
+			strconv.FormatFloat(tick.BestAsk.Price, 'f', -1, 64),
+			strconv.FormatFloat(tick.BestAsk.Qty, 'f', -1, 64),
+			strconv.FormatFloat(tick.BestBid.Price, 'f', -1, 64),
+			strconv.FormatFloat(tick.BestBid.Qty, 'f', -1, 64),
+			strconv.Itoa(tick.CurrentPriceStatus),
+			tick.CurrentPriceChangeStatus,
+			strconv.FormatFloat(tick.OpeningPrice, 'f', -1, 64),
+			strconv.FormatFloat(tick.TradingValue, 'f', -1, 64),
+			strconv.FormatFloat(tick.MarketOrderSellQty, 'f', -1, 64),
+			strconv.FormatFloat(tick.MarketOrderBuyQty, 'f', -1, 64),
+			strconv.FormatFloat(tick.OverSellQty, 'f', -1, 64),
+			strconv.FormatFloat(tick.UnderBuyQty, 'f', -1, 64),
 		}
 
 		l.writer.Write(record)
