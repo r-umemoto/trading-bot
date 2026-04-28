@@ -26,6 +26,10 @@ func NewKillSwitch(mainLogic Strategy, qty float64) Strategy {
 	}
 }
 
+func (k *KillSwitch) Name() string {
+	return "KillSwitch(" + k.MainLogic.Name() + ")"
+}
+
 // 外部（main.goのCtrl+Cなど）から手動でキルスイッチを起動する
 // 注: 状態を分離したため、どの銘柄のKillSwitchをActivateするかを指定する必要があります。
 // SniperがKillSwitchableを解釈する際にこのStateを渡すように設計変更が必要ですが、

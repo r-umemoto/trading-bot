@@ -6,6 +6,11 @@ import (
 	"fmt"
 )
 
+type ClosePosition struct {
+	HoldID string  `json:"HoldID"`
+	Qty    float64 `json:"Qty"`
+}
+
 // OrderRequest は新規・決済注文を発注するためのリクエストデータです
 // https://kabucom.github.io/kabusapi/reference/index.html#operation/sendorderPost
 type OrderRequest struct {
@@ -20,8 +25,9 @@ type OrderRequest struct {
 	Price              float64     `json:"Price"`              // 注文価格 (0: 成行)
 	ExpireDay          int         `json:"ExpireDay"`          // 注文有効期限 (0: 当日)
 	FrontOrderType     int32       `json:"FrontOrderType"`     // 執行条件 (10: 成行, 20: 指値)
-	DelivType          int32       `json:"DelivType"`          // 受渡区分 (0: 指定なし, 2: お預かり金, 3: Auマネーコネクト)
-	ClosePositionOrder int32       `json:"ClosePositionOrder"` // 決済順序
+	DelivType          int32           `json:"DelivType"`          // 受渡区分 (0: 指定なし, 2: お預かり金, 3: Auマネーコネクト)
+	ClosePositionOrder *int32           `json:"ClosePositionOrder,omitempty"` // 決済順序
+	ClosePositions     []ClosePosition `json:"ClosePositions,omitempty"` // 指定返済
 }
 
 // OrderResponse は発注後のレスポンスデータです

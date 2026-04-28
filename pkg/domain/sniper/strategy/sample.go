@@ -12,9 +12,14 @@ type StrategyState struct {
 
 // SampleStrategy はデータプールから直接指標を取得する戦略のサンプルです
 type SampleStrategy struct {
+	name      string
 	state     StrategyState
 	oneMinBar *market.OneMinBarIndicator
 	highPrice float64
+}
+
+func (s *SampleStrategy) Name() string {
+	return s.name
 }
 
 // Evaluate is purely functional
@@ -90,6 +95,7 @@ func (f *SimpleStrategyFactory) NewStrategy(symbol string, dataPool market.DataP
 	}).(*market.OneMinBarIndicator)
 
 	return &SampleStrategy{
+		name: "sample",
 		state: StrategyState{
 			count: 0,
 		},

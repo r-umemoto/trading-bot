@@ -10,6 +10,7 @@ import (
 )
 
 type Strategy interface {
+	Name() string
 	Evaluate(input strategy.StrategyInput) brain.Signal
 }
 
@@ -18,10 +19,19 @@ type KillSwitchable interface {
 	Activate() brain.Signal
 }
 
+type Performance struct {
+	Trades        int
+	Wins          int
+	Losses        int
+	RealizedPnL   float64
+	UnrealizedPnL float64
+}
+
 // Sniper は戦略とAPIクライアントを持ち、執行を担います
 type Sniper struct {
 	Symbol          string
 	positions       []market.Position
+	Performance     Performance // 🌟 追加
 	Strategy        Strategy
 	State           strategy.StrategyState // 👈 銘柄ごとの戦略ステート
 	Orders          []*market.Order
@@ -123,6 +133,25 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		orderType = signal.OrderType
 	}
 
+	var closePositions []market.ClosePosition
+	if marketAction == market.ACTION_SELL {
+		var remainingSellQty = signal.Quantity
+		for _, p := range s.positions {
+			if remainingSellQty <= 0 {
+				break
+			}
+			closeQty := p.LeavesQty
+			if closeQty > remainingSellQty {
+				closeQty = remainingSellQty
+			}
+			closePositions = append(closePositions, market.ClosePosition{
+				HoldID: p.ExecutionID,
+				Qty:    closeQty,
+			})
+			remainingSellQty -= closeQty
+		}
+	}
+
 	req := &market.OrderRequest{
 		Symbol:             s.Symbol,
 		Exchange:           s.Exchange,
@@ -131,7 +160,8 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
 		AccountType:        market.ACCOUNT_SPECIAL,
 		OrderType:          orderType,
-		ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
+		ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL, // Kabu APIにClosePositionsがあればこれが優先される
+		ClosePositions:     closePositions,                       // 🌟 指定返済
 		Qty:                signal.Quantity,
 		Price:              signal.Price,
 	}
@@ -180,8 +210,8 @@ func (s *Sniper) ForceExit() {
 	}
 }
 
-// reducePositions は、指定された数量分だけ古い建玉から順に削減します
-func (s *Sniper) reducePositions(sellQty float64) {
+// reducePositions は、指定された数量分だけ古い建玉から順に削減し、損益を計算します
+func (s *Sniper) reducePositions(sellQty float64, sellPrice float64) {
 	remainingToSell := sellQty
 	var newPositions []market.Position
 
@@ -190,6 +220,21 @@ func (s *Sniper) reducePositions(sellQty float64) {
 			// 売却分を消化しきったら、残りの建玉はそのまま保持リストへ
 			newPositions = append(newPositions, p)
 			continue
+		}
+
+		closeQty := p.LeavesQty
+		if closeQty > remainingToSell {
+			closeQty = remainingToSell
+		}
+
+		// 🌟 損益計算
+		tradePnL := (sellPrice - p.Price) * closeQty
+		s.Performance.RealizedPnL += tradePnL
+		s.Performance.Trades++
+		if tradePnL > 0 {
+			s.Performance.Wins++
+		} else if tradePnL < 0 {
+			s.Performance.Losses++
 		}
 
 		if p.LeavesQty <= remainingToSell {
@@ -206,6 +251,18 @@ func (s *Sniper) reducePositions(sellQty float64) {
 
 	// 更新された建玉リストで上書き
 	s.positions = newPositions
+}
+
+// CalcUnrealizedPnL は、現在の価格を基にスナイパーが保有する建玉の含み損益を計算します
+func (s *Sniper) CalcUnrealizedPnL(currentPrice float64) float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var unrealized float64
+	for _, p := range s.positions {
+		unrealized += (currentPrice - p.Price) * p.LeavesQty
+	}
+	return unrealized
 }
 
 // OnExecution は、証券会社から約定通知を受信した際に呼び出されます。担当する注文であればtrueを返します。
@@ -247,13 +304,14 @@ func (s *Sniper) OnExecution(report market.ExecutionReport) bool {
 	switch report.Action {
 	case market.ACTION_BUY:
 		s.positions = append(s.positions, market.Position{
-			Symbol:    report.Symbol,
-			LeavesQty: report.Qty,
-			Price:     report.Price,
+			ExecutionID: report.ExecutionID,
+			Symbol:      report.Symbol,
+			LeavesQty:   report.Qty,
+			Price:       report.Price,
 		})
 		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Symbol, report.Price, report.Qty)
 	case market.ACTION_SELL:
-		s.reducePositions(report.Qty)
+		s.reducePositions(report.Qty, report.Price)
 		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Symbol, report.Qty)
 	}
 

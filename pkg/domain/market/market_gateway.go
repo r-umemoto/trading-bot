@@ -122,6 +122,11 @@ const (
 	CLOSE_POSITION_ASC_DAY_DEC_PL                    // 日付（古い順）、損益（高い順）
 )
 
+type ClosePosition struct {
+	HoldID string  // 返済対象の建玉（約定）ID
+	Qty    float64 // 返済数量
+}
+
 type OrderRequest struct {
 	Symbol             string
 	Exchange           ExchangeMarket
@@ -130,6 +135,7 @@ type OrderRequest struct {
 	MarginTradeType    MarginTradeType
 	AccountType        AccountType
 	ClosePositionOrder ClosePositionOrder
+	ClosePositions     []ClosePosition // 指定返済用
 	OrderType          OrderType
 	Qty                float64
 	Price              float64

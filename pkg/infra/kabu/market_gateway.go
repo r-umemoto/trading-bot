@@ -102,6 +102,21 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 		}
 	}
 
+	// APIへリクエスト
+	var closePositions []api.ClosePosition
+	for _, cp := range req.ClosePositions {
+		closePositions = append(closePositions, api.ClosePosition{
+			HoldID: cp.HoldID,
+			Qty:    cp.Qty,
+		})
+	}
+
+	var closePositionOrder *int32
+	if len(closePositions) == 0 {
+		val := int32(req.ClosePositionOrder)
+		closePositionOrder = &val
+	}
+
 	kabReq := api.OrderRequest{
 		Symbol:             req.Symbol,
 		Exchange:           m.toKabuExchageType(req.Exchange),
@@ -115,7 +130,8 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 		FrontOrderType:     int32(orderType),
 		Price:              req.Price,
 		DelivType:          int32(deliverType),
-		ClosePositionOrder: int32(req.ClosePositionOrder),
+		ClosePositionOrder: closePositionOrder,
+		ClosePositions:     closePositions,
 	}
 
 	fmt.Printf("発注完了 %+v\n", kabReq)

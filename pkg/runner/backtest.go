@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
@@ -130,66 +131,93 @@ func RunBacktest() error {
 	// 結果の出力
 	positions, _ := gateway.GetPositions(context.Background(), market.PRODICT_CASH)
 	orders, _ := gateway.GetOrders(context.Background())
-	fmt.Println("=== バックテスト結果 ===")
+	fmt.Println("\n=============================================")
+	fmt.Println("             バックテスト結果")
+	fmt.Println("=============================================")
 	for _, p := range positions {
 		fmt.Printf("最終建玉: 銘柄 %s, 数量 %.f\n", p.Symbol, p.LeavesQty)
 	}
 	fmt.Printf("総発注数: %d件\n", len(orders))
 
-	var realizedPnL float64
-	type PositionState struct {
-		Qty      float64
-		AvgPrice float64
-	}
-	posMap := make(map[string]*PositionState)
-
-	for _, o := range orders {
-		if !o.IsCompleted() {
-			continue
-		}
-
-		state, exists := posMap[o.Symbol]
-		if !exists {
-			state = &PositionState{}
-			posMap[o.Symbol] = state
-		}
-
-		if o.Action == market.ACTION_BUY {
-			totalCost := (state.Qty * state.AvgPrice) + (o.FilledQty() * o.AveragePrice())
-			state.Qty += o.FilledQty()
-			state.AvgPrice = totalCost / state.Qty
-		} else if o.Action == market.ACTION_SELL {
-			sellQty := o.FilledQty()
-			if state.Qty < sellQty {
-				sellQty = state.Qty
-			}
-
-			tradePnL := (o.AveragePrice() - state.AvgPrice) * sellQty
-			realizedPnL += tradePnL
-
-			state.Qty -= sellQty
-			if state.Qty <= 0 {
-				state.Qty = 0
-				state.AvgPrice = 0
-			}
-		}
+	type Performance struct {
+		Trades        int
+		Wins          int
+		Losses        int
+		RealizedPnL   float64
+		UnrealizedPnL float64
 	}
 
-	var unrealizedPnL float64
-	for symbol, state := range posMap {
-		if state.Qty > 0 {
-			marketState := dataPool.GetState(symbol)
-			if !marketState.LatestTick.CurrentPriceTime.IsZero() {
-				latestPrice := marketState.LatestTick.Price
-				unrealized := (latestPrice - state.AvgPrice) * state.Qty
-				unrealizedPnL += unrealized
-			}
+	// キー: "Symbol|StrategyName"
+	perfMap := make(map[string]*Performance)
+	symPerfMap := make(map[string]*Performance)
+	stratPerfMap := make(map[string]*Performance)
+	totalPerf := &Performance{}
+
+	for _, s := range snipers {
+		stratName := s.Strategy.Name()
+		key := s.Symbol + "|" + stratName
+
+		if perfMap[key] == nil {
+			perfMap[key] = &Performance{}
 		}
+		if symPerfMap[s.Symbol] == nil {
+			symPerfMap[s.Symbol] = &Performance{}
+		}
+		if stratPerfMap[stratName] == nil {
+			stratPerfMap[stratName] = &Performance{}
+		}
+
+		// 含み損益の計算
+		var unrealized float64
+		marketState := dataPool.GetState(s.Symbol)
+		if !marketState.LatestTick.CurrentPriceTime.IsZero() {
+			latestPrice := marketState.LatestTick.Price
+			unrealized = s.CalcUnrealizedPnL(latestPrice)
+		}
+
+		// 成績を集計
+		s.Performance.UnrealizedPnL = unrealized
+
+		updatePerf := func(p *Performance) {
+			p.Trades += s.Performance.Trades
+			p.Wins += s.Performance.Wins
+			p.Losses += s.Performance.Losses
+			p.RealizedPnL += s.Performance.RealizedPnL
+			p.UnrealizedPnL += s.Performance.UnrealizedPnL
+		}
+
+		updatePerf(perfMap[key])
+		updatePerf(symPerfMap[s.Symbol])
+		updatePerf(stratPerfMap[stratName])
+		updatePerf(totalPerf)
 	}
 
-	fmt.Printf("実現損益: %+.0f 円\n", realizedPnL)
-	fmt.Printf("含み損益: %+.0f 円\n", unrealizedPnL)
-	fmt.Printf("合計損益: %+.0f 円\n", realizedPnL+unrealizedPnL)
+	printPerf := func(name string, p *Performance) {
+		winRate := 0.0
+		if p.Trades > 0 {
+			winRate = float64(p.Wins) / float64(p.Trades) * 100
+		}
+		fmt.Printf("%-20s | 取引: %4d回 | 勝率: %5.1f%% (%4d勝 %4d敗) | 実現損益: %+10.0f 円 | 含み損益: %+10.0f 円 | 合計: %+10.0f 円\n",
+			name, p.Trades, winRate, p.Wins, p.Losses, p.RealizedPnL, p.UnrealizedPnL, p.RealizedPnL+p.UnrealizedPnL)
+	}
+
+	fmt.Println("\n=== 1. 全体成績 (Total Performance) ===")
+	printPerf("Total", totalPerf)
+
+	fmt.Println("\n=== 2. 銘柄別成績 (Performance by Symbol) ===")
+	for sym, p := range symPerfMap {
+		printPerf(sym, p)
+	}
+
+	fmt.Println("\n=== 3. ストラテジー別成績 (Performance by Strategy) ===")
+	for strat, p := range stratPerfMap {
+		printPerf(strat, p)
+	}
+
+	fmt.Println("\n=== 4. 銘柄 × ストラテジー相性 (Performance by Symbol + Strategy) ===")
+	for key, p := range perfMap {
+		printPerf(strings.Replace(key, "|", " x ", 1), p)
+	}
 
 	return nil
 }

@@ -17,5 +17,6 @@ type StrategyInput struct {
 }
 
 type Strategy interface {
+	Name() string
 	Evaluate(input StrategyInput) brain.Signal
 }
