@@ -141,7 +141,7 @@ func RunBacktest() error {
 
 	// 結果の出力
 	uc := usecase.NewTradeUseCase(snipers, gateway, dataPool)
-	uc.PrintPerformanceReport()
+	uc.PrintPerformanceReport(false)
 
 	return nil
 }

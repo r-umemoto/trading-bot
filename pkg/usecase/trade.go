@@ -3,9 +3,12 @@ package usecase
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
-
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
@@ -143,34 +146,36 @@ func (u *TradeUseCase) GetDataPool() market.DataPool {
 	return u.dataPool
 }
 
+type AggregatedPerformance struct {
+	Name          string
+	Trades        int
+	Wins          int
+	Losses        int
+	RealizedPnL   float64
+	UnrealizedPnL float64
+}
+
 // PrintPerformanceReport summarizes and prints the performance of all snipers.
-func (u *TradeUseCase) PrintPerformanceReport() {
-	type AggregatedPerformance struct {
-		Trades        int
-		Wins          int
-		Losses        int
-		RealizedPnL   float64
-		UnrealizedPnL float64
-	}
+func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 
 	// キー: "Symbol|StrategyName"
 	perfMap := make(map[string]*AggregatedPerformance)
 	symPerfMap := make(map[string]*AggregatedPerformance)
 	stratPerfMap := make(map[string]*AggregatedPerformance)
-	totalPerf := &AggregatedPerformance{}
+	totalPerf := &AggregatedPerformance{Name: "Total"}
 
 	for _, s := range u.snipers {
 		stratName := s.Strategy.Name()
 		key := s.Symbol + "|" + stratName
 
 		if perfMap[key] == nil {
-			perfMap[key] = &AggregatedPerformance{}
+			perfMap[key] = &AggregatedPerformance{Name: strings.Replace(key, "|", " x ", 1)}
 		}
 		if symPerfMap[s.Symbol] == nil {
-			symPerfMap[s.Symbol] = &AggregatedPerformance{}
+			symPerfMap[s.Symbol] = &AggregatedPerformance{Name: s.Symbol}
 		}
 		if stratPerfMap[stratName] == nil {
-			stratPerfMap[stratName] = &AggregatedPerformance{}
+			stratPerfMap[stratName] = &AggregatedPerformance{Name: stratName}
 		}
 
 		// 含み損益の計算
@@ -213,18 +218,70 @@ func (u *TradeUseCase) PrintPerformanceReport() {
 	printPerf("Total", totalPerf)
 
 	fmt.Println("\n=== 2. 銘柄別成績 (Performance by Symbol) ===")
-	for sym, p := range symPerfMap {
-		printPerf(sym, p)
+	for _, p := range symPerfMap {
+		printPerf(p.Name, p)
 	}
 
 	fmt.Println("\n=== 3. ストラテジー別成績 (Performance by Strategy) ===")
-	for strat, p := range stratPerfMap {
-		printPerf(strat, p)
+	for _, p := range stratPerfMap {
+		printPerf(p.Name, p)
 	}
 
 	fmt.Println("\n=== 4. 銘柄 × ストラテジー相性 (Performance by Symbol + Strategy) ===")
-	for key, p := range perfMap {
-		printPerf(strings.Replace(key, "|", " x ", 1), p)
+	for _, p := range perfMap {
+		printPerf(p.Name, p)
 	}
 	fmt.Println("=============================================")
+
+	if enableCSV {
+		u.saveToCSV(totalPerf, symPerfMap, stratPerfMap, perfMap)
+	}
+}
+
+func (u *TradeUseCase) saveToCSV(total *AggregatedPerformance, symbols map[string]*AggregatedPerformance, strats map[string]*AggregatedPerformance, combined map[string]*AggregatedPerformance) {
+	now := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("performance_%s.csv", now)
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Printf("❌ CSV作成失敗: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// ヘッダー
+	writer.Write([]string{"Type", "Name", "Trades", "Wins", "Losses", "WinRate", "RealizedPnL", "UnrealizedPnL", "TotalPnL"})
+
+	writeLine := func(t, name string, p *AggregatedPerformance) {
+		winRate := 0.0
+		if p.Trades > 0 {
+			winRate = float64(p.Wins) / float64(p.Trades) * 100
+		}
+		writer.Write([]string{
+			t,
+			name,
+			strconv.Itoa(p.Trades),
+			strconv.Itoa(p.Wins),
+			strconv.Itoa(p.Losses),
+			fmt.Sprintf("%.1f", winRate),
+			fmt.Sprintf("%.0f", p.RealizedPnL),
+			fmt.Sprintf("%.0f", p.UnrealizedPnL),
+			fmt.Sprintf("%.0f", p.RealizedPnL+p.UnrealizedPnL),
+		})
+	}
+
+	writeLine("Total", total.Name, total)
+	for _, p := range symbols {
+		writeLine("Symbol", p.Name, p)
+	}
+	for _, p := range strats {
+		writeLine("Strategy", p.Name, p)
+	}
+	for _, p := range combined {
+		writeLine("SymbolStrategy", p.Name, p)
+	}
+
+	fmt.Printf("💾 成績をCSVに保存しました: %s\n", filename)
 }

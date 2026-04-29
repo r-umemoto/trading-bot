@@ -80,6 +80,6 @@ Loop:
 	return e.cleaner.CleanAllPositions(ctx)
 }
 
-func (e *Engine) PrintReport() {
-	e.tradeUC.PrintPerformanceReport()
+func (e *Engine) PrintReport(enableCSV bool) {
+	e.tradeUC.PrintPerformanceReport(enableCSV)
 }
