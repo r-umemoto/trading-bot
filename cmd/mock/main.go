@@ -2,16 +2,26 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+var csvPath string
+
 func main() {
+	flag.StringVar(&csvPath, "csv", "", "配信用のCSVファイルパス")
+	flag.Parse()
+
 	// エンドポイントのルーティング
 	http.HandleFunc("/kabusapi/websocket", handleWebSocket)
 	http.HandleFunc("/kabusapi/token", handleToken)
@@ -22,8 +32,13 @@ func main() {
 	http.HandleFunc("/kabusapi/register", handleRegister)
 	http.HandleFunc("/kabusapi/unregister/all", handleUnregisterAll)
 
-	fmt.Println("[Mock] サーバー起動: モックkabuステーションがポート18082で待機中...")
-	if err := http.ListenAndServe(":18082", nil); err != nil {
+	port := ":18082"
+	fmt.Printf("[Mock] サーバー起動: ポート%sで待機中...\n", port)
+	if csvPath != "" {
+		fmt.Printf("[Mock] CSV配信モード: %s\n", csvPath)
+	}
+
+	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatal("サーバー起動エラー:", err)
 	}
 }
@@ -34,7 +49,7 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// 1. WebSocket配信用ハンドラー（以前と同じ）
+// 1. WebSocket配信用ハンドラー
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -44,6 +59,127 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	fmt.Println("[Mock] 🎯 ボットからのWebSocket接続を受け付けました！")
+
+	if csvPath != "" {
+		streamCSV(conn)
+		return
+	}
+
+	streamDummy(conn)
+}
+
+func streamCSV(conn *websocket.Conn) {
+	file, err := os.Open(csvPath)
+	if err != nil {
+		log.Printf("CSVファイルオープンエラー: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	// ヘッダーを飛ばす
+	if _, err := reader.Read(); err != nil {
+		return
+	}
+
+	var lastSecond string
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			log.Println("[Mock] CSV配信完了 (EOF)")
+			break
+		}
+		if err != nil {
+			log.Printf("CSV読み取りエラー: %v\n", err)
+			break
+		}
+
+		// 時刻(HH:MM:SS.mmm)から秒(HH:MM:SS)の部分を取り出す
+		currentTime := record[0]
+		currentSecond := currentTime
+		if len(currentTime) >= 8 {
+			currentSecond = currentTime[:8]
+		}
+
+		// 秒が変わったら1秒待機する
+		if lastSecond != "" && currentSecond != lastSecond {
+			time.Sleep(1 * time.Second)
+		}
+		lastSecond = currentSecond
+
+		// CSVレコードからJSONメッセージを組み立て
+		price, _ := strconv.ParseFloat(record[2], 64)
+		volume, _ := strconv.ParseFloat(record[3], 64)
+		vwap, _ := strconv.ParseFloat(record[4], 64)
+
+		msg := map[string]interface{}{
+			"Symbol":           record[1],
+			"CurrentPrice":     price,
+			"TradingVolume":    volume,
+			"VWAP":             vwap,
+			"CurrentPriceTime": time.Now().Format(time.RFC3339),
+		}
+
+		// 最良気配 (Sell1/Buy1)
+		if len(record) > 6 {
+			askPrice, _ := strconv.ParseFloat(record[5], 64)
+			askQty, _ := strconv.ParseFloat(record[6], 64)
+			msg["Sell1"] = map[string]interface{}{
+				"Price": askPrice,
+				"Qty":   askQty,
+			}
+		}
+		if len(record) > 8 {
+			bidPrice, _ := strconv.ParseFloat(record[7], 64)
+			bidQty, _ := strconv.ParseFloat(record[8], 64)
+			msg["Buy1"] = map[string]interface{}{
+				"Price": bidPrice,
+				"Qty":   bidQty,
+			}
+		}
+
+		// ステータス・四本値等
+		if len(record) > 9 {
+			status, _ := strconv.Atoi(record[9])
+			msg["CurrentPriceStatus"] = status
+		}
+		if len(record) > 10 {
+			msg["CurrentPriceChangeStatus"] = record[10]
+		}
+		if len(record) > 11 {
+			val, _ := strconv.ParseFloat(record[11], 64)
+			msg["OpeningPrice"] = val
+		}
+		if len(record) > 12 {
+			val, _ := strconv.ParseFloat(record[12], 64)
+			msg["TradingValue"] = val
+		}
+		if len(record) > 13 {
+			val, _ := strconv.ParseFloat(record[13], 64)
+			msg["MarketOrderSellQty"] = val
+		}
+		if len(record) > 14 {
+			val, _ := strconv.ParseFloat(record[14], 64)
+			msg["MarketOrderBuyQty"] = val
+		}
+		if len(record) > 15 {
+			val, _ := strconv.ParseFloat(record[15], 64)
+			msg["OverSellQty"] = val
+		}
+		if len(record) > 16 {
+			val, _ := strconv.ParseFloat(record[16], 64)
+			msg["UnderBuyQty"] = val
+		}
+
+		jsonData, _ := json.Marshal(msg)
+		if err := conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
+			break
+		}
+		fmt.Printf("🌊 モック相場(CSV): %s %s %.1f (Ask:%.1f, Bid:%.1f)\n", record[1], record[0], price, msg["Sell1"].(map[string]interface{})["Price"], msg["Buy1"].(map[string]interface{})["Price"])
+	}
+}
+
+func streamDummy(conn *websocket.Conn) {
 
 	// より現実的な変動をするモックの価格データ（数円〜数十円の範囲で動く）
 	priceWave := []float64{
