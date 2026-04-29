@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -239,9 +240,17 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 }
 
 func (u *TradeUseCase) saveToCSV(total *AggregatedPerformance, symbols map[string]*AggregatedPerformance, strats map[string]*AggregatedPerformance, combined map[string]*AggregatedPerformance) {
+	outputDir := "data"
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		fmt.Printf("❌ ディレクトリ作成失敗: %v\n", err)
+		return
+	}
+
 	now := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("performance_%s.csv", now)
-	file, err := os.Create(filename)
+	fullpath := filepath.Join(outputDir, filename)
+
+	file, err := os.Create(fullpath)
 	if err != nil {
 		fmt.Printf("❌ CSV作成失敗: %v\n", err)
 		return
@@ -283,5 +292,5 @@ func (u *TradeUseCase) saveToCSV(total *AggregatedPerformance, symbols map[strin
 		writeLine("SymbolStrategy", p.Name, p)
 	}
 
-	fmt.Printf("💾 成績をCSVに保存しました: %s\n", filename)
+	fmt.Printf("💾 成績をCSVに保存しました: %s\n", fullpath)
 }
