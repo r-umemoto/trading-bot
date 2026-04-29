@@ -48,5 +48,8 @@ func RunBot() error {
 		return fmt.Errorf("システム異常終了: %w", err)
 	}
 
+	// 6. 終了時に成績を表示
+	e.PrintReport()
+
 	return nil
 }

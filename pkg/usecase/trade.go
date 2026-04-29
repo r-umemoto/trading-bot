@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 
+	"strings"
+
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 )
@@ -131,4 +133,98 @@ func (u *TradeUseCase) processExecutionForSymbol(report market.ExecutionReport, 
 	if !handled {
 		fmt.Printf("⚠️ [%s] どのスナイパーにも属さない未知の注文ID(%s)の約定通知を受信しました\n", symbol, report.OrderID)
 	}
+}
+
+func (u *TradeUseCase) GetSnipers() []*sniper.Sniper {
+	return u.snipers
+}
+
+func (u *TradeUseCase) GetDataPool() market.DataPool {
+	return u.dataPool
+}
+
+// PrintPerformanceReport summarizes and prints the performance of all snipers.
+func (u *TradeUseCase) PrintPerformanceReport() {
+	type AggregatedPerformance struct {
+		Trades        int
+		Wins          int
+		Losses        int
+		RealizedPnL   float64
+		UnrealizedPnL float64
+	}
+
+	// キー: "Symbol|StrategyName"
+	perfMap := make(map[string]*AggregatedPerformance)
+	symPerfMap := make(map[string]*AggregatedPerformance)
+	stratPerfMap := make(map[string]*AggregatedPerformance)
+	totalPerf := &AggregatedPerformance{}
+
+	for _, s := range u.snipers {
+		stratName := s.Strategy.Name()
+		key := s.Symbol + "|" + stratName
+
+		if perfMap[key] == nil {
+			perfMap[key] = &AggregatedPerformance{}
+		}
+		if symPerfMap[s.Symbol] == nil {
+			symPerfMap[s.Symbol] = &AggregatedPerformance{}
+		}
+		if stratPerfMap[stratName] == nil {
+			stratPerfMap[stratName] = &AggregatedPerformance{}
+		}
+
+		// 含み損益の計算
+		var unrealized float64
+		marketState := u.dataPool.GetState(s.Symbol)
+		if !marketState.LatestTick.CurrentPriceTime.IsZero() {
+			latestPrice := marketState.LatestTick.Price
+			unrealized = s.CalcUnrealizedPnL(latestPrice)
+		}
+
+		// 成績を集計
+		updatePerf := func(p *AggregatedPerformance) {
+			p.Trades += s.Performance.Trades
+			p.Wins += s.Performance.Wins
+			p.Losses += s.Performance.Losses
+			p.RealizedPnL += s.Performance.RealizedPnL
+			p.UnrealizedPnL += unrealized // 最新の含み損益を使用
+		}
+
+		updatePerf(perfMap[key])
+		updatePerf(symPerfMap[s.Symbol])
+		updatePerf(stratPerfMap[stratName])
+		updatePerf(totalPerf)
+	}
+
+	printPerf := func(name string, p *AggregatedPerformance) {
+		winRate := 0.0
+		if p.Trades > 0 {
+			winRate = float64(p.Wins) / float64(p.Trades) * 100
+		}
+		fmt.Printf("%-20s | 取引: %4d回 | 勝率: %5.1f%% (%4d勝 %4d敗) | 実現損益: %+10.0f 円 | 含み損益: %+10.0f 円 | 合計: %+10.0f 円\n",
+			name, p.Trades, winRate, p.Wins, p.Losses, p.RealizedPnL, p.UnrealizedPnL, p.RealizedPnL+p.UnrealizedPnL)
+	}
+
+	fmt.Println("\n=============================================")
+	fmt.Println("             トレード成績サマリー")
+	fmt.Println("=============================================")
+
+	fmt.Println("\n=== 1. 全体成績 (Total Performance) ===")
+	printPerf("Total", totalPerf)
+
+	fmt.Println("\n=== 2. 銘柄別成績 (Performance by Symbol) ===")
+	for sym, p := range symPerfMap {
+		printPerf(sym, p)
+	}
+
+	fmt.Println("\n=== 3. ストラテジー別成績 (Performance by Strategy) ===")
+	for strat, p := range stratPerfMap {
+		printPerf(strat, p)
+	}
+
+	fmt.Println("\n=== 4. 銘柄 × ストラテジー相性 (Performance by Symbol + Strategy) ===")
+	for key, p := range perfMap {
+		printPerf(strings.Replace(key, "|", " x ", 1), p)
+	}
+	fmt.Println("=============================================")
 }

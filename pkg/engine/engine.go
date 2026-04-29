@@ -79,3 +79,7 @@ Loop:
 	// 5. ループを抜けた後の死に際の処理
 	return e.cleaner.CleanAllPositions(ctx)
 }
+
+func (e *Engine) PrintReport() {
+	e.tradeUC.PrintPerformanceReport()
+}
