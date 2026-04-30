@@ -45,11 +45,14 @@ func (m *MarketGateway) Start(ctx context.Context) (<-chan market.Tick, <-chan m
 
 // SendOrder は market.MarketGateway (Orderer) の実装です
 func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
-	side := api.SIDE_SELL // 売
-	cashMargin := 3       // 返却
+	side := api.SIDE_SELL
 	if req.Action == market.ACTION_BUY {
-		cashMargin = 2      // 新規
-		side = api.SIDE_BUY // 買
+		side = api.SIDE_BUY
+	}
+
+	cashMargin := 2 // デフォルトは「新規」
+	if req.ClosePositionOrder != market.CLOSE_POSITION_ORDER_NONE || len(req.ClosePositions) > 0 {
+		cashMargin = 3 // 返済指示があれば「返済」
 	}
 
 	AccountType := 0
@@ -112,7 +115,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 	}
 
 	var closePositionOrder *int32
-	if len(closePositions) == 0 {
+	if len(closePositions) == 0 && req.ClosePositionOrder != market.CLOSE_POSITION_ORDER_NONE {
 		val := int32(req.ClosePositionOrder)
 		closePositionOrder = &val
 	}

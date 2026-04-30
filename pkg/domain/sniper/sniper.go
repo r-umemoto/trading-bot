@@ -152,6 +152,11 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		}
 	}
 
+	closeOrder := market.CLOSE_POSITION_ORDER_NONE
+	if marketAction == market.ACTION_SELL && len(closePositions) == 0 {
+		closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
+	}
+
 	req := &market.OrderRequest{
 		Symbol:             s.Symbol,
 		Exchange:           s.Exchange,
@@ -160,8 +165,8 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
 		AccountType:        market.ACCOUNT_SPECIAL,
 		OrderType:          orderType,
-		ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL, // Kabu APIにClosePositionsがあればこれが優先される
-		ClosePositions:     closePositions,                       // 🌟 指定返済
+		ClosePositionOrder: closeOrder,     // ClosePositionsがない場合のみ指定
+		ClosePositions:     closePositions, // 🌟 指定返済
 		Qty:                signal.Quantity,
 		Price:              signal.Price,
 	}
