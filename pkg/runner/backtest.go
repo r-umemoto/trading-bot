@@ -39,7 +39,7 @@ func RunBacktest() error {
 	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
 	gateway := backtest.NewBacktestGateway()
 	dataPool := market.NewDefaultDataPool()
-	tickCh, execCh, _ := gateway.Start(context.Background())
+	tickCh, orderReportCh, _ := gateway.Start(context.Background())
 
 	var snipers []*sniper.Sniper
 	for _, sym := range watchList {
@@ -72,12 +72,10 @@ func RunBacktest() error {
 
 		gateway.ProcessTick(tick)
 
-		for len(execCh) > 0 {
-			report := <-execCh
+		for len(orderReportCh) > 0 {
+			report := <-orderReportCh
 			for _, s := range snipers {
-				if s.Symbol == report.Symbol {
-					s.OnExecution(report)
-				}
+				s.SyncOrders(report.Orders)
 			}
 		}
 
@@ -111,12 +109,10 @@ func RunBacktest() error {
 			state := dataPool.GetState(o.Symbol)
 			if !state.LatestTick.CurrentPriceTime.IsZero() {
 				gateway.ProcessTick(state.LatestTick)
-				for len(execCh) > 0 {
-					report := <-execCh
+				for len(orderReportCh) > 0 {
+					report := <-orderReportCh
 					for _, s := range snipers {
-						if s.Symbol == report.Symbol {
-							s.OnExecution(report)
-						}
+						s.SyncOrders(report.Orders)
 					}
 				}
 				<-tickCh
@@ -172,7 +168,7 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 		price, _ := strconv.ParseFloat(record[2], 64)
 		volume, _ := strconv.ParseFloat(record[3], 64)
 		vwap, _ := strconv.ParseFloat(record[4], 64)
-		
+
 		status := 1
 		if len(record) > 9 {
 			if s, err := strconv.Atoi(record[9]); err == nil {

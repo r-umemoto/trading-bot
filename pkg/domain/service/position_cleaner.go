@@ -116,13 +116,13 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 	for _, s := range c.snipers {
 		s.ForceExit()
 		for _, cancel := range s.Orders {
-			if !cancel.IsCanceled {
+			if !cancel.IsCompleted() {
 				fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Symbol, cancel.ID)
 				err := c.marketGateway.CancelOrder(ctx, cancel.ID)
 				if err != nil {
 					fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Symbol, err)
 				} else {
-					cancel.IsCanceled = true // キャンセル完了として扱う
+					cancel.Status = market.ORDER_STATUS_CANCELED // キャンセル完了として扱う
 				}
 			}
 		}

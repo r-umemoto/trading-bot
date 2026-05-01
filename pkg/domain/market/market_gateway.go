@@ -21,14 +21,9 @@ const (
 	PRODUCT_MARGIN             // 信用
 )
 
-// ExecutionReport は市場で発生した約定の事実を表します
-type ExecutionReport struct {
-	OrderID     string  // 紐づく注文ID
-	ExecutionID string  // 約定のID
-	Symbol      string  // 銘柄
-	Action      Action  // 買いか売りか
-	Price       float64 // 実際の約定単価
-	Qty         float64 // 実際に約定した数量
+// OrdersReport は最新の注文状態の一覧を通知します
+type OrdersReport struct {
+	Orders []Order
 }
 
 type OrderType uint32
@@ -153,21 +148,6 @@ type Position struct {
 	Price       float64 // 取得価格
 }
 
-type OrderState uint32
-
-const (
-	WAITING     OrderState = 1
-	PROCCESSING OrderState = 2
-	PROCCESSED  OrderState = 3
-	FINISH      OrderState = 4
-)
-
-type Side string
-
-const (
-	SideBuy  Side = "2"
-	SideSell Side = "1"
-)
 
 type ResisterSymbolRequest struct {
 	Symbol   string
@@ -177,7 +157,7 @@ type ResisterSymbolRequest struct {
 // MarketGateway は市場への統合アクセスポイントです
 type MarketGateway interface {
 	// Start は市場との接続を開始し、リアルタイム情報の受信を開始します
-	Start(ctx context.Context) (<-chan Tick, <-chan ExecutionReport, error)
+	Start(ctx context.Context) (<-chan Tick, <-chan OrdersReport, error)
 
 	SendOrder(ctx context.Context, req OrderRequest) (string, error) // 戻り値は受付OrderID
 	CancelOrder(ctx context.Context, orderID string) error

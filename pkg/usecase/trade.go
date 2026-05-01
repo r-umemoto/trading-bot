@@ -17,20 +17,20 @@ import (
 
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
-	snipers      []*sniper.Sniper
-	gateway      market.MarketGateway
-	dataPool     market.DataPool
-	tickChannels map[string]chan market.Tick            // 銘柄ごとのTick処理チャネル
-	execChannels map[string]chan market.ExecutionReport // 銘柄ごとの約定処理チャネル
+	snipers       []*sniper.Sniper
+	gateway       market.MarketGateway
+	dataPool      market.DataPool
+	tickChannels  map[string]chan market.Tick         // 銘柄ごとのTick処理チャネル
+	orderChannels map[string]chan market.OrdersReport // 銘柄ごとの注文レポートチャネル
 }
 
 func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dataPool market.DataPool) *TradeUseCase {
 	uc := &TradeUseCase{
-		snipers:      snipers,
-		gateway:      gateway,
-		dataPool:     dataPool,
-		tickChannels: make(map[string]chan market.Tick),
-		execChannels: make(map[string]chan market.ExecutionReport),
+		snipers:       snipers,
+		gateway:       gateway,
+		dataPool:      dataPool,
+		tickChannels:  make(map[string]chan market.Tick),
+		orderChannels: make(map[string]chan market.OrdersReport),
 	}
 
 	// 銘柄ごとにチャネルを作成
@@ -38,7 +38,7 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 		if _, exists := uc.tickChannels[s.Symbol]; !exists {
 			// バッファサイズは適宜調整（ここでは100）
 			uc.tickChannels[s.Symbol] = make(chan market.Tick, 100)
-			uc.execChannels[s.Symbol] = make(chan market.ExecutionReport, 100)
+			uc.orderChannels[s.Symbol] = make(chan market.OrdersReport, 100)
 		}
 	}
 
@@ -49,12 +49,12 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 // Engineの起動時（Run）などに呼ばれることを想定しています
 func (u *TradeUseCase) StartWorkers(ctx context.Context) {
 	for symbol := range u.tickChannels {
-		go u.worker(ctx, symbol, u.tickChannels[symbol], u.execChannels[symbol])
+		go u.worker(ctx, symbol, u.tickChannels[symbol], u.orderChannels[symbol])
 	}
 }
 
 // worker は特定の銘柄のTickや約定通知を専用に処理するGoroutineです
-func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan market.Tick, execCh <-chan market.ExecutionReport) {
+func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan market.Tick, orderCh <-chan market.OrdersReport) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -62,9 +62,9 @@ func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan 
 		case tick := <-tickCh:
 			// この銘柄を担当するスナイパーを探してTick処理を実行
 			u.processTickForSymbol(ctx, tick, symbol)
-		case report := <-execCh:
-			// この銘柄を担当するスナイパーを探して約定処理を実行
-			u.processExecutionForSymbol(report, symbol)
+		case report := <-orderCh:
+			// この銘柄を担当するスナイパーを探して注文同期を実行
+			u.processOrdersReportForSymbol(report, symbol)
 		}
 	}
 }
@@ -109,33 +109,26 @@ func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
 	}
 }
 
-// HandleExecution は、インフラ層から流れてきた約定通知を該当銘柄のチャネルへルーティングします
-func (u *TradeUseCase) HandleExecution(report market.ExecutionReport) {
-	if ch, ok := u.execChannels[report.Symbol]; ok {
+// HandleExecution は、インフラ層から流れてきた注文レポートを該当銘柄のチャネルへルーティングします
+func (u *TradeUseCase) HandleExecution(report market.OrdersReport) {
+	// 全銘柄分を個別にルーティングするのは効率が悪いが、現状の構造に合わせる
+	// 本来は OrdersReport が銘柄ごとに分割されているか、ここで分割して投げる
+	for symbol, ch := range u.orderChannels {
+		// report.Orders の中から該当銘柄のものだけを抽出するフィルタリングが必要だが、
+		// Sniper.SyncOrders 側でも Symbol チェックしているので、一旦そのまま流す
 		select {
 		case ch <- report:
-			// 正常にキューイング完了
 		default:
-			// チャネルが詰まっている場合
-			fmt.Printf("⚠️ 警告: %s のExecutionチャネルがフルです。処理がスキップされるか遅延します。\n", report.Symbol)
-			ch <- report // ブロックさせる
+			fmt.Printf("⚠️ 警告: %s のOrdersReportチャネルがフルです。処理がスキップされるか遅延します。\n", symbol)
 		}
 	}
 }
 
-func (u *TradeUseCase) processExecutionForSymbol(report market.ExecutionReport, symbol string) {
-	handled := false
+func (u *TradeUseCase) processOrdersReportForSymbol(report market.OrdersReport, symbol string) {
 	for _, s := range u.snipers {
 		if s.Symbol == symbol {
-			if s.OnExecution(report) {
-				handled = true
-				break // 該当の注文を出したスナイパーが見つかり、処理が完了したため終了
-			}
+			s.SyncOrders(report.Orders)
 		}
-	}
-
-	if !handled {
-		fmt.Printf("⚠️ [%s] どのスナイパーにも属さない未知の注文ID(%s)の約定通知を受信しました\n", symbol, report.OrderID)
 	}
 }
 

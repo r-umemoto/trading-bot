@@ -17,30 +17,27 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 	return &MarketGateway{
 		client:              client,
 		wsClient:            wsClient,
-		processedExecutions: make(map[string]bool),
 	}
 }
 
 // MarketGateway はHTTPプロトコルを用いたREST API操作を担当します
 type MarketGateway struct {
-	client              *api.KabuClient
-	wsClient            *api.WSClient
-	processedExecutions map[string]bool // 通知済みの注文IDを記録し、重複検知を防ぐ
+	client   *api.KabuClient
+	wsClient *api.WSClient
 }
 
 // Start は market.MarketGateway の実装です
-func (m *MarketGateway) Start(ctx context.Context) (<-chan market.Tick, <-chan market.ExecutionReport, error) {
+func (m *MarketGateway) Start(ctx context.Context) (<-chan market.Tick, <-chan market.OrdersReport, error) {
 	priceCh := make(chan market.Tick, 100)
-	execCh := make(chan market.ExecutionReport, 10)
+	orderCh := make(chan market.OrdersReport, 10)
 
-	// 1. 株価のWebSocketを裏側で起動（既存の WebSocket 処理）
+	// 1. 株価のWebSocketを裏側で起動
 	go m.startWebSocketLoop(ctx, priceCh)
 
-	// 2. 約定のポーリングを裏側で起動（先ほど話していた Watcher 処理）
-	go m.startPollingLoop(ctx, execCh)
+	// 2. 注文のポーリングを裏側で起動
+	go m.startPollingLoop(ctx, orderCh)
 
-	// 呼び出し側（Engine）には、美しく整えられた2つのチャネルだけを返す
-	return priceCh, execCh, nil
+	return priceCh, orderCh, nil
 }
 
 // SendOrder は market.MarketGateway (Orderer) の実装です
@@ -169,13 +166,51 @@ func (m *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 		if order.Side == api.SIDE_SELL {
 			action = market.ACTION_SELL
 		}
-		o := market.NewOrder(order.ID, order.Symbol, action, order.Price, order.CumQty)
-		for _, excution := range order.Details {
+
+		// api.Order.State を market.OrderStatus にマッピング
+		status := market.ORDER_STATUS_WAITING
+		switch order.State {
+		case 1, 2:
+			status = market.ORDER_STATUS_WAITING
+		case 3, 4:
+			status = market.ORDER_STATUS_IN_PROGRESS
+		case 5:
+			if order.CumQty >= order.OrderQty {
+				status = market.ORDER_STATUS_FILLED
+			} else {
+				// Details を走査して理由を探す
+				foundReason := false
+				for _, detail := range order.Details {
+					if detail.RecType == 3 || detail.RecType == 7 {
+						status = market.ORDER_STATUS_EXPIRED
+						foundReason = true
+						break
+					}
+					if detail.RecType == 6 {
+						status = market.ORDER_STATUS_CANCELED
+						foundReason = true
+						break
+					}
+				}
+				if !foundReason {
+					status = market.ORDER_STATUS_CANCELED // Fallback
+				}
+			}
+		}
+
+		o := market.NewOrder(order.ID, order.Symbol, action, order.Price, order.OrderQty)
+		o.Status = status
+
+		for _, execution := range order.Details {
+			// RecType が 8 (約定) の場合のみ Execution として追加
+			if execution.RecType != 8 || execution.ID == "" {
+				continue
+			}
 			o.AddExecution(
 				market.Execution{
-					ID:    excution.ID,
-					Price: excution.Price,
-					Qty:   excution.Qty,
+					ID:    execution.ID,
+					Price: execution.Price,
+					Qty:   execution.Qty,
 				},
 			)
 		}
@@ -250,7 +285,7 @@ func (m *MarketGateway) toAccountType(accountType int32) market.AccountType {
 	}
 }
 
-func (m *MarketGateway) startPollingLoop(ctx context.Context, execCh chan market.ExecutionReport) {
+func (m *MarketGateway) startPollingLoop(ctx context.Context, orderCh chan market.OrdersReport) {
 	ticker := time.NewTicker(3 * time.Second) // 3秒間隔でポーリング
 	defer ticker.Stop()
 
@@ -260,42 +295,15 @@ func (m *MarketGateway) startPollingLoop(ctx context.Context, execCh chan market
 			return
 
 		case <-ticker.C:
-			// 注入されたFetcherを使って注文一覧を取得
 			orders, err := m.GetOrders(ctx)
 			if err != nil {
 				fmt.Printf("ポーリングエラー: %v\n", err)
 				continue
 			}
 
-			// 1. 注文(Order)のループ
-			for _, order := range orders {
-
-				// 2. さらに明細(Details)のループを回す！
-				for _, detail := range order.Executions {
-
-					// 約定IDが空の明細（単なる「受付済」などのステータス履歴）はスキップ
-					if detail.ID == "" {
-						continue
-					}
-
-					// 🌟 注文IDではなく「約定ID」で通知済みかを判定する
-					if m.processedExecutions[detail.ID] {
-						continue
-					}
-
-					// 約定イベントを生成してチャネルに送信
-					execCh <- market.ExecutionReport{
-						OrderID:     order.ID,
-						ExecutionID: detail.ID, // レポートにも約定IDを持たせる
-						Symbol:      order.Symbol,
-						Action:      order.Action,
-						Price:       detail.Price, // 👈 Details側の「実際の約定単価」
-						Qty:         detail.Qty,   // 👈 Details側の「実際の約定数量」
-					}
-
-					// 🌟 処理完了として「約定ID」を記録する
-					m.processedExecutions[detail.ID] = true
-				}
+			// 注文一覧をそのまま通知。差分検知や約定の特定は Sniper 側で行う
+			orderCh <- market.OrdersReport{
+				Orders: orders,
 			}
 		}
 	}

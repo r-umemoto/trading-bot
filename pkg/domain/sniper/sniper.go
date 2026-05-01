@@ -270,55 +270,67 @@ func (s *Sniper) CalcUnrealizedPnL(currentPrice float64) float64 {
 	return unrealized
 }
 
-// OnExecution は、証券会社から約定通知を受信した際に呼び出されます。担当する注文であればtrueを返します。
-func (s *Sniper) OnExecution(report market.ExecutionReport) bool {
+// SyncOrders はインフラ層から取得した最新の注文一覧と同期します
+func (s *Sniper) SyncOrders(externalOrders []market.Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 1. 対象の注文状態を更新する
-	var matchedOrder *market.Order
-	var matchedOrderIndex = -1
-	for i, order := range s.Orders {
-		if order.ID == report.OrderID {
-			matchedOrder = order
-			matchedOrderIndex = i
-			break
+	for _, ext := range externalOrders {
+		if ext.Symbol != s.Symbol {
+			continue
+		}
+
+		// 内部で管理している注文を探す
+		var matchedInternal *market.Order
+		for _, internal := range s.Orders {
+			if internal.ID == ext.ID {
+				matchedInternal = internal
+				break
+			}
+		}
+
+		if matchedInternal == nil {
+			// まだIDが紐付いていない（Confirm前）の注文や、他で出された注文などは無視
+			continue
+		}
+
+		// 1. 状態の同期
+		matchedInternal.Status = ext.Status
+
+		// 2. 新しい約定の反映
+		for _, exec := range ext.Executions {
+			if !matchedInternal.HasExecution(exec.ID) {
+				// 新しい約定を発見
+				matchedInternal.AddExecution(exec)
+				s.applyExecution(exec, matchedInternal.Action)
+			}
 		}
 	}
 
-	if matchedOrder == nil {
-		// 自身の注文ではないためスキップ
-		return false
-	}
-
-	// 注文エンティティに約定を追加
-	matchedOrder.AddExecution(market.Execution{
-		ID:    report.ExecutionID,
-		Price: report.Price,
-		Qty:   report.Qty,
-	})
-
-	// もし全約定していたら、Activeリストから消す（履歴用リストに移す等）
-	if matchedOrder.IsCompleted() {
-		if matchedOrderIndex != -1 {
-			s.Orders = append(s.Orders[:matchedOrderIndex], s.Orders[matchedOrderIndex+1:]...)
+	// 3. 完了した注文をリストから除去
+	var activeOrders []*market.Order
+	for _, o := range s.Orders {
+		if !o.IsCompleted() {
+			activeOrders = append(activeOrders, o)
 		}
 	}
+	s.Orders = activeOrders
+}
 
-	// 2. 実際の約定結果に基づいて、建玉（Positions）を更新する
-	switch report.Action {
+func (s *Sniper) applyExecution(exec market.Execution, action market.Action) {
+	switch action {
 	case market.ACTION_BUY:
 		s.positions = append(s.positions, market.Position{
-			ExecutionID: report.ExecutionID,
-			Symbol:      report.Symbol,
-			LeavesQty:   report.Qty,
-			Price:       report.Price,
+			ExecutionID: exec.ID,
+			Symbol:      s.Symbol,
+			LeavesQty:   exec.Qty,
+			Price:       exec.Price,
 		})
-		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Symbol, report.Price, report.Qty)
+		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Symbol, exec.Price, exec.Qty)
 	case market.ACTION_SELL:
-		s.reducePositions(report.Qty, report.Price)
-		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Symbol, report.Qty)
+		s.reducePositions(exec.Qty, exec.Price)
+		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Symbol, exec.Qty)
 	}
-
-	return true
 }
+
+// OnExecution は廃止されました (SyncOrders に統合)

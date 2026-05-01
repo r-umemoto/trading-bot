@@ -37,20 +37,22 @@ type OrderResponse struct {
 }
 
 type Order struct {
-	ID       string      `json:"ID"`       // 注文ID（キャンセル時に必要）
-	State    int32       `json:"State"`    // 状態（3: 処理中/待機中, 5: 終了 など）
-	Symbol   string      `json:"Symbol"`   // 銘柄コード
-	Side     Side        `json:"Side"`     // 売買区分
-	OrderQty float64     `json:"OrderQty"` // 発注数量
-	CumQty   float64     `json:"CumQty"`   // 約定数量
-	Price    float64     `json:"Price"`    // 値段
-	Details  []Execution `json:"Details"`  // 値段
+	ID         string        `json:"ID"`         // 注文ID（キャンセル時に必要）
+	State      int32         `json:"State"`      // 状態（3: 処理中/待機中, 5: 終了 など）
+	OrderState int32         `json:"OrderState"` // 注文状態
+	Symbol     string        `json:"Symbol"`     // 銘柄コード
+	Side       Side          `json:"Side"`       // 売買区分
+	OrderQty   float64       `json:"OrderQty"`   // 発注数量
+	CumQty     float64       `json:"CumQty"`     // 約定数量
+	Price      float64       `json:"Price"`      // 値段
+	Details    []OrderDetail `json:"Details"`    // 注文詳細（約定履歴やキャンセル等）
 }
 
-type Execution struct {
-	ID    string  `json:"ExecutionID"` // 注文ID（キャンセル時に必要）
-	Price float64 `json:"Price"`       // 約定値段
-	Qty   float64 `json:"Qty"`         // 約定数量
+type OrderDetail struct {
+	ID      string  `json:"ExecutionID"` // 約定IDまたは注文詳細ID
+	Price   float64 `json:"Price"`       // 約定値段
+	Qty     float64 `json:"Qty"`         // 約定数量
+	RecType int32   `json:"RecType"`     // 明細種別（8: 約定, 6: 取消, 3: 期限切れ, 7: 失効）
 }
 
 // SendOrder は構成した注文リクエストをAPIに送信し、注文を実行します

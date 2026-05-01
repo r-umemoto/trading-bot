@@ -12,7 +12,7 @@ import (
 // 非同期goroutineによるレースコンディションを防ぎ、バックテスト結果を完全に決定論的にします
 type SyncBacktestGateway struct {
 	tickCh    chan market.Tick
-	execCh    chan market.ExecutionReport
+	orderCh   chan market.OrdersReport
 	positions map[string]float64 // 簡易的に持っている数量を管理
 	orders    map[string]*market.Order
 	orderKeys []string // 順序を保証するためのキーリスト
@@ -22,15 +22,15 @@ type SyncBacktestGateway struct {
 func NewBacktestGateway() *SyncBacktestGateway {
 	return &SyncBacktestGateway{
 		tickCh:    make(chan market.Tick, 10000),
-		execCh:    make(chan market.ExecutionReport, 10000), // 大きめのバッファ
+		orderCh:   make(chan market.OrdersReport, 10000), // 大きめのバッファ
 		positions: make(map[string]float64),
 		orders:    make(map[string]*market.Order),
 		orderKeys: make([]string, 0),
 	}
 }
 
-func (g *SyncBacktestGateway) Start(ctx context.Context) (<-chan market.Tick, <-chan market.ExecutionReport, error) {
-	return g.tickCh, g.execCh, nil
+func (g *SyncBacktestGateway) Start(ctx context.Context) (<-chan market.Tick, <-chan market.OrdersReport, error) {
+	return g.tickCh, g.orderCh, nil
 }
 
 // ProcessTick feeds a tick into the gateway. The gateway evaluates existing orders.
@@ -68,6 +68,7 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 				Qty:   o.OrderQty, // Simplified: executes full qty at once
 			}
 			o.AddExecution(exec)
+			o.Status = market.ORDER_STATUS_FILLED // 簡略化：一発で全約定とする
 
 			// Update position
 			if o.Action == market.ACTION_BUY {
@@ -76,14 +77,10 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 				g.positions[o.Symbol] -= exec.Qty
 			}
 
-			// ★ここがオリジナルと違う：別ゴルーチンではなく完全に同期してチャネルに入れる
-			g.execCh <- market.ExecutionReport{
-				OrderID:     o.ID,
-				ExecutionID: execID,
-				Symbol:      o.Symbol,
-				Action:      o.Action,
-				Price:       exec.Price,
-				Qty:         exec.Qty,
+			// 通知用の OrdersReport を生成して送信
+			orders, _ := g.GetOrders(context.Background())
+			g.orderCh <- market.OrdersReport{
+				Orders: orders,
 			}
 		}
 	}
@@ -105,7 +102,12 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, req market.OrderReq
 
 func (g *SyncBacktestGateway) CancelOrder(ctx context.Context, orderID string) error {
 	if o, ok := g.orders[orderID]; ok {
-		o.IsCanceled = true
+		o.Status = market.ORDER_STATUS_CANCELED
+		// キャンセルを通知
+		orders, _ := g.GetOrders(ctx)
+		g.orderCh <- market.OrdersReport{
+			Orders: orders,
+		}
 		return nil
 	}
 	return fmt.Errorf("order not found")

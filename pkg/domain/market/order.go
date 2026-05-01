@@ -1,5 +1,15 @@
-// internal/domain/market/order.go
 package market
+
+type OrderStatus uint32
+
+const (
+	ORDER_STATUS_NONE        OrderStatus = 0
+	ORDER_STATUS_WAITING     OrderStatus = 1 // 発注受付中・取引所送信前
+	ORDER_STATUS_IN_PROGRESS OrderStatus = 2 // 取引所にて執行中（一部約定を含む）
+	ORDER_STATUS_FILLED      OrderStatus = 3 // 全約定（完了）
+	ORDER_STATUS_CANCELED    OrderStatus = 4 // 取消済（完了）
+	ORDER_STATUS_EXPIRED     OrderStatus = 5 // 失効・期限切れ（完了）
+)
 
 // Execution は1回の約定の事実を表す値オブジェクトです
 type Execution struct {
@@ -19,7 +29,7 @@ type Order struct {
 
 	Executions []Execution // 🌟 約定のコレクション
 
-	IsCanceled bool // 取消処理が行われたか
+	Status OrderStatus // 注文の状態
 }
 
 func NewOrder(id string, symbol string, action Action, price float64, qty float64) Order {
@@ -29,6 +39,7 @@ func NewOrder(id string, symbol string, action Action, price float64, qty float6
 		Action:     action,
 		OrderPrice: price,
 		OrderQty:   qty,
+		Status:     ORDER_STATUS_WAITING,
 	}
 }
 
@@ -58,9 +69,19 @@ func (o *Order) AveragePrice() float64 {
 	return totalCost / float64(totalQty)
 }
 
-// IsCompleted は注文が完全に終了したか（全約定 or キャンセル）を判定します
+// IsCompleted は注文が完全に終了したか（全約定 or キャンセル or 期限切れ）を判定します
 func (o *Order) IsCompleted() bool {
-	return o.IsCanceled || o.FilledQty() >= o.OrderQty
+	return o.Status == ORDER_STATUS_FILLED || o.Status == ORDER_STATUS_CANCELED || o.Status == ORDER_STATUS_EXPIRED
+}
+
+// HasExecution は指定された約定IDが既に存在するかを判定します
+func (o *Order) HasExecution(execID string) bool {
+	for _, exec := range o.Executions {
+		if exec.ID == execID {
+			return true
+		}
+	}
+	return false
 }
 
 // AddExecution は新しい約定を追加します（重複チェック付き）
