@@ -180,15 +180,38 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 		volume, _ := strconv.ParseFloat(record[3], 64)
 		vwap, _ := strconv.ParseFloat(record[4], 64)
 
-		// 板情報のパース
+		// 板情報のパース (最良気配)
 		askPrice, _ := strconv.ParseFloat(record[5], 64)
 		askQty, _ := strconv.ParseFloat(record[6], 64)
 		bidPrice, _ := strconv.ParseFloat(record[7], 64)
 		bidQty, _ := strconv.ParseFloat(record[8], 64)
 
+		var sellBoard []market.Quote
+		var buyBoard []market.Quote
+		statusIdx := 9 // デフォルト（旧フォーマット）
+
+		// フル板情報がある場合 (新フォーマット)
+		if len(record) >= 46 {
+			statusIdx = 45
+			for i := 0; i < 9; i++ {
+				base := 9 + (i * 4)
+				askP, _ := strconv.ParseFloat(record[base], 64)
+				askQ, _ := strconv.ParseFloat(record[base+1], 64)
+				bidP, _ := strconv.ParseFloat(record[base+2], 64)
+				bidQ, _ := strconv.ParseFloat(record[base+3], 64)
+
+				if askP > 0 {
+					sellBoard = append(sellBoard, market.Quote{Price: askP, Qty: askQ})
+				}
+				if bidP > 0 {
+					buyBoard = append(buyBoard, market.Quote{Price: bidP, Qty: bidQ})
+				}
+			}
+		}
+
 		status := 1
-		if len(record) > 9 {
-			if s, err := strconv.Atoi(record[9]); err == nil {
+		if len(record) > statusIdx {
+			if s, err := strconv.Atoi(record[statusIdx]); err == nil {
 				status = s
 			}
 		}
@@ -206,6 +229,8 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 				Price: bidPrice,
 				Qty:   bidQty,
 			},
+			SellBoard:          sellBoard,
+			BuyBoard:           buyBoard,
 			CurrentPriceTime:   parsedTime,
 			CurrentPriceStatus: market.PriceStatus(status),
 		}

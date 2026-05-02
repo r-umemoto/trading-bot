@@ -43,11 +43,18 @@ func NewCSVLogger(symbol string, date string, outputDir string) (*CSVLogger, err
 		header := []string{
 			"Time", "Symbol", "Price", "TradingVolume", "VWAP",
 			"BestAskPrice", "BestAskQty", "BestBidPrice", "BestBidQty",
+		}
+		// 板10本分（2〜10本目）を追加
+		for i := 2; i <= 10; i++ {
+			header = append(header, fmt.Sprintf("Ask%dP", i), fmt.Sprintf("Ask%dQ", i))
+			header = append(header, fmt.Sprintf("Bid%dP", i), fmt.Sprintf("Bid%dQ", i))
+		}
+		header = append(header,
 			"CurrentPriceStatus", "CurrentPriceChangeStatus",
 			"OpeningPrice", "TradingValue",
 			"MarketOrderSellQty", "MarketOrderBuyQty",
 			"OverSellQty", "UnderBuyQty",
-		}
+		)
 		writer.Write(header)
 		writer.Flush()
 	}
@@ -84,6 +91,22 @@ func (l *CSVLogger) startWriting() {
 			strconv.FormatFloat(tick.BestAsk.Qty, 'f', -1, 64),
 			strconv.FormatFloat(tick.BestBid.Price, 'f', -1, 64),
 			strconv.FormatFloat(tick.BestBid.Qty, 'f', -1, 64),
+		}
+
+		// 板10本の記録（2〜10本目）
+		for i := 0; i < 9; i++ {
+			askP, askQ, bidP, bidQ := 0.0, 0.0, 0.0, 0.0
+			if i < len(tick.SellBoard) {
+				askP, askQ = tick.SellBoard[i].Price, tick.SellBoard[i].Qty
+			}
+			if i < len(tick.BuyBoard) {
+				bidP, bidQ = tick.BuyBoard[i].Price, tick.BuyBoard[i].Qty
+			}
+			record = append(record, strconv.FormatFloat(askP, 'f', -1, 64), strconv.FormatFloat(askQ, 'f', -1, 64))
+			record = append(record, strconv.FormatFloat(bidP, 'f', -1, 64), strconv.FormatFloat(bidQ, 'f', -1, 64))
+		}
+
+		record = append(record,
 			strconv.Itoa(int(tick.CurrentPriceStatus)),
 			string(tick.CurrentPriceChangeStatus),
 			strconv.FormatFloat(tick.OpeningPrice, 'f', -1, 64),
@@ -92,7 +115,7 @@ func (l *CSVLogger) startWriting() {
 			strconv.FormatFloat(tick.MarketOrderBuyQty, 'f', -1, 64),
 			strconv.FormatFloat(tick.OverSellQty, 'f', -1, 64),
 			strconv.FormatFloat(tick.UnderBuyQty, 'f', -1, 64),
-		}
+		)
 
 		l.writer.Write(record)
 		l.writer.Flush() // Tickごとに確実にディスクへ保存
