@@ -380,8 +380,8 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 					},
 					sellBoard,
 					buyBoard,
-					msg.CurrentPriceStatus,
-					msg.CurrentPriceChangeStatus,
+					s.toPriceStatus(msg.CurrentPriceStatus),
+					s.toPriceChangeStatus(msg.CurrentPriceChangeStatus),
 					msg.OpeningPrice,
 					msg.TradingValue,
 					msg.MarketOrderSellQty,
@@ -423,7 +423,7 @@ func (m *MarketGateway) GetSymbol(ctx context.Context, symbol string, exchange m
 	return market.SymbolDetail{
 		Symbol:          resp.Symbol,
 		SymbolName:      resp.SymbolName,
-		PriceRangeGroup: market.PriceRangeGroup(fmt.Sprintf("%d", resp.PriceRangeGroup)),
+		PriceRangeGroup: market.PriceRangeGroup(resp.PriceRangeGroup),
 	}, nil
 }
 
@@ -467,4 +467,36 @@ func (m *MarketGateway) toRegisterSymbolKabuExchageType(exchange market.Exchange
 		return api.EXCHANGE_TYPE_TOSHO_SOR
 	}
 	return api.EXCHANGE_TYPE_TOSHO_SOR
+}
+func (m *MarketGateway) toPriceStatus(kabuStatus int) market.PriceStatus {
+	// カブコム仕様: 1:現値, 3:寄付, 4:前引, 5:大引, 2:特別気配, 6:特成...
+	// ドメイン仕様にマッピング
+	switch kabuStatus {
+	case 1:
+		return market.PRICE_STATUS_CURRENT
+	case 3:
+		return market.PRICE_STATUS_OPENING
+	case 4:
+		return market.PRICE_STATUS_PRE_CLOSE
+	case 5:
+		return market.PRICE_STATUS_CLOSE
+	case 2, 6, 7, 8, 9: // 特別気配系
+		return market.PRICE_STATUS_SPECIAL
+	default:
+		return market.PRICE_STATUS_NONE
+	}
+}
+
+func (m *MarketGateway) toPriceChangeStatus(kabuStatus string) market.PriceChangeStatus {
+	// カブコム仕様: '0000': 変わらず, '0056': 上昇, '0057': 下落...
+	switch kabuStatus {
+	case "0056":
+		return market.PRICE_CHANGE_UP
+	case "0057":
+		return market.PRICE_CHANGE_DOWN
+	case "0000":
+		return market.PRICE_CHANGE_UNCHANGED
+	default:
+		return market.PRICE_CHANGE_NONE
+	}
 }

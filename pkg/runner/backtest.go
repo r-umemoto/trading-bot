@@ -193,7 +193,7 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 			TradingVolume:      volume,
 			VWAP:               vwap,
 			CurrentPriceTime:   parsedTime,
-			CurrentPriceStatus: status,
+			CurrentPriceStatus: market.PriceStatus(status),
 		}
 
 		tickChan <- tick

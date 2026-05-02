@@ -2,14 +2,6 @@ package market
 
 import "math"
 
-// PriceRangeGroup はカブコムAPIから返される呼値グループ識別子です
-type PriceRangeGroup string
-
-const (
-	PRICE_RANGE_GROUP_TSE_STANDARD PriceRangeGroup = "10000" // 東証標準
-	PRICE_RANGE_GROUP_TSE_TOPIX100 PriceRangeGroup = "10003" // TOPIX100構成銘柄
-)
-
 // CalcTickSize は価格に応じた最小呼値（ティックサイズ）を計算します
 func (d *SymbolDetail) CalcTickSize(price float64) float64 {
 	absPrice := math.Abs(price)
