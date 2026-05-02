@@ -3,7 +3,7 @@ package market
 import "math"
 
 // CalcTickSize は価格に応じた最小呼値（ティックサイズ）を計算します
-func (d *SymbolDetail) CalcTickSize(price float64) float64 {
+func (d *Symbol) CalcTickSize(price float64) float64 {
 	absPrice := math.Abs(price)
 
 	switch d.PriceRangeGroup {

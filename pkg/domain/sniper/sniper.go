@@ -30,7 +30,7 @@ type Performance struct {
 
 // Sniper は戦略とAPIクライアントを持ち、執行を担います
 type Sniper struct {
-	Detail          market.SymbolDetail // 🌟 銘柄詳細（Symbol, PriceRangeGroup等を含む）
+	Detail          market.Symbol // 🌟 銘柄詳細（Symbol, PriceRangeGroup等を含む）
 	positions       []market.Position
 	Performance     Performance // 🌟 追加
 	Strategy        Strategy
@@ -44,7 +44,7 @@ type Sniper struct {
 }
 
 // NewSniper の引数と戻り値も修正
-func NewSniper(detail market.SymbolDetail, strategy Strategy, exchange market.ExchangeMarket) *Sniper {
+func NewSniper(detail market.Symbol, strategy Strategy, exchange market.ExchangeMarket) *Sniper {
 	return &Sniper{
 		Detail:          detail,
 		Strategy:        strategy,
@@ -63,7 +63,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
 
 	// 0. 呼値を最新の価格に基づいて更新
-	state := dataPool.GetState(s.Detail.Symbol)
+	state := dataPool.GetState(s.Detail.Code)
 	tickSize := 1.0 // デフォルト
 	if state.LatestTick.Price > 0 {
 		tickSize = s.Detail.CalcTickSize(state.LatestTick.Price)
@@ -98,7 +98,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	}
 
 	input := strategy.StrategyInput{
-		Symbol:        s.Detail.Symbol,
+		Symbol:        s.Detail.Code,
 		HoldQty:       holdQty,
 		AveragePrice:  averagePrice,
 		TotalExposure: totalExposure,
@@ -187,7 +187,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	}
 
 	req := &market.OrderRequest{
-		Symbol:             s.Detail.Symbol,
+		Symbol:             s.Detail.Code,
 		Exchange:           s.Exchange,
 		SecurityType:       market.SECURITY_TYPE_STOCK,
 		Action:             marketAction,
@@ -236,7 +236,7 @@ func (s *Sniper) ForceExit() {
 	s.isExiting = true // 撤収フラグを立てる！
 	s.mu.Unlock()      // フラグを立てたら、通信で詰まらないように一旦ロック解除
 
-	fmt.Printf("🚨 [%s] 撤収フラグON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Detail.Symbol)
+	fmt.Printf("🚨 [%s] 撤収フラグON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Detail.Code)
 
 	// キルスイッチ機能を備えている戦略なら、発動させる
 	if ks, ok := s.Strategy.(KillSwitchable); ok {
@@ -305,7 +305,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) {
 	defer s.mu.Unlock()
 
 	for _, ext := range externalOrders {
-		if ext.Symbol != s.Detail.Symbol {
+		if ext.Symbol != s.Detail.Code {
 			continue
 		}
 
@@ -351,14 +351,14 @@ func (s *Sniper) applyExecution(exec market.Execution, action market.Action) {
 	case market.ACTION_BUY:
 		s.positions = append(s.positions, market.Position{
 			ExecutionID: exec.ID,
-			Symbol:      s.Detail.Symbol,
+			Symbol:      s.Detail.Code,
 			LeavesQty:   exec.Qty,
 			Price:       exec.Price,
 		})
-		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Detail.Symbol, exec.Price, exec.Qty)
+		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Detail.Code, exec.Price, exec.Qty)
 	case market.ACTION_SELL:
 		s.reducePositions(exec.Qty, exec.Price)
-		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Detail.Symbol, exec.Qty)
+		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Detail.Code, exec.Qty)
 	}
 }
 

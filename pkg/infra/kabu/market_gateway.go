@@ -414,15 +414,15 @@ func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterS
 	return nil
 }
 
-func (m *MarketGateway) GetSymbol(ctx context.Context, symbol string, exchange market.ExchangeMarket) (market.SymbolDetail, error) {
+func (m *MarketGateway) GetSymbol(ctx context.Context, symbol string, exchange market.ExchangeMarket) (market.Symbol, error) {
 	resp, err := m.client.GetSymbol(symbol, m.toKabuExchageType(exchange))
 	if err != nil {
-		return market.SymbolDetail{}, fmt.Errorf("銘柄情報取得失敗: %w", err)
+		return market.Symbol{}, fmt.Errorf("銘柄情報取得失敗: %w", err)
 	}
 
-	return market.SymbolDetail{
-		Symbol:          resp.Symbol,
-		SymbolName:      resp.SymbolName,
+	return market.Symbol{
+		Code:            resp.Symbol,
+		Name:            resp.SymbolName,
 		PriceRangeGroup: market.PriceRangeGroup(resp.PriceRangeGroup),
 	}, nil
 }

@@ -35,10 +35,10 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 
 	// 銘柄ごとにチャネルを作成
 	for _, s := range snipers {
-		if _, exists := uc.tickChannels[s.Detail.Symbol]; !exists {
+		if _, exists := uc.tickChannels[s.Detail.Code]; !exists {
 			// バッファサイズは適宜調整（ここでは100）
-			uc.tickChannels[s.Detail.Symbol] = make(chan market.Tick, 100)
-			uc.orderChannels[s.Detail.Symbol] = make(chan market.OrdersReport, 100)
+			uc.tickChannels[s.Detail.Code] = make(chan market.Tick, 100)
+			uc.orderChannels[s.Detail.Code] = make(chan market.OrdersReport, 100)
 		}
 	}
 
@@ -73,7 +73,7 @@ func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tic
 	u.dataPool.PushTick(tick)
 
 	for _, s := range u.snipers {
-		if s.Detail.Symbol == symbol {
+		if s.Detail.Code == symbol {
 			// 1. スナイパーに考えさせる
 			orderPtr, req, cancelOrderID := s.Tick(u.dataPool)
 
@@ -135,7 +135,7 @@ func (u *TradeUseCase) HandleExecution(report market.OrdersReport) {
 
 func (u *TradeUseCase) processOrdersReportForSymbol(report market.OrdersReport, symbol string) {
 	for _, s := range u.snipers {
-		if s.Detail.Symbol == symbol {
+		if s.Detail.Code == symbol {
 			s.SyncOrders(report.Orders)
 		}
 	}
@@ -169,13 +169,13 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 
 	for _, s := range u.snipers {
 		stratName := s.Strategy.Name()
-		key := s.Detail.Symbol + "|" + stratName
+		key := s.Detail.Code + "|" + stratName
 
 		if perfMap[key] == nil {
 			perfMap[key] = &AggregatedPerformance{Name: strings.Replace(key, "|", " x ", 1)}
 		}
-		if symPerfMap[s.Detail.Symbol] == nil {
-			symPerfMap[s.Detail.Symbol] = &AggregatedPerformance{Name: s.Detail.Symbol}
+		if symPerfMap[s.Detail.Code] == nil {
+			symPerfMap[s.Detail.Code] = &AggregatedPerformance{Name: s.Detail.Code}
 		}
 		if stratPerfMap[stratName] == nil {
 			stratPerfMap[stratName] = &AggregatedPerformance{Name: stratName}
@@ -183,7 +183,7 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 
 		// 含み損益の計算
 		var unrealized float64
-		marketState := u.dataPool.GetState(s.Detail.Symbol)
+		marketState := u.dataPool.GetState(s.Detail.Code)
 		if !marketState.LatestTick.CurrentPriceTime.IsZero() {
 			latestPrice := marketState.LatestTick.Price
 			unrealized = s.CalcUnrealizedPnL(latestPrice)
@@ -199,7 +199,7 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 		}
 
 		updatePerf(perfMap[key])
-		updatePerf(symPerfMap[s.Detail.Symbol])
+		updatePerf(symPerfMap[s.Detail.Code])
 		updatePerf(stratPerfMap[stratName])
 		updatePerf(totalPerf)
 	}

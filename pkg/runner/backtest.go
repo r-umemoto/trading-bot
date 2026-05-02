@@ -52,7 +52,7 @@ func RunBacktest() error {
 		if err != nil {
 			return fmt.Errorf("戦略 '%s' が見つかりません: %w", sym.StrategyName, err)
 		}
-		s := sniper.NewSniper(sym.Detail, factory.NewStrategy(sym.Detail.Symbol, dataPool), sym.Exchange)
+		s := sniper.NewSniper(sym.Detail, factory.NewStrategy(sym.Detail, dataPool), sym.Exchange)
 		snipers = append(snipers, s)
 	}
 
@@ -88,7 +88,7 @@ func RunBacktest() error {
 
 		dataPool.PushTick(t)
 		for _, s := range snipers {
-			if s.Detail.Symbol == t.Symbol {
+			if s.Detail.Code == t.Symbol {
 				orderPtr, req, cancelOrderID := s.Tick(dataPool)
 
 				if cancelOrderID != "" {

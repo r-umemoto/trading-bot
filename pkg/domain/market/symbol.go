@@ -2,20 +2,20 @@ package market
 
 import "fmt"
 
-// SymbolDetail は銘柄の基本属性を保持するエンティティです
-type SymbolDetail struct {
-	Symbol          string
-	SymbolName      string
+// Symbol は銘柄の基本属性を保持するエンティティです
+type Symbol struct {
+	Code            string
+	Name            string
 	PriceRangeGroup PriceRangeGroup
 }
 
 // WatchTarget は監視対象の設定を保持するバリューオブジェクトです
 type WatchTarget struct {
-	Detail       SymbolDetail
+	Detail       Symbol
 	StrategyName string
 	Exchange     ExchangeMarket
 }
 
-func (s SymbolDetail) String() string {
-	return fmt.Sprintf("%s (%s)", s.SymbolName, s.Symbol)
+func (s Symbol) String() string {
+	return fmt.Sprintf("%s (%s)", s.Name, s.Code)
 }

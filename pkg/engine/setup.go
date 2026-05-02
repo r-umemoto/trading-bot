@@ -81,13 +81,13 @@ func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]
 			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
-		st := factory.NewStrategy(t.Detail.Symbol, dataPool)
+		st := factory.NewStrategy(t.Detail, dataPool)
 		s := sniper.NewSniper(t.Detail, st, t.Exchange)
 		snipers = append(snipers, s)
 
-		if !symbolMap[t.Detail.Symbol] {
-			symbolMap[t.Detail.Symbol] = true
-			watchSymbols = append(watchSymbols, t.Detail.Symbol)
+		if !symbolMap[t.Detail.Code] {
+			symbolMap[t.Detail.Code] = true
+			watchSymbols = append(watchSymbols, t.Detail.Code)
 		}
 	}
 

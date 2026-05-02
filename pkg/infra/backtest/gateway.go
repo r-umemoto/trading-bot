@@ -143,10 +143,10 @@ func (g *SyncBacktestGateway) GetOrders(ctx context.Context) ([]market.Order, er
 	return result, nil
 }
 
-func (g *SyncBacktestGateway) GetSymbol(ctx context.Context, symbol string, exchange market.ExchangeMarket) (market.SymbolDetail, error) {
-	return market.SymbolDetail{
-		Symbol:          symbol,
-		SymbolName:      "Mock Symbol",
+func (g *SyncBacktestGateway) GetSymbol(ctx context.Context, symbol string, exchange market.ExchangeMarket) (market.Symbol, error) {
+	return market.Symbol{
+		Code:            symbol,
+		Name:            "Mock Symbol",
 		PriceRangeGroup: market.PRICE_RANGE_GROUP_TSE_STANDARD,
 	}, nil
 }
