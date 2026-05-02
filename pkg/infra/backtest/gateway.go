@@ -8,26 +8,44 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 )
 
+type ExecutionModel string
+
+const (
+	ExecutionModelTouch       ExecutionModel = "touch"
+	ExecutionModelPessimistic ExecutionModel = "pessimistic"
+	ExecutionModelVolume      ExecutionModel = "volume"
+)
+
 // SyncBacktestGateway は各Tickの処理において「約定を完全に同期して」発行するためのテスト用Gatewayです
 // 非同期goroutineによるレースコンディションを防ぎ、バックテスト結果を完全に決定論的にします
 type SyncBacktestGateway struct {
-	tickCh        chan market.Tick
-	orderCh       chan market.OrdersReport
-	positions     map[string]float64 // 簡易的に持っている数量を管理
-	orders        map[string]*market.Order
-	orderKeys     []string // 順序を保証するためのキーリスト
-	orderIdx      int
-	IsPessimistic bool // 悲観的（貫通約定）ルールを適用するかどうか
+	tickCh    chan market.Tick
+	orderCh   chan market.OrdersReport
+	positions map[string]float64 // 簡易的に持っている数量を管理
+	orders    map[string]*market.Order
+	orderKeys []string // 順序を保証するためのキーリスト
+	orderIdx  int
+	Model     ExecutionModel // 採用する約定モデル
+
+	// ボリュームベース約定用のトラッキング
+	lastTradingVolumes map[string]float64
+	lastTicks          map[string]market.Tick
+	initialDepths      map[string]float64 // orderID -> 並んだ時の板の厚み
+	cumulativeVolumes  map[string]float64 // orderID -> その価格での累積出来高
 }
 
-func NewBacktestGateway(isPessimistic bool) *SyncBacktestGateway {
+func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
 	return &SyncBacktestGateway{
-		tickCh:        make(chan market.Tick, 10000),
-		orderCh:       make(chan market.OrdersReport, 10000), // 大きめのバッファ
-		positions:     make(map[string]float64),
-		orders:        make(map[string]*market.Order),
-		orderKeys:     make([]string, 0),
-		IsPessimistic: isPessimistic,
+		tickCh:             make(chan market.Tick, 10000),
+		orderCh:            make(chan market.OrdersReport, 10000), // 大きめのバッファ
+		positions:          make(map[string]float64),
+		orders:             make(map[string]*market.Order),
+		orderKeys:          make([]string, 0),
+		Model:              model,
+		lastTradingVolumes: make(map[string]float64),
+		lastTicks:          make(map[string]market.Tick),
+		initialDepths:      make(map[string]float64),
+		cumulativeVolumes:  make(map[string]float64),
 	}
 }
 
@@ -37,6 +55,12 @@ func (g *SyncBacktestGateway) Start(ctx context.Context) (<-chan market.Tick, <-
 
 // ProcessTick feeds a tick into the gateway. The gateway evaluates existing orders.
 func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
+	// Delta volume calculation for volume-based logic
+	deltaVolume := 0.0
+	if lastVol, ok := g.lastTradingVolumes[tick.Symbol]; ok {
+		deltaVolume = tick.TradingVolume - lastVol
+	}
+
 	// Evaluate orders (in deterministic order)
 	for _, id := range g.orderKeys {
 		o := g.orders[id]
@@ -55,25 +79,37 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 			// Market order: executes at current tick price
 			executed = true
 			execPrice = tick.Price
-		} else if g.IsPessimistic {
-			// Trade-Through (貫通約定) Rule for Pessimistic Backtesting
-			// Limit order: executes only if price moves BEYOND the limit price
-			if o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice {
-				executed = true
-				execPrice = o.OrderPrice // Pessimistic: execute at limit price
-			} else if o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice {
-				executed = true
-				execPrice = o.OrderPrice // Pessimistic: execute at limit price
-			}
 		} else {
-			// Optimistic (Touch) Rule
-			// Limit order: executes if price touches or crosses the limit price
-			if o.Action == market.ACTION_BUY && tick.Price <= o.OrderPrice {
-				executed = true
-				execPrice = tick.Price // Optimistic: might get a better price
-			} else if o.Action == market.ACTION_SELL && tick.Price >= o.OrderPrice {
-				executed = true
-				execPrice = tick.Price // Optimistic: might get a better price
+			switch g.Model {
+			case ExecutionModelTouch:
+				// Optimistic (Touch) Rule: executes if price touches or crosses the limit price
+				if (o.Action == market.ACTION_BUY && tick.Price <= o.OrderPrice) ||
+					(o.Action == market.ACTION_SELL && tick.Price >= o.OrderPrice) {
+					executed = true
+					execPrice = tick.Price
+				}
+			case ExecutionModelPessimistic:
+				// Trade-Through (貫通約定) Rule: executes only if price moves BEYOND the limit price
+				if (o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice) ||
+					(o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice) {
+					executed = true
+					execPrice = o.OrderPrice
+				}
+			case ExecutionModelVolume:
+				// Volume-Based Rule: piercing OR cumulative volume > initial depth
+				if (o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice) ||
+					(o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice) {
+					executed = true
+					execPrice = o.OrderPrice
+				} else if tick.Price == o.OrderPrice {
+					g.cumulativeVolumes[o.ID] += deltaVolume
+					if g.cumulativeVolumes[o.ID] > g.initialDepths[o.ID] {
+						executed = true
+						execPrice = o.OrderPrice
+						fmt.Printf("📢 [%s] キュー消化により約定: ID=%s, Price=%.1f, TradedVolume=%.0f, InitialDepth=%.0f\n",
+							tick.Symbol, o.ID, o.OrderPrice, g.cumulativeVolumes[o.ID], g.initialDepths[o.ID])
+					}
+				}
 			}
 		}
 
@@ -102,6 +138,10 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 		}
 	}
 
+	// Update tracking data
+	g.lastTradingVolumes[tick.Symbol] = tick.TradingVolume
+	g.lastTicks[tick.Symbol] = tick
+
 	// Forward tick to usecase
 	g.tickCh <- tick
 }
@@ -113,6 +153,30 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, req market.OrderReq
 
 	g.orders[orderID] = &order
 	g.orderKeys = append(g.orderKeys, orderID)
+
+	// ボリュームベース約定用の初期情報を記録
+	if g.Model == ExecutionModelVolume {
+		depth := 0.0
+		if lastTick, ok := g.lastTicks[req.Symbol]; ok {
+			if req.Action == market.ACTION_BUY {
+				for _, q := range lastTick.BuyBoard {
+					if q.Price == req.Price {
+						depth = q.Qty
+						break
+					}
+				}
+			} else {
+				for _, q := range lastTick.SellBoard {
+					if q.Price == req.Price {
+						depth = q.Qty
+						break
+					}
+				}
+			}
+		}
+		g.initialDepths[orderID] = depth
+		g.cumulativeVolumes[orderID] = 0
+	}
 
 	return orderID, nil
 }

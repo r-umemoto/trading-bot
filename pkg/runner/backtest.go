@@ -25,11 +25,13 @@ func RunBacktest() error {
 	flag.StringVar(&csvPath, "csv", "./data/all_20260409.csv", "バックテスト用CSVファイルのパス")
 	var portfolioPath string
 	flag.StringVar(&portfolioPath, "portfolio", "./configs/portfolio.json", "ポートフォリオJSONファイルのパス")
-	var pessimistic bool
-	flag.BoolVar(&pessimistic, "pessimistic", true, "悲観的（貫通約定）ルールを適用するかどうか")
+	var execModelStr string
+	flag.StringVar(&execModelStr, "execution-model", "pessimistic", "約定モデル (touch, pessimistic, volume)")
 	flag.Parse()
 
-	fmt.Printf("戦略のバックテストを開始します... (データ: %s, 悲観的ルール: %v)\n", csvPath, pessimistic)
+	execModel := backtest.ExecutionModel(execModelStr)
+
+	fmt.Printf("戦略のバックテストを開始します... (データ: %s, 約定モデル: %s)\n", csvPath, execModel)
 
 	// 2. 監視銘柄（Sniper）のセットアップ
 	targets, err := portfolio.LoadFromJSON(portfolioPath)
@@ -38,7 +40,7 @@ func RunBacktest() error {
 	}
 
 	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
-	gateway := backtest.NewBacktestGateway(pessimistic)
+	gateway := backtest.NewBacktestGateway(execModel)
 	dataPool := market.NewDefaultDataPool()
 	tickCh, orderReportCh, _ := gateway.Start(context.Background())
 
