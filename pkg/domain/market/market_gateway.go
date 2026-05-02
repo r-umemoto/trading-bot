@@ -149,6 +149,18 @@ type Position struct {
 }
 
 
+type SymbolDetail struct {
+	Symbol          string
+	SymbolName      string
+	PriceRangeGroup PriceRangeGroup
+}
+
+type WatchTarget struct {
+	Detail       SymbolDetail
+	StrategyName string
+	Exchange     ExchangeMarket
+}
+
 type ResisterSymbolRequest struct {
 	Symbol   string
 	Exchange ExchangeMarket
@@ -163,6 +175,7 @@ type MarketGateway interface {
 	CancelOrder(ctx context.Context, orderID string) error
 	GetPositions(ctx context.Context, product ProductType) ([]Position, error)
 	GetOrders(ctx context.Context) ([]Order, error)
+	GetSymbol(ctx context.Context, symbol string, exchange ExchangeMarket) (SymbolDetail, error)
 	RegisterSymbol(ctx context.Context, req ResisterSymbolRequest) error
 	UnregisterSymbolAll(ctx context.Context) error
 }

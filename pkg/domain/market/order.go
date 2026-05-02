@@ -1,5 +1,10 @@
 package market
 
+import (
+	"fmt"
+	"time"
+)
+
 type OrderStatus uint32
 
 const (
@@ -9,6 +14,7 @@ const (
 	ORDER_STATUS_FILLED      OrderStatus = 3 // 全約定（完了）
 	ORDER_STATUS_CANCELED    OrderStatus = 4 // 取消済（完了）
 	ORDER_STATUS_EXPIRED     OrderStatus = 5 // 失効・期限切れ（完了）
+	ORDER_STATUS_CANCEL_SENT OrderStatus = 6 // キャンセル送信済み・確認待ち
 )
 
 // Execution は1回の約定の事実を表す値オブジェクトです
@@ -93,4 +99,16 @@ func (o *Order) AddExecution(exec Execution) {
 		}
 	}
 	o.Executions = append(o.Executions, exec)
+}
+
+const PENDING_ID_PREFIX = "PENDING_"
+
+// GeneratePendingID はAPIからのレスポンス待ちの間に使用する仮のIDを生成します
+func GeneratePendingID() string {
+	return fmt.Sprintf("%s%d", PENDING_ID_PREFIX, time.Now().UnixNano())
+}
+
+// IsPendingID は指定されたIDが仮のIDかどうかを判定します
+func IsPendingID(id string) bool {
+	return len(id) >= len(PENDING_ID_PREFIX) && id[:len(PENDING_ID_PREFIX)] == PENDING_ID_PREFIX
 }

@@ -2,6 +2,7 @@ package sniper
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
@@ -29,7 +30,7 @@ type Performance struct {
 
 // Sniper は戦略とAPIクライアントを持ち、執行を担います
 type Sniper struct {
-	Symbol          string
+	Detail          market.SymbolDetail // 🌟 銘柄詳細（Symbol, PriceRangeGroup等を含む）
 	positions       []market.Position
 	Performance     Performance // 🌟 追加
 	Strategy        Strategy
@@ -43,9 +44,9 @@ type Sniper struct {
 }
 
 // NewSniper の引数と戻り値も修正
-func NewSniper(symbol string, strategy Strategy, exchange market.ExchangeMarket) *Sniper {
+func NewSniper(detail market.SymbolDetail, strategy Strategy, exchange market.ExchangeMarket) *Sniper {
 	return &Sniper{
-		Symbol:          symbol,
+		Detail:          detail,
 		Strategy:        strategy,
 		Orders:          make([]*market.Order, 0),
 		positions:       []market.Position{}, // 初期状態は空
@@ -56,76 +57,103 @@ func NewSniper(symbol string, strategy Strategy, exchange market.ExchangeMarket)
 }
 
 // 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderRequest) {
+func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderRequest, string) {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
 
-	// すでにキルスイッチが作動（撤収中）なら、価格更新はすべて無視！
-	if s.isExiting {
-		return nil, nil
+	// 0. 呼値を最新の価格に基づいて更新
+	state := dataPool.GetState(s.Detail.Symbol)
+	tickSize := 1.0 // デフォルト
+	if state.LatestTick.Price > 0 {
+		tickSize = s.Detail.CalcTickSize(state.LatestTick.Price)
 	}
 
-	// 1. 現在の建玉から必要なパラメータを計算（抽出）する
+	// すでにキルスイッチが作動（撤収中）なら、価格更新はすべて無視！
+	if s.isExiting {
+		return nil, nil, ""
+	}
+
+	// 1. 未完了の注文（!IsCompleted）を抽出する
+	var activeOrder *market.Order
+	for _, o := range s.Orders {
+		if !o.IsCompleted() {
+			// 原則として1銘柄1注文なので、最初に見つかったものを対象とする
+			activeOrder = o
+			break
+		}
+	}
+
+	// 2. パラメータ計算
 	var holdQty float64
 	var totalExposure float64
 	for _, p := range s.positions {
 		holdQty += p.LeavesQty
-		totalExposure += p.Price * float64(p.LeavesQty) // 取得単価 × 数量
-	}
-
-	// 発注済みで、まだ約定していない注文の「未約定数量」を合計する
-	var pendingSellQty float64
-	var pendingBuyQty float64
-	for _, order := range s.Orders { // スナイパーが管理している現在の注文リスト
-		unexecutedQty := order.OrderQty - order.FilledQty()
-		if unexecutedQty > 0 {
-			switch order.Action {
-			case market.ACTION_SELL:
-				pendingSellQty += unexecutedQty
-			case market.ACTION_BUY:
-				pendingBuyQty += unexecutedQty
-			}
-		}
-	}
-
-	// 戦略に渡す「自由に動かせる株数」
-	freeQty := holdQty - pendingSellQty
-	if freeQty < 0 {
-		freeQty = 0 // 念のためのマイナス防止
+		totalExposure += p.Price * float64(p.LeavesQty)
 	}
 
 	averagePrice := 0.0
-	if freeQty > 0 {
-		averagePrice = totalExposure / float64(freeQty)
+	if holdQty > 0 {
+		averagePrice = totalExposure / holdQty
 	}
 
-	state := dataPool.GetState(s.Symbol)
 	input := strategy.StrategyInput{
-		Symbol:        s.Symbol,
-		HoldQty:       freeQty,
+		Symbol:        s.Detail.Symbol,
+		HoldQty:       holdQty,
 		AveragePrice:  averagePrice,
 		TotalExposure: totalExposure,
 		LatestTick:    state.LatestTick,
 	}
 
-	// 1. 頭脳に価格を渡して判断を仰ぐ
+	// 3. 戦略の判断を仰ぐ
 	signal := s.Strategy.Evaluate(input)
 
-	if signal.Action == brain.ACTION_HOLD {
-		return nil, nil // 何もしない
+	// --- 4. 同期（Reconciliation）フェーズ ---
+
+	// すでに注文が出ている場合
+	if activeOrder != nil {
+		// IDがまだ確定していない（PENDING）場合は、次のアクションを起こさず待機
+		if market.IsPendingID(activeOrder.ID) {
+			return nil, nil, ""
+		}
+
+		// すでにキャンセル送信済みの場合は、その確定を待つ
+		if activeOrder.Status == market.ORDER_STATUS_CANCEL_SENT {
+			return nil, nil, ""
+		}
+
+		// 現在の注文が戦略の意図（シグナル）と一致しているかチェック
+		isStillDesired := false
+		if signal.Action != brain.ACTION_HOLD {
+			marketAction, _ := signal.Action.ToMarketAction()
+			// 方向・数量が一致しており、かつ価格差が許容範囲（3ティック）以内かチェック
+			if activeOrder.Action == marketAction &&
+				activeOrder.OrderQty == signal.Quantity &&
+				math.Abs(activeOrder.OrderPrice-signal.Price) <= tickSize*3 {
+				isStillDesired = true
+			}
+		}
+
+		// 意図と異なる、または HOLD になった場合はキャンセルを要求
+		if !isStillDesired {
+			activeOrder.Status = market.ORDER_STATUS_CANCEL_SENT
+			return nil, nil, activeOrder.ID
+		}
+
+		// 一致している場合は維持
+		return nil, nil, ""
 	}
 
-	// スナイパー（執行役）側で重複発注をブロックする
-	// ※ 将来的に高度な注文管理を行う場合は、専用の「OrderManager」に委譲する想定
-	if signal.Action == brain.ACTION_BUY && pendingBuyQty > 0 {
-		return nil, nil
+	// --- 5. 新規発注フェーズ ---
+	// 未完了注文がない場合のみ、新規発注を検討する
+
+	if signal.Action == brain.ACTION_HOLD {
+		return nil, nil, ""
 	}
 
 	marketAction, err := signal.Action.ToMarketAction()
 	if err != nil {
-		fmt.Println("トラップできていないエラーがあります")
-		return nil, nil
+		return nil, nil, ""
 	}
 
 	orderType := market.ORDER_TYPE_MARKET
@@ -133,6 +161,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		orderType = signal.OrderType
 	}
 
+	// 決済注文（売り）の場合のポジション指定ロジック
 	var closePositions []market.ClosePosition
 	if marketAction == market.ACTION_SELL {
 		var remainingSellQty = signal.Quantity
@@ -158,25 +187,25 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	}
 
 	req := &market.OrderRequest{
-		Symbol:             s.Symbol,
+		Symbol:             s.Detail.Symbol,
 		Exchange:           s.Exchange,
 		SecurityType:       market.SECURITY_TYPE_STOCK,
 		Action:             marketAction,
 		MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
 		AccountType:        market.ACCOUNT_SPECIAL,
 		OrderType:          orderType,
-		ClosePositionOrder: closeOrder,     // ClosePositionsがない場合のみ指定
-		ClosePositions:     closePositions, // 🌟 指定返済
+		ClosePositionOrder: closeOrder,
+		ClosePositions:     closePositions,
 		Qty:                signal.Quantity,
 		Price:              signal.Price,
 	}
 
-	// 🌟 IDが空（または仮）の本物の注文データを作ってOrdersに混ぜておく
-	pendingOrder := market.NewOrder("PENDING", req.Symbol, req.Action, req.Price, req.Qty)
+	// 仮IDで管理リストに追加
+	pendingOrder := market.NewOrder(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
 	ptr := &pendingOrder
 	s.Orders = append(s.Orders, ptr)
 
-	return ptr, req
+	return ptr, req, ""
 }
 
 // ConfirmOrder は、ユースケースが発注を完了した後に呼ばれ、仮注文のIDを正式なAPIのIDで更新します
@@ -207,7 +236,7 @@ func (s *Sniper) ForceExit() {
 	s.isExiting = true // 撤収フラグを立てる！
 	s.mu.Unlock()      // フラグを立てたら、通信で詰まらないように一旦ロック解除
 
-	fmt.Printf("🚨 [%s] 撤収フラグON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Symbol)
+	fmt.Printf("🚨 [%s] 撤収フラグON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Detail.Symbol)
 
 	// キルスイッチ機能を備えている戦略なら、発動させる
 	if ks, ok := s.Strategy.(KillSwitchable); ok {
@@ -276,7 +305,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) {
 	defer s.mu.Unlock()
 
 	for _, ext := range externalOrders {
-		if ext.Symbol != s.Symbol {
+		if ext.Symbol != s.Detail.Symbol {
 			continue
 		}
 
@@ -322,14 +351,14 @@ func (s *Sniper) applyExecution(exec market.Execution, action market.Action) {
 	case market.ACTION_BUY:
 		s.positions = append(s.positions, market.Position{
 			ExecutionID: exec.ID,
-			Symbol:      s.Symbol,
+			Symbol:      s.Detail.Symbol,
 			LeavesQty:   exec.Qty,
 			Price:       exec.Price,
 		})
-		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Symbol, exec.Price, exec.Qty)
+		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Detail.Symbol, exec.Price, exec.Qty)
 	case market.ACTION_SELL:
 		s.reducePositions(exec.Qty, exec.Price)
-		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Symbol, exec.Qty)
+		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Detail.Symbol, exec.Qty)
 	}
 }
 

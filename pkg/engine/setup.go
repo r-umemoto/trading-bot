@@ -2,6 +2,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -12,28 +13,28 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
+	"github.com/r-umemoto/trading-bot/pkg/portfolio"
 	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
 
-// WatchTarget defines what symbol to watch with which strategy.
-type WatchTarget struct {
-	Symbol       string
-	StrategyName string
-	Exchange     market.ExchangeMarket
-}
-
 // BuildEngine は、システム全体を俯瞰する「目次」です
-func BuildEngine(cfg *config.AppConfig, watchList []WatchTarget) (*Engine, error) {
+func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio.SymbolTarget) (*Engine, error) {
 	// 1. インフラ層の構築（泥臭い設定はすべてここへ）
 	gateway, err := buildInfrastructure(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. ユースケースとサービスの組み立て用のDataPool準備
+	// 2. 監視リストの構築 (ここでAPIを叩いて銘柄詳細を取得)
+	watchList, err := portfolio.BuildWatchList(ctx, gateway, targets)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. ユースケースとサービスの組み立て用のDataPool準備
 	dataPool := market.NewDefaultDataPool()
 
-	// 3. ドメイン層（スナイパー）の配備
+	// 4. ドメイン層（スナイパー）の配備
 	snipers, watchSymbols, err := deploySnipers(watchList, dataPool)
 	if err != nil {
 		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
@@ -42,7 +43,7 @@ func BuildEngine(cfg *config.AppConfig, watchList []WatchTarget) (*Engine, error
 	tradeUC := usecase.NewTradeUseCase(snipers, gateway, dataPool)
 	cleaner := service.NewPositionCleaner(snipers, gateway)
 
-	// 4. エンジンの完成
+	// 5. エンジンの完成
 	return NewEngine(gateway, tradeUC, cleaner, watchSymbols), nil
 }
 
@@ -69,7 +70,7 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 	return marketGateway, nil
 }
 
-func deploySnipers(watchList []WatchTarget, dataPool market.DataPool) ([]*sniper.Sniper, []string, error) {
+func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]*sniper.Sniper, []string, error) {
 	var snipers []*sniper.Sniper
 	var watchSymbols []string
 	symbolMap := make(map[string]bool)
@@ -80,13 +81,13 @@ func deploySnipers(watchList []WatchTarget, dataPool market.DataPool) ([]*sniper
 			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
-		st := factory.NewStrategy(t.Symbol, dataPool)
-		s := sniper.NewSniper(t.Symbol, st, t.Exchange)
+		st := factory.NewStrategy(t.Detail.Symbol, dataPool)
+		s := sniper.NewSniper(t.Detail, st, t.Exchange)
 		snipers = append(snipers, s)
 
-		if !symbolMap[t.Symbol] {
-			symbolMap[t.Symbol] = true
-			watchSymbols = append(watchSymbols, t.Symbol)
+		if !symbolMap[t.Detail.Symbol] {
+			symbolMap[t.Detail.Symbol] = true
+			watchSymbols = append(watchSymbols, t.Detail.Symbol)
 		}
 	}
 

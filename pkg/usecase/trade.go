@@ -35,10 +35,10 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 
 	// 銘柄ごとにチャネルを作成
 	for _, s := range snipers {
-		if _, exists := uc.tickChannels[s.Symbol]; !exists {
+		if _, exists := uc.tickChannels[s.Detail.Symbol]; !exists {
 			// バッファサイズは適宜調整（ここでは100）
-			uc.tickChannels[s.Symbol] = make(chan market.Tick, 100)
-			uc.orderChannels[s.Symbol] = make(chan market.OrdersReport, 100)
+			uc.tickChannels[s.Detail.Symbol] = make(chan market.Tick, 100)
+			uc.orderChannels[s.Detail.Symbol] = make(chan market.OrdersReport, 100)
 		}
 	}
 
@@ -73,9 +73,18 @@ func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tic
 	u.dataPool.PushTick(tick)
 
 	for _, s := range u.snipers {
-		if s.Symbol == symbol {
+		if s.Detail.Symbol == symbol {
 			// 1. スナイパーに考えさせる
-			orderPtr, req := s.Tick(u.dataPool)
+			orderPtr, req, cancelOrderID := s.Tick(u.dataPool)
+
+			// 2. キャンセル要求があれば実行
+			if cancelOrderID != "" {
+				fmt.Printf("🛑 自動キャンセルを実行します: %s\n", cancelOrderID)
+				if err := u.gateway.CancelOrder(ctx, cancelOrderID); err != nil {
+					fmt.Printf("❌ キャンセル失敗: %v\n", err)
+				}
+				continue
+			}
 
 			if req != nil {
 				// 2. 要求があれば、市場（インフラ）に発注する
@@ -126,7 +135,7 @@ func (u *TradeUseCase) HandleExecution(report market.OrdersReport) {
 
 func (u *TradeUseCase) processOrdersReportForSymbol(report market.OrdersReport, symbol string) {
 	for _, s := range u.snipers {
-		if s.Symbol == symbol {
+		if s.Detail.Symbol == symbol {
 			s.SyncOrders(report.Orders)
 		}
 	}
@@ -160,13 +169,13 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 
 	for _, s := range u.snipers {
 		stratName := s.Strategy.Name()
-		key := s.Symbol + "|" + stratName
+		key := s.Detail.Symbol + "|" + stratName
 
 		if perfMap[key] == nil {
 			perfMap[key] = &AggregatedPerformance{Name: strings.Replace(key, "|", " x ", 1)}
 		}
-		if symPerfMap[s.Symbol] == nil {
-			symPerfMap[s.Symbol] = &AggregatedPerformance{Name: s.Symbol}
+		if symPerfMap[s.Detail.Symbol] == nil {
+			symPerfMap[s.Detail.Symbol] = &AggregatedPerformance{Name: s.Detail.Symbol}
 		}
 		if stratPerfMap[stratName] == nil {
 			stratPerfMap[stratName] = &AggregatedPerformance{Name: stratName}
@@ -174,7 +183,7 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 
 		// 含み損益の計算
 		var unrealized float64
-		marketState := u.dataPool.GetState(s.Symbol)
+		marketState := u.dataPool.GetState(s.Detail.Symbol)
 		if !marketState.LatestTick.CurrentPriceTime.IsZero() {
 			latestPrice := marketState.LatestTick.Price
 			unrealized = s.CalcUnrealizedPnL(latestPrice)
@@ -190,7 +199,7 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 		}
 
 		updatePerf(perfMap[key])
-		updatePerf(symPerfMap[s.Symbol])
+		updatePerf(symPerfMap[s.Detail.Symbol])
 		updatePerf(stratPerfMap[stratName])
 		updatePerf(totalPerf)
 	}

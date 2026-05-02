@@ -172,8 +172,10 @@ func (m *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 		switch order.State {
 		case 1, 2:
 			status = market.ORDER_STATUS_WAITING
-		case 3, 4:
+		case 3:
 			status = market.ORDER_STATUS_IN_PROGRESS
+		case 4:
+			status = market.ORDER_STATUS_CANCEL_SENT
 		case 5:
 			if order.CumQty >= order.OrderQty {
 				status = market.ORDER_STATUS_FILLED
@@ -410,6 +412,19 @@ func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterS
 		return fmt.Errorf("銘柄登録失敗: %+v)", req)
 	}
 	return nil
+}
+
+func (m *MarketGateway) GetSymbol(ctx context.Context, symbol string, exchange market.ExchangeMarket) (market.SymbolDetail, error) {
+	resp, err := m.client.GetSymbol(symbol, m.toKabuExchageType(exchange))
+	if err != nil {
+		return market.SymbolDetail{}, fmt.Errorf("銘柄情報取得失敗: %w", err)
+	}
+
+	return market.SymbolDetail{
+		Symbol:          resp.Symbol,
+		SymbolName:      resp.SymbolName,
+		PriceRangeGroup: market.PriceRangeGroup(fmt.Sprintf("%d", resp.PriceRangeGroup)),
+	}, nil
 }
 
 func (m *MarketGateway) UnregisterSymbolAll(ctx context.Context) error {

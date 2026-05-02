@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 )
 
 type RegisterSymbolsItem struct {
@@ -61,4 +62,32 @@ func (c *KabuClient) UnregisterSymbolAll() (*UnregisterSymbolAllResponse, error)
 	}
 
 	return &regResp, nil
+}
+
+type SymbolSuccess struct {
+	Symbol          string  `json:"Symbol"`
+	SymbolName      string  `json:"SymbolName"`
+	PriceRangeGroup int     `json:"PriceRangeGroup"`
+	UpperLimit      float64 `json:"UpperLimit"`
+	LowerLimit      float64 `json:"LowerLimit"`
+}
+
+func (c *KabuClient) GetSymbol(symbol string, exchange ExchageType) (*SymbolSuccess, error) {
+	endpoint := fmt.Sprintf("/symbol/%s@%d", symbol, exchange)
+	resp, err := c.doRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("銘柄情報取得API通信エラー: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("銘柄情報取得APIエラー: status=%d", resp.StatusCode)
+	}
+
+	var symbolResp SymbolSuccess
+	if err := json.NewDecoder(resp.Body).Decode(&symbolResp); err != nil {
+		return nil, fmt.Errorf("銘柄情報レスポンス解析エラー: %v", err)
+	}
+
+	return &symbolResp, nil
 }

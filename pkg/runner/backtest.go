@@ -34,12 +34,17 @@ func RunBacktest() error {
 	if err != nil {
 		return fmt.Errorf("ポートフォリオの読み込みに失敗しました: %w", err)
 	}
-	watchList := portfolio.BuildWatchList(targets)
 
 	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
 	gateway := backtest.NewBacktestGateway()
 	dataPool := market.NewDefaultDataPool()
 	tickCh, orderReportCh, _ := gateway.Start(context.Background())
+
+	// 4. 監視リストの構築 (Gatewayを使用して情報を埋める)
+	watchList, err := portfolio.BuildWatchList(context.Background(), gateway, targets)
+	if err != nil {
+		return err
+	}
 
 	var snipers []*sniper.Sniper
 	for _, sym := range watchList {
@@ -47,7 +52,7 @@ func RunBacktest() error {
 		if err != nil {
 			return fmt.Errorf("戦略 '%s' が見つかりません: %w", sym.StrategyName, err)
 		}
-		s := sniper.NewSniper(sym.Symbol, factory.NewStrategy(sym.Symbol, dataPool), sym.Exchange)
+		s := sniper.NewSniper(sym.Detail, factory.NewStrategy(sym.Detail.Symbol, dataPool), sym.Exchange)
 		snipers = append(snipers, s)
 	}
 
@@ -83,8 +88,14 @@ func RunBacktest() error {
 
 		dataPool.PushTick(t)
 		for _, s := range snipers {
-			if s.Symbol == t.Symbol {
-				orderPtr, req := s.Tick(dataPool)
+			if s.Detail.Symbol == t.Symbol {
+				orderPtr, req, cancelOrderID := s.Tick(dataPool)
+
+				if cancelOrderID != "" {
+					_ = gateway.CancelOrder(context.Background(), cancelOrderID)
+					continue
+				}
+
 				if req != nil {
 					orderID, err := gateway.SendOrder(context.Background(), *req)
 					if err != nil {

@@ -81,20 +81,20 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	// 監視銘柄を登録　TODOいったん仮でここに実装
 	registered := make(map[string]bool)
 	for _, s := range c.snipers {
-		key := fmt.Sprintf("%s:%d", s.Symbol, s.Exchange)
+		key := fmt.Sprintf("%s:%d", s.Detail.Symbol, s.Exchange)
 		if registered[key] {
 			continue
 		}
 
 		req := market.ResisterSymbolRequest{
-			Symbol:   s.Symbol,
+			Symbol:   s.Detail.Symbol,
 			Exchange: s.Exchange,
 		}
 		err := c.marketGateway.RegisterSymbol(ctx, req)
 		if err != nil {
-			return fmt.Errorf("銘柄登録失敗: %s", s.Symbol)
+			return fmt.Errorf("銘柄登録失敗: %s", s.Detail.Symbol)
 		}
-		fmt.Printf("✅ 銘柄登録 %s \n", s.Symbol)
+		fmt.Printf("✅ 銘柄登録 %s \n", s.Detail.Symbol)
 		registered[key] = true
 
 		// APIの秒間上限を回避するため1秒スリープ
@@ -117,10 +117,10 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 		s.ForceExit()
 		for _, cancel := range s.Orders {
 			if !cancel.IsCompleted() {
-				fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Symbol, cancel.ID)
+				fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Detail.Symbol, cancel.ID)
 				err := c.marketGateway.CancelOrder(ctx, cancel.ID)
 				if err != nil {
-					fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Symbol, err)
+					fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Detail.Symbol, err)
 				} else {
 					cancel.Status = market.ORDER_STATUS_CANCELED // キャンセル完了として扱う
 				}

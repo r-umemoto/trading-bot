@@ -37,8 +37,7 @@ func RunBot() error {
 	}
 
 	// 3. アプリケーションの組み立て
-	watchList := portfolio.BuildWatchList(targets)
-	e, err := engine.BuildEngine(cfg, watchList)
+	e, err := engine.BuildEngine(ctx, cfg, targets)
 	if err != nil {
 		return fmt.Errorf("engineの組み立て失敗: %w", err)
 	}
