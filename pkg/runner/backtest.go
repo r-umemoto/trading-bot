@@ -180,6 +180,12 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 		volume, _ := strconv.ParseFloat(record[3], 64)
 		vwap, _ := strconv.ParseFloat(record[4], 64)
 
+		// 板情報のパース
+		askPrice, _ := strconv.ParseFloat(record[5], 64)
+		askQty, _ := strconv.ParseFloat(record[6], 64)
+		bidPrice, _ := strconv.ParseFloat(record[7], 64)
+		bidQty, _ := strconv.ParseFloat(record[8], 64)
+
 		status := 1
 		if len(record) > 9 {
 			if s, err := strconv.Atoi(record[9]); err == nil {
@@ -188,10 +194,18 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 		}
 
 		tick := market.Tick{
-			Symbol:             record[1],
-			Price:              price,
-			TradingVolume:      volume,
-			VWAP:               vwap,
+			Symbol:        record[1],
+			Price:         price,
+			TradingVolume: volume,
+			VWAP:          vwap,
+			BestAsk: market.FirstQuote{
+				Price: askPrice,
+				Qty:   askQty,
+			},
+			BestBid: market.FirstQuote{
+				Price: bidPrice,
+				Qty:   bidQty,
+			},
 			CurrentPriceTime:   parsedTime,
 			CurrentPriceStatus: market.PriceStatus(status),
 		}
