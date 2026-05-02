@@ -15,8 +15,8 @@ import (
 
 func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
 	return &MarketGateway{
-		client:              client,
-		wsClient:            wsClient,
+		client:   client,
+		wsClient: wsClient,
 	}
 }
 

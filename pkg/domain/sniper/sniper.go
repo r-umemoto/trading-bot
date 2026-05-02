@@ -126,11 +126,17 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		isStillDesired := false
 		if signal.Action != brain.ACTION_HOLD {
 			marketAction, _ := signal.Action.ToMarketAction()
-			// 方向・数量が一致しており、かつ価格差が許容範囲（3ティック）以内かチェック
-			if activeOrder.Action == marketAction &&
-				activeOrder.OrderQty == signal.Quantity &&
-				math.Abs(activeOrder.OrderPrice-signal.Price) <= tickSize*3 {
-				isStillDesired = true
+			// 方向・数量が一致しているか
+			if activeOrder.Action == marketAction && activeOrder.OrderQty == signal.Quantity {
+				// 意図が成行（Price=0）で現在の注文も成行（OrderPrice=0）の場合
+				if signal.Price == 0 && activeOrder.OrderPrice == 0 {
+					isStillDesired = true
+				} else if signal.Price > 0 && activeOrder.OrderPrice > 0 {
+					// 指値の場合は価格差もチェック（3ティック以内なら許容）
+					if math.Abs(activeOrder.OrderPrice-signal.Price) <= tickSize*3 {
+						isStillDesired = true
+					}
+				}
 			}
 		}
 
@@ -157,7 +163,9 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	}
 
 	orderType := market.ORDER_TYPE_MARKET
-	if signal.OrderType != 0 {
+	if signal.Price > 0 {
+		orderType = market.ORDER_TYPE_LIMIT
+	} else if signal.OrderType != 0 {
 		orderType = signal.OrderType
 	}
 
