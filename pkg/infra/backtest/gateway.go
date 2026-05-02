@@ -11,21 +11,23 @@ import (
 // SyncBacktestGateway は各Tickの処理において「約定を完全に同期して」発行するためのテスト用Gatewayです
 // 非同期goroutineによるレースコンディションを防ぎ、バックテスト結果を完全に決定論的にします
 type SyncBacktestGateway struct {
-	tickCh    chan market.Tick
-	orderCh   chan market.OrdersReport
-	positions map[string]float64 // 簡易的に持っている数量を管理
-	orders    map[string]*market.Order
-	orderKeys []string // 順序を保証するためのキーリスト
-	orderIdx  int
+	tickCh        chan market.Tick
+	orderCh       chan market.OrdersReport
+	positions     map[string]float64 // 簡易的に持っている数量を管理
+	orders        map[string]*market.Order
+	orderKeys     []string // 順序を保証するためのキーリスト
+	orderIdx      int
+	IsPessimistic bool // 悲観的（貫通約定）ルールを適用するかどうか
 }
 
-func NewBacktestGateway() *SyncBacktestGateway {
+func NewBacktestGateway(isPessimistic bool) *SyncBacktestGateway {
 	return &SyncBacktestGateway{
-		tickCh:    make(chan market.Tick, 10000),
-		orderCh:   make(chan market.OrdersReport, 10000), // 大きめのバッファ
-		positions: make(map[string]float64),
-		orders:    make(map[string]*market.Order),
-		orderKeys: make([]string, 0),
+		tickCh:        make(chan market.Tick, 10000),
+		orderCh:       make(chan market.OrdersReport, 10000), // 大きめのバッファ
+		positions:     make(map[string]float64),
+		orders:        make(map[string]*market.Order),
+		orderKeys:     make([]string, 0),
+		IsPessimistic: isPessimistic,
 	}
 }
 
@@ -46,17 +48,32 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 			continue
 		}
 
-		// Simple execution logic
+		// Execution logic
 		executed := false
+		execPrice := 0.0
 		if o.OrderPrice == 0 {
-			// Market order
+			// Market order: executes at current tick price
 			executed = true
+			execPrice = tick.Price
+		} else if g.IsPessimistic {
+			// Trade-Through (貫通約定) Rule for Pessimistic Backtesting
+			// Limit order: executes only if price moves BEYOND the limit price
+			if o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice {
+				executed = true
+				execPrice = o.OrderPrice // Pessimistic: execute at limit price
+			} else if o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice {
+				executed = true
+				execPrice = o.OrderPrice // Pessimistic: execute at limit price
+			}
 		} else {
-			// Limit order
+			// Optimistic (Touch) Rule
+			// Limit order: executes if price touches or crosses the limit price
 			if o.Action == market.ACTION_BUY && tick.Price <= o.OrderPrice {
 				executed = true
+				execPrice = tick.Price // Optimistic: might get a better price
 			} else if o.Action == market.ACTION_SELL && tick.Price >= o.OrderPrice {
 				executed = true
+				execPrice = tick.Price // Optimistic: might get a better price
 			}
 		}
 
@@ -64,7 +81,7 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 			execID := fmt.Sprintf("exec_%d_%s", time.Now().UnixNano(), o.ID)
 			exec := market.Execution{
 				ID:    execID,
-				Price: tick.Price, // Executes at current tick price
+				Price: execPrice,
 				Qty:   o.OrderQty, // Simplified: executes full qty at once
 			}
 			o.AddExecution(exec)
