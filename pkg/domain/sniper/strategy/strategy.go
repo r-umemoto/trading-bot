@@ -14,6 +14,8 @@ type StrategyInput struct {
 	TotalExposure float64 // 現在の総投資額（平均単価 × 保有数量）
 
 	LatestTick market.Tick // 最新のTick（DataPoolへの依存を排除）
+
+	ActiveOrders []market.Order // 現在板に出ている自分の注文リスト
 }
 
 type Strategy interface {

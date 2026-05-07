@@ -97,12 +97,21 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		averagePrice = totalExposure / holdQty
 	}
 
+	// 現在の待機注文リストを作成
+	var activeOrders []market.Order
+	for _, o := range s.Orders {
+		if !o.IsCompleted() {
+			activeOrders = append(activeOrders, *o)
+		}
+	}
+
 	input := strategy.StrategyInput{
 		Symbol:        s.Detail.Code,
 		HoldQty:       holdQty,
 		AveragePrice:  averagePrice,
 		TotalExposure: totalExposure,
 		LatestTick:    state.LatestTick,
+		ActiveOrders:  activeOrders,
 	}
 
 	// 3. 戦略の判断を仰ぐ
