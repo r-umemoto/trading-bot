@@ -14,6 +14,7 @@ type WatchTarget struct {
 	Detail       Symbol
 	StrategyName string
 	Exchange     ExchangeMarket
+	Params       interface{}
 }
 
 func (s Symbol) String() string {

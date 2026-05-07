@@ -81,7 +81,7 @@ func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]
 			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
-		st := factory.NewStrategy(t.Detail, dataPool)
+		st := factory.NewStrategy(t.Detail, dataPool, t.Params)
 		s := sniper.NewSniper(t.Detail, st, t.Exchange)
 		snipers = append(snipers, s)
 

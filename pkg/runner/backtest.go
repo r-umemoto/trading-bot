@@ -56,7 +56,7 @@ func RunBacktest() error {
 		if err != nil {
 			return fmt.Errorf("戦略 '%s' が見つかりません: %w", sym.StrategyName, err)
 		}
-		s := sniper.NewSniper(sym.Detail, factory.NewStrategy(sym.Detail, dataPool), sym.Exchange)
+		s := sniper.NewSniper(sym.Detail, factory.NewStrategy(sym.Detail, dataPool, sym.Params), sym.Exchange)
 		snipers = append(snipers, s)
 	}
 

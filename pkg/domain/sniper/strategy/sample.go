@@ -88,7 +88,7 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 
 type SimpleStrategyFactory struct{}
 
-func (f *SimpleStrategyFactory) NewStrategy(detail market.Symbol, dataPool market.DataPool) Strategy {
+func (f *SimpleStrategyFactory) NewStrategy(detail market.Symbol, dataPool market.DataPool, params interface{}) Strategy {
 	// Sample戦略が必要とするインジケーター（1分足）をDataPoolに要求・生成する
 	oneMinBar := dataPool.GetOrCreateIndicator(detail.Code, "1min_bar", func() market.Indicator {
 		return market.NewOneMinBarIndicator("1min_bar")

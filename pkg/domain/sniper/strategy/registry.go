@@ -6,7 +6,7 @@ import (
 )
 
 type StrategyFactory interface {
-	NewStrategy(detail market.Symbol, dataPool market.DataPool) Strategy
+	NewStrategy(detail market.Symbol, dataPool market.DataPool, params interface{}) Strategy
 }
 
 var registry = make(map[string]StrategyFactory)

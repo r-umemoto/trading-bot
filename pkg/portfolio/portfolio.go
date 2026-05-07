@@ -13,6 +13,7 @@ type SymbolTarget struct {
 	Exchange   market.ExchangeMarket `json:"exchange"`
 	Strategies []string              `json:"strategies"`
 	Sector     string                `json:"sector"`
+	Params     map[string]interface{} `json:"params"`
 }
 
 // BuildWatchList flattens a slice of SymbolTarget into a slice of market.WatchTarget.
@@ -33,6 +34,7 @@ func BuildWatchList(ctx context.Context, gateway market.MarketGateway, targets [
 				Detail:       detail,
 				StrategyName: strategy,
 				Exchange:     t.Exchange,
+				Params:       t.Params[strategy],
 			})
 		}
 	}
