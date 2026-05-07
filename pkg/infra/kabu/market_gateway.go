@@ -402,7 +402,7 @@ func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterS
 		Symbols: []api.RegisterSymbolsItem{
 			{
 				Symbol:   req.Symbol,
-				Exchange: m.toRegisterSymbolKabuExchageType(req.Exchange),
+				Exchange: m.toBaseKabuExchageType(req.Exchange),
 			},
 		},
 	}
@@ -415,7 +415,7 @@ func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterS
 }
 
 func (m *MarketGateway) GetSymbol(ctx context.Context, symbol string, exchange market.ExchangeMarket) (market.Symbol, error) {
-	resp, err := m.client.GetSymbol(symbol, m.toKabuExchageType(exchange))
+	resp, err := m.client.GetSymbol(symbol, m.toBaseKabuExchageType(exchange))
 	if err != nil {
 		return market.Symbol{}, fmt.Errorf("銘柄情報取得失敗: %w", err)
 	}
@@ -459,7 +459,7 @@ func (m *MarketGateway) toKabuExchageType(exchange market.ExchangeMarket) api.Ex
 	return api.EXCHANGE_TYPE_TOSHO_SOR
 }
 
-func (m *MarketGateway) toRegisterSymbolKabuExchageType(exchange market.ExchangeMarket) api.ExchageType {
+func (m *MarketGateway) toBaseKabuExchageType(exchange market.ExchangeMarket) api.ExchageType {
 	switch exchange {
 	case market.EXCHANGE_TOSHO, market.EXCHANGE_TOSHO_PLUS: // API仕様で東証+はない
 		return api.EXCHANGE_TYPE_TOSHO
