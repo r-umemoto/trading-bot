@@ -96,6 +96,7 @@ func RunBacktest() error {
 				orderPtr, req, cancelOrderID := s.Tick(dataPool)
 
 				if cancelOrderID != "" {
+					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", cancelOrderID)
 					_ = gateway.CancelOrder(context.Background(), cancelOrderID)
 					continue
 				}
