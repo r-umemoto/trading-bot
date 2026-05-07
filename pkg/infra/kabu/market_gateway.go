@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
@@ -420,10 +421,14 @@ func (m *MarketGateway) GetSymbol(ctx context.Context, symbol string, exchange m
 		return market.Symbol{}, fmt.Errorf("銘柄情報取得失敗: %w", err)
 	}
 
+	prg, err := strconv.Atoi(resp.PriceRangeGroup)
+	if err != nil {
+		return market.Symbol{}, fmt.Errorf("PriceRangeGroupの数値変換失敗 (%s): %w", resp.PriceRangeGroup, err)
+	}
 	return market.Symbol{
 		Code:            resp.Symbol,
 		Name:            resp.SymbolName,
-		PriceRangeGroup: market.PriceRangeGroup(resp.PriceRangeGroup),
+		PriceRangeGroup: market.PriceRangeGroup(prg),
 	}, nil
 }
 

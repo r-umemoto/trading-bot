@@ -67,7 +67,7 @@ func (c *KabuClient) UnregisterSymbolAll() (*UnregisterSymbolAllResponse, error)
 type SymbolSuccess struct {
 	Symbol          string  `json:"Symbol"`
 	SymbolName      string  `json:"SymbolName"`
-	PriceRangeGroup int     `json:"PriceRangeGroup"`
+	PriceRangeGroup string     `json:"PriceRangeGroup"`
 	UpperLimit      float64 `json:"UpperLimit"`
 	LowerLimit      float64 `json:"LowerLimit"`
 }
