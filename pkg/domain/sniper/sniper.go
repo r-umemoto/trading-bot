@@ -64,10 +64,6 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 	// 0. 呼値を最新の価格に基づいて更新
 	state := dataPool.GetState(s.Detail.Code)
-	tickSize := 1.0 // デフォルト
-	if state.LatestTick.Price > 0 {
-		tickSize = s.Detail.CalcTickSize(state.LatestTick.Price)
-	}
 
 	// すでにキルスイッチが作動（撤収中）なら、価格更新はすべて無視！
 	if s.isExiting {
@@ -141,8 +137,9 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 				if signal.Price == 0 && activeOrder.OrderPrice == 0 {
 					isStillDesired = true
 				} else if signal.Price > 0 && activeOrder.OrderPrice > 0 {
-					// 指値の場合は価格差もチェック（3ティック以内なら許容）
-					if math.Abs(activeOrder.OrderPrice-signal.Price) <= tickSize*3 {
+					// 指値の場合は、戦略が指定した価格と【完全に一致】しているかチェック
+					// （※float64の微小な誤差を考慮して 0.0001 未満の差なら一致とみなす）
+					if math.Abs(activeOrder.OrderPrice-signal.Price) < 0.0001 {
 						isStillDesired = true
 					}
 				}
