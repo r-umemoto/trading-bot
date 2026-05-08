@@ -150,13 +150,13 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 func (g *SyncBacktestGateway) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
 	g.orderIdx++
 	orderID := fmt.Sprintf("bt_order_%d", g.orderIdx)
-	order := market.NewOrder(orderID, req.Symbol, req.Action, req.Price, req.Qty)
+	order := market.NewOrderPtr(orderID, req.Symbol, req.Action, req.Price, req.Qty)
 	order.HasIFD = req.HasIFD
 	order.IFDAction = req.IFDAction
 	order.IFDPrice = req.IFDPrice
 	order.IFDOrderType = req.IFDOrderType
 
-	g.orders[orderID] = &order
+	g.orders[orderID] = order
 	g.orderKeys = append(g.orderKeys, orderID)
 
 	// ボリュームベース約定用の初期情報を記録
