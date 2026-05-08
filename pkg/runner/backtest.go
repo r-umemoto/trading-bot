@@ -84,7 +84,17 @@ func RunBacktest() error {
 		for len(orderReportCh) > 0 {
 			report := <-orderReportCh
 			for _, s := range snipers {
-				s.SyncOrders(report.Orders)
+				// 🌟 修正: SyncOrders から戻る IFD 発注要求を処理する
+				ifdOrderPtr, ifdReq, _ := s.SyncOrders(report.Orders)
+				if ifdReq != nil {
+					fmt.Printf("🚀 [%s] SyncOrders経由でIFD決済注文を送信します: %s %.2f株\n", s.Detail.Code, ifdReq.Action, ifdReq.Qty)
+					orderID, err := gateway.SendOrder(context.Background(), *ifdReq)
+					if err != nil {
+						s.FailSendingOrder(ifdOrderPtr)
+					} else {
+						s.ConfirmOrder(ifdOrderPtr, orderID)
+					}
+				}
 			}
 		}
 
@@ -128,7 +138,15 @@ func RunBacktest() error {
 				for len(orderReportCh) > 0 {
 					report := <-orderReportCh
 					for _, s := range snipers {
-						s.SyncOrders(report.Orders)
+						ifdOrderPtr, ifdReq, _ := s.SyncOrders(report.Orders)
+						if ifdReq != nil {
+							orderID, err := gateway.SendOrder(context.Background(), *ifdReq)
+							if err != nil {
+								s.FailSendingOrder(ifdOrderPtr)
+							} else {
+								s.ConfirmOrder(ifdOrderPtr, orderID)
+							}
+						}
 					}
 				}
 				<-tickCh
