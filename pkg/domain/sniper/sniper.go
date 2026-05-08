@@ -255,12 +255,11 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	}
 
 	// 仮IDで管理リストに追加
-	pendingOrder := market.NewOrder(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
-	pendingOrder.HasIFD = req.HasIFD
-	pendingOrder.IFDAction = req.IFDAction
-	pendingOrder.IFDPrice = req.IFDPrice
-	pendingOrder.IFDOrderType = req.IFDOrderType
-	ptr := &pendingOrder
+	ptr := market.NewOrderPtr(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
+	ptr.HasIFD = req.HasIFD
+	ptr.IFDAction = req.IFDAction
+	ptr.IFDPrice = req.IFDPrice
+	ptr.IFDOrderType = req.IFDOrderType
 	s.Orders = append(s.Orders, ptr)
 
 	return ptr, req, ""
@@ -439,8 +438,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 			HasIFD:             false, // IFDの先はなし
 		}
 
-		pendingOrder := market.NewOrder(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
-		ptr := &pendingOrder
+		ptr := market.NewOrderPtr(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
 		s.Orders = append(s.Orders, ptr)
 
 		ifdPendingOrder = ptr

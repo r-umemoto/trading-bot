@@ -55,6 +55,17 @@ func NewOrder(id string, symbol string, action Action, price float64, qty float6
 	}
 }
 
+func NewOrderPtr(id string, symbol string, action Action, price float64, qty float64) *Order {
+	return &Order{
+		ID:         id,
+		Symbol:     symbol,
+		Action:     action,
+		OrderPrice: price,
+		OrderQty:   qty,
+		Status:     ORDER_STATUS_WAITING,
+	}
+}
+
 // FilledQty は現在までに約定した合計数量を返します
 func (o *Order) FilledQty() float64 {
 	var sum float64
