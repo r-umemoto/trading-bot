@@ -16,10 +16,14 @@ const (
 
 // Signal は戦略がスナイパーに返す「命令」です
 type Signal struct {
-	Action    Action
-	Quantity  float64
-	Price     float64
-	OrderType market.OrderType
+	Action       Action
+	Quantity     float64
+	Price        float64
+	OrderType    market.OrderType
+	HasIFD       bool             // IFD注文を伴うか
+	IFDAction    Action           // IFD注文のアクション (BUY/SELL)
+	IFDPrice     float64          // IFD注文の価格
+	IFDOrderType market.OrderType // IFD注文の執行条件
 }
 
 func (a Action) ToMarketAction() (market.Action, error) {

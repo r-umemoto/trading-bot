@@ -149,6 +149,34 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 			}
 		}
 
+		if isStillDesired {
+			// IFD情報のみの更新チェック
+			if signal.HasIFD {
+				marketIFDAction, err := signal.IFDAction.ToMarketAction()
+				if err == nil {
+					if activeOrder.HasIFD {
+						if activeOrder.IFDPrice != signal.IFDPrice || activeOrder.IFDAction != marketIFDAction || activeOrder.IFDOrderType != signal.IFDOrderType {
+							fmt.Printf("🔄 [%s] 待機中注文のIFD情報を更新します\n", s.Detail.Code)
+							activeOrder.IFDPrice = signal.IFDPrice
+							activeOrder.IFDAction = marketIFDAction
+							activeOrder.IFDOrderType = signal.IFDOrderType
+						}
+					} else {
+						// IFDが後から追加された
+						fmt.Printf("🔄 [%s] 待機中注文にIFD情報を追加します\n", s.Detail.Code)
+						activeOrder.HasIFD = true
+						activeOrder.IFDPrice = signal.IFDPrice
+						activeOrder.IFDAction = marketIFDAction
+						activeOrder.IFDOrderType = signal.IFDOrderType
+					}
+				}
+			} else if activeOrder.HasIFD && !signal.HasIFD {
+				// IFDが取り消された
+				fmt.Printf("🔄 [%s] 待機中注文のIFD情報を取り消します\n", s.Detail.Code)
+				activeOrder.HasIFD = false
+			}
+		}
+
 		// 意図と異なる、または HOLD になった場合はキャンセルを要求
 		if !isStillDesired {
 			activeOrder.Status = market.ORDER_STATUS_CANCEL_SENT
@@ -203,6 +231,11 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
 	}
 
+	var marketIFDAction market.Action
+	if signal.HasIFD {
+		marketIFDAction, _ = signal.IFDAction.ToMarketAction()
+	}
+
 	req := &market.OrderRequest{
 		Symbol:             s.Detail.Code,
 		Exchange:           s.Exchange,
@@ -215,10 +248,18 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		ClosePositions:     closePositions,
 		Qty:                signal.Quantity,
 		Price:              signal.Price,
+		HasIFD:             signal.HasIFD,
+		IFDAction:          marketIFDAction,
+		IFDPrice:           signal.IFDPrice,
+		IFDOrderType:       signal.IFDOrderType,
 	}
 
 	// 仮IDで管理リストに追加
 	pendingOrder := market.NewOrder(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
+	pendingOrder.HasIFD = req.HasIFD
+	pendingOrder.IFDAction = req.IFDAction
+	pendingOrder.IFDPrice = req.IFDPrice
+	pendingOrder.IFDOrderType = req.IFDOrderType
 	ptr := &pendingOrder
 	s.Orders = append(s.Orders, ptr)
 
@@ -317,9 +358,13 @@ func (s *Sniper) CalcUnrealizedPnL(currentPrice float64) float64 {
 }
 
 // SyncOrders はインフラ層から取得した最新の注文一覧と同期します
-func (s *Sniper) SyncOrders(externalOrders []market.Order) {
+func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *market.OrderRequest, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	var newExecQty float64
+	var triggeredIFDParent *market.Order
+	var newExecs []market.Execution
 
 	for _, ext := range externalOrders {
 		if ext.Symbol != s.Detail.Code {
@@ -350,8 +395,56 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) {
 				// 新しい約定を発見
 				matchedInternal.AddExecution(exec)
 				s.applyExecution(exec, matchedInternal.Action)
+				newExecQty += exec.Qty
+				triggeredIFDParent = matchedInternal
+				newExecs = append(newExecs, exec)
 			}
 		}
+	}
+
+	// IFDの発火処理
+	var ifdPendingOrder *market.Order
+	var ifdRequest *market.OrderRequest
+	if newExecQty > 0 && triggeredIFDParent != nil && triggeredIFDParent.HasIFD {
+		fmt.Printf("⚡ [%s] IFD発火: %.2f株の約定に伴い、決済注文を発注します\n", s.Detail.Code, newExecQty)
+
+		var closePositions []market.ClosePosition
+		if triggeredIFDParent.IFDAction == market.ACTION_SELL {
+			// 直前に約定したポジションを返済対象として指定する
+			for _, exec := range newExecs {
+				closePositions = append(closePositions, market.ClosePosition{
+					HoldID: exec.ID,
+					Qty:    exec.Qty,
+				})
+			}
+		}
+
+		closeOrder := market.CLOSE_POSITION_ORDER_NONE
+		if triggeredIFDParent.IFDAction == market.ACTION_SELL && len(closePositions) == 0 {
+			closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
+		}
+
+		req := &market.OrderRequest{
+			Symbol:             s.Detail.Code,
+			Exchange:           s.Exchange,
+			SecurityType:       market.SECURITY_TYPE_STOCK,
+			Action:             triggeredIFDParent.IFDAction,
+			MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
+			AccountType:        market.ACCOUNT_SPECIAL,
+			OrderType:          triggeredIFDParent.IFDOrderType,
+			ClosePositionOrder: closeOrder,
+			ClosePositions:     closePositions,
+			Qty:                newExecQty,
+			Price:              triggeredIFDParent.IFDPrice,
+			HasIFD:             false, // IFDの先はなし
+		}
+
+		pendingOrder := market.NewOrder(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
+		ptr := &pendingOrder
+		s.Orders = append(s.Orders, ptr)
+
+		ifdPendingOrder = ptr
+		ifdRequest = req
 	}
 
 	// 3. 完了した注文をリストから除去
@@ -366,6 +459,8 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) {
 		activeOrders = append(activeOrders, o)
 	}
 	s.Orders = activeOrders
+
+	return ifdPendingOrder, ifdRequest, ""
 }
 
 func (s *Sniper) applyExecution(exec market.Execution, action market.Action) {

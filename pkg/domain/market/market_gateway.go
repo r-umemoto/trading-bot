@@ -21,6 +21,11 @@ type OrderRequest struct {
 	OrderType          OrderType
 	Qty                float64
 	Price              float64
+
+	HasIFD       bool      // IFD注文の有無
+	IFDAction    Action    // IFD注文のアクション (BUY/SELL)
+	IFDPrice     float64   // IFD注文の価格
+	IFDOrderType OrderType // IFD注文の執行条件
 }
 
 type ResisterSymbolRequest struct {

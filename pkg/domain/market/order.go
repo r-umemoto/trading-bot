@@ -37,6 +37,11 @@ type Order struct {
 
 	Status OrderStatus // 注文の状態
 	CumQty float64     // 🌟 APIが報告してきた累計約定数量
+
+	HasIFD       bool      // 🌟 IFD注文の有無
+	IFDAction    Action    // IFD注文のアクション (BUY/SELL)
+	IFDPrice     float64   // IFD注文の価格
+	IFDOrderType OrderType // IFD注文の執行条件
 }
 
 func NewOrder(id string, symbol string, action Action, price float64, qty float64) Order {

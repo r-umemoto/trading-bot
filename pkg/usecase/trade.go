@@ -64,7 +64,7 @@ func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan 
 			u.processTickForSymbol(ctx, tick, symbol)
 		case report := <-orderCh:
 			// この銘柄を担当するスナイパーを探して注文同期を実行
-			u.processOrdersReportForSymbol(report, symbol)
+			u.processOrdersReportForSymbol(ctx, report, symbol)
 		}
 	}
 }
@@ -133,10 +133,31 @@ func (u *TradeUseCase) HandleExecution(report market.OrdersReport) {
 	}
 }
 
-func (u *TradeUseCase) processOrdersReportForSymbol(report market.OrdersReport, symbol string) {
+func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report market.OrdersReport, symbol string) {
 	for _, s := range u.snipers {
 		if s.Detail.Code == symbol {
-			s.SyncOrders(report.Orders)
+			orderPtr, req, cancelOrderID := s.SyncOrders(report.Orders)
+
+			// IFD等によるキャンセル要求があれば実行
+			if cancelOrderID != "" {
+				fmt.Printf("🛑 [%s] 連動キャンセルを実行します: %s\n", symbol, cancelOrderID)
+				if err := u.gateway.CancelOrder(ctx, cancelOrderID); err != nil {
+					fmt.Printf("❌ キャンセル失敗: %v\n", err)
+				}
+			}
+
+			// IFD発火による自動発注要求があれば実行
+			if req != nil {
+				fmt.Printf("🚀 [%s] IFD決済注文を送信します: %s %.2f株\n", symbol, req.Action, req.Qty)
+				orderID, err := u.gateway.SendOrder(ctx, *req)
+				if err != nil {
+					fmt.Printf("❌ IFD発注失敗: %v\n", err)
+					s.FailSendingOrder(orderPtr)
+				} else {
+					s.ConfirmOrder(orderPtr, orderID)
+					fmt.Printf("✅ IFD注文受付IDを記録しました: %s\n", orderID)
+				}
+			}
 		}
 	}
 }
