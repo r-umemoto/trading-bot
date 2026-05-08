@@ -203,6 +203,7 @@ func (m *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 
 		o := market.NewOrder(order.ID, order.Symbol, action, order.Price, order.OrderQty)
 		o.Status = status
+		o.CumQty = order.CumQty
 
 		for _, execution := range order.Details {
 			// RecType が 8 (約定) の場合のみ Execution として追加

@@ -122,6 +122,7 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 			}
 			o.AddExecution(exec)
 			o.Status = market.ORDER_STATUS_FILLED // 簡略化：一発で全約定とする
+			o.CumQty = o.FilledQty()              // 🌟 累計約定数量を更新
 
 			// Update position
 			if o.Action == market.ACTION_BUY {

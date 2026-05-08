@@ -342,6 +342,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) {
 
 		// 1. 状態の同期
 		matchedInternal.Status = ext.Status
+		matchedInternal.CumQty = ext.CumQty // 🌟 API側の累計約定数量を同期
 
 		// 2. 新しい約定の反映
 		for _, exec := range ext.Executions {
@@ -356,9 +357,13 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) {
 	// 3. 完了した注文をリストから除去
 	var activeOrders []*market.Order
 	for _, o := range s.Orders {
-		if !o.IsCompleted() {
-			activeOrders = append(activeOrders, o)
+		// ステータスが完了(FILLED/CANCELED/EXPIRED)であり、
+		// かつ、受け取った約定明細の合計がAPI報告のCumQtyに達している場合のみリストから除外する
+		isDataComplete := o.FilledQty() >= o.CumQty
+		if o.IsCompleted() && isDataComplete {
+			continue
 		}
+		activeOrders = append(activeOrders, o)
 	}
 	s.Orders = activeOrders
 }

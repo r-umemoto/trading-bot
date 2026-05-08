@@ -36,6 +36,7 @@ type Order struct {
 	Executions []Execution // 🌟 約定のコレクション
 
 	Status OrderStatus // 注文の状態
+	CumQty float64     // 🌟 APIが報告してきた累計約定数量
 }
 
 func NewOrder(id string, symbol string, action Action, price float64, qty float64) Order {
