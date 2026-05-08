@@ -290,7 +290,7 @@ func (m *MarketGateway) toAccountType(accountType int32) market.AccountType {
 }
 
 func (m *MarketGateway) startPollingLoop(ctx context.Context, orderCh chan market.OrdersReport) {
-	ticker := time.NewTicker(3 * time.Second) // 3秒間隔でポーリング
+	ticker := time.NewTicker(500 * time.Millisecond) // 500ms間隔に短縮
 	defer ticker.Stop()
 
 	for {
