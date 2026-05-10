@@ -82,7 +82,8 @@ func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]
 		}
 
 		st := factory.NewStrategy(t.Detail, dataPool, t.Params)
-		s := sniper.NewSniper(t.Detail, st, t.Exchange)
+		policy := factory.CreateExecutionPolicy(t.Params) // [NEW] 執行ポリシーの生成
+		s := sniper.NewSniper(t.Detail, st, policy, t.Exchange)
 		snipers = append(snipers, s)
 
 		if !symbolMap[t.Detail.Code] {

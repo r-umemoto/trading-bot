@@ -8,13 +8,14 @@ import (
 type OrderStatus uint32
 
 const (
-	ORDER_STATUS_NONE        OrderStatus = 0
-	ORDER_STATUS_WAITING     OrderStatus = 1 // 発注受付中・取引所送信前
-	ORDER_STATUS_IN_PROGRESS OrderStatus = 2 // 取引所にて執行中（一部約定を含む）
-	ORDER_STATUS_FILLED      OrderStatus = 3 // 全約定（完了）
-	ORDER_STATUS_CANCELED    OrderStatus = 4 // 取消済（完了）
-	ORDER_STATUS_EXPIRED     OrderStatus = 5 // 失効・期限切れ（完了）
-	ORDER_STATUS_CANCEL_SENT OrderStatus = 6 // キャンセル送信済み・確認待ち
+	ORDER_STATUS_NONE          OrderStatus = 0
+	ORDER_STATUS_WAITING       OrderStatus = 1 // 発注受付中・取引所送信前
+	ORDER_STATUS_IN_PROGRESS   OrderStatus = 2 // 取引所にて執行中（一部約定を含む）
+	ORDER_STATUS_FILLED        OrderStatus = 3 // 全約定（完了）
+	ORDER_STATUS_CANCELED      OrderStatus = 4 // 取消済（完了）
+	ORDER_STATUS_EXPIRED       OrderStatus = 5 // 失効・期限切れ（完了）
+	ORDER_STATUS_CANCEL_SENT   OrderStatus = 6 // キャンセル送信済み・確認待ち
+	ORDER_STATUS_FILL_EXPECTED OrderStatus = 7 // 疑似約定（貫通確認済・公式通知待ち）
 )
 
 // Execution は1回の約定の事実を表す値オブジェクトです
@@ -42,6 +43,10 @@ type Order struct {
 	IFDAction    Action    // IFD注文のアクション (BUY/SELL)
 	IFDPrice     float64   // IFD注文の価格
 	IFDOrderType OrderType // IFD注文の執行条件
+
+	// 疑似約定関連のトラッキング
+	FillExpectedAt time.Time // 疑似約定と判定した時刻
+	TouchTimeout   bool      // 疑似約定がタイムアウト（空振り）したかどうかのフラグ
 }
 
 func NewOrder(id string, symbol string, action Action, price float64, qty float64) Order {

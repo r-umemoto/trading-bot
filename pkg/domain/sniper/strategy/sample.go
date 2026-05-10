@@ -103,6 +103,10 @@ func (f *SimpleStrategyFactory) NewStrategy(detail market.Symbol, dataPool marke
 	}
 }
 
+func (f *SimpleStrategyFactory) CreateExecutionPolicy(params interface{}) ExecutionPolicy {
+	return &NoopPolicy{}
+}
+
 func init() {
 	// "sample" という名前でこのファクトリをシステム全体に登録する
 	Register("sample", &SimpleStrategyFactory{})

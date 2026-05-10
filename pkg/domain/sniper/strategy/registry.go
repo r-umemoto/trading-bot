@@ -7,6 +7,7 @@ import (
 
 type StrategyFactory interface {
 	NewStrategy(detail market.Symbol, dataPool market.DataPool, params interface{}) Strategy
+	CreateExecutionPolicy(params interface{}) ExecutionPolicy
 }
 
 var registry = make(map[string]StrategyFactory)

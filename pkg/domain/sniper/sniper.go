@@ -35,6 +35,7 @@ type Sniper struct {
 	Performance     Performance // 🌟 追加
 	Strategy        Strategy
 	State           strategy.StrategyState // 👈 銘柄ごとの戦略ステート
+	ExecutionPolicy strategy.ExecutionPolicy // 👈 執行ポリシー（疑似約定判定）
 	Orders          []*market.Order
 	mu              sync.Mutex // 👈 状態をロックするための鍵
 	isExiting       bool       // 👈 撤収作業中かどうかのフラグ
@@ -44,10 +45,11 @@ type Sniper struct {
 }
 
 // NewSniper の引数と戻り値も修正
-func NewSniper(detail market.Symbol, strategy Strategy, exchange market.ExchangeMarket) *Sniper {
+func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange market.ExchangeMarket) *Sniper {
 	return &Sniper{
 		Detail:          detail,
 		Strategy:        strategy,
+		ExecutionPolicy: policy,
 		Orders:          make([]*market.Order, 0),
 		positions:       []market.Position{}, // 初期状態は空
 		AccountType:     market.ACCOUNT_SPECIAL,
@@ -77,6 +79,13 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 			// 原則として1銘柄1注文なので、最初に見つかったものを対象とする
 			activeOrder = o
 			break
+		}
+	}
+
+	// 1.5 疑似約定 (Synthetic Fill) の判定
+	if activeOrder != nil && !market.IsPendingID(activeOrder.ID) && activeOrder.Status != market.ORDER_STATUS_CANCEL_SENT {
+		if s.ExecutionPolicy != nil {
+			s.ExecutionPolicy.ApplySyntheticFill(activeOrder, state.LatestTick)
 		}
 	}
 
@@ -124,6 +133,11 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 		// すでにキャンセル送信済みの場合は、その確定を待つ
 		if activeOrder.Status == market.ORDER_STATUS_CANCEL_SENT {
+			return nil, nil, ""
+		}
+
+		// 疑似約定済みの場合は、戦略が何と言おうとキャンセルをブロックして維持する
+		if activeOrder.Status == market.ORDER_STATUS_FILL_EXPECTED {
 			return nil, nil, ""
 		}
 
