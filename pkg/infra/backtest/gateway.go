@@ -32,6 +32,7 @@ type SyncBacktestGateway struct {
 	lastTicks          map[string]market.Tick
 	initialDepths      map[string]float64 // orderID -> 並んだ時の板の厚み
 	cumulativeVolumes  map[string]float64 // orderID -> その価格での累積出来高
+	orderTypes         map[string]market.OrderType
 }
 
 func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
@@ -46,6 +47,7 @@ func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
 		lastTicks:          make(map[string]market.Tick),
 		initialDepths:      make(map[string]float64),
 		cumulativeVolumes:  make(map[string]float64),
+		orderTypes:         make(map[string]market.OrderType),
 	}
 }
 
@@ -93,14 +95,16 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 				if (o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice) ||
 					(o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice) {
 					executed = true
-					execPrice = o.OrderPrice
+					// 指値貫通時は現在価格で約定させる（ペナルティの回避）
+					execPrice = tick.Price
 				}
 			case ExecutionModelVolume:
 				// Volume-Based Rule: piercing OR cumulative volume > initial depth
 				if (o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice) ||
 					(o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice) {
 					executed = true
-					execPrice = o.OrderPrice
+					// 指値貫通時は現在価格で約定させる
+					execPrice = tick.Price
 				} else if tick.Price == o.OrderPrice {
 					g.cumulativeVolumes[o.ID] += deltaVolume
 					if g.cumulativeVolumes[o.ID] > g.initialDepths[o.ID] {
@@ -158,6 +162,7 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, req market.OrderReq
 
 	g.orders[orderID] = order
 	g.orderKeys = append(g.orderKeys, orderID)
+	g.orderTypes[orderID] = req.OrderType
 
 	// ボリュームベース約定用の初期情報を記録
 	if g.Model == ExecutionModelVolume {
