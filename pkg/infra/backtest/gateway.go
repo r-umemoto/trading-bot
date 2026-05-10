@@ -3,6 +3,7 @@ package backtest
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
@@ -62,6 +63,7 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 	if lastVol, ok := g.lastTradingVolumes[tick.Symbol]; ok {
 		deltaVolume = tick.TradingVolume - lastVol
 	}
+	g.lastTradingVolumes[tick.Symbol] = tick.TradingVolume
 
 	// Evaluate orders (in deterministic order)
 	for _, id := range g.orderKeys {
@@ -69,18 +71,22 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 		if o.IsCompleted() {
 			continue
 		}
-
 		if o.Symbol != tick.Symbol {
 			continue
 		}
 
-		// Execution logic
 		executed := false
 		execPrice := 0.0
+		execQty := 0.0
+
 		if o.OrderPrice == 0 {
-			// Market order: executes at current tick price
-			executed = true
-			execPrice = tick.Price
+			// Market order: walk the book
+			avgPrice, filled := g.walkTheBook(o.Action, o.OrderQty-o.CumQty, 0, tick)
+			if filled > 0 {
+				executed = true
+				execPrice = avgPrice
+				execQty = filled
+			}
 		} else {
 			switch g.Model {
 			case ExecutionModelTouch:
@@ -88,51 +94,55 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 				if (o.Action == market.ACTION_BUY && tick.Price <= o.OrderPrice) ||
 					(o.Action == market.ACTION_SELL && tick.Price >= o.OrderPrice) {
 					executed = true
-					execPrice = tick.Price
+					execPrice = o.OrderPrice
+					execQty = o.OrderQty - o.CumQty
 				}
-			case ExecutionModelPessimistic:
-				// Trade-Through (貫通約定) Rule: executes only if price moves BEYOND the limit price
-				if (o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice) ||
-					(o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice) {
-					executed = true
-					// 指値貫通時は現在価格で約定させる（ペナルティの回避）
-					execPrice = tick.Price
-				}
-			case ExecutionModelVolume:
-				// Volume-Based Rule: piercing OR cumulative volume > initial depth
-				if (o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice) ||
-					(o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice) {
-					executed = true
-					// 指値貫通時は現在価格で約定させる
-					execPrice = tick.Price
-				} else if tick.Price == o.OrderPrice {
+			case ExecutionModelPessimistic, ExecutionModelVolume:
+				// Trade-Through (貫通約定) Rule
+				isPierced := (o.Action == market.ACTION_BUY && tick.Price < o.OrderPrice) ||
+					(o.Action == market.ACTION_SELL && tick.Price > o.OrderPrice)
+
+				if isPierced {
+					// 貫通時は板を食い破る（Marketable Limitの再現）
+					avgPrice, filled := g.walkTheBook(o.Action, o.OrderQty-o.CumQty, o.OrderPrice, tick)
+					if filled > 0 {
+						executed = true
+						execPrice = avgPrice
+						execQty = filled
+					}
+				} else if g.Model == ExecutionModelVolume && tick.Price == o.OrderPrice {
+					// 同値での出来高消化待ち
 					g.cumulativeVolumes[o.ID] += deltaVolume
 					if g.cumulativeVolumes[o.ID] > g.initialDepths[o.ID] {
 						executed = true
 						execPrice = o.OrderPrice
-						fmt.Printf("📢 [%s] キュー消化により約定: ID=%s, Price=%.1f, TradedVolume=%.0f, InitialDepth=%.0f\n",
-							tick.Symbol, o.ID, o.OrderPrice, g.cumulativeVolumes[o.ID], g.initialDepths[o.ID])
+						execQty = o.OrderQty - o.CumQty // 同値での消化は全量とみなす
 					}
 				}
 			}
 		}
 
-		if executed {
+		if executed && execQty > 0 {
 			execID := fmt.Sprintf("exec_%d_%s", time.Now().UnixNano(), o.ID)
 			exec := market.Execution{
 				ID:    execID,
 				Price: execPrice,
-				Qty:   o.OrderQty, // Simplified: executes full qty at once
+				Qty:   execQty,
 			}
 			o.AddExecution(exec)
-			o.Status = market.ORDER_STATUS_FILLED // 簡略化：一発で全約定とする
-			o.CumQty = o.FilledQty()              // 🌟 累計約定数量を更新
+			o.CumQty = o.FilledQty()
+
+			if o.CumQty >= o.OrderQty {
+				o.Status = market.ORDER_STATUS_FILLED
+			} else {
+				o.Status = market.ORDER_STATUS_IN_PROGRESS
+			}
 
 			// Update position
 			if o.Action == market.ACTION_BUY {
-				g.positions[o.Symbol] += exec.Qty
+				g.positions[o.Symbol] += execQty
 			} else {
-				g.positions[o.Symbol] -= exec.Qty
+				g.positions[o.Symbol] -= execQty
 			}
 
 			// 通知用の OrdersReport を生成して送信
@@ -149,6 +159,72 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 
 	// Forward tick to usecase
 	g.tickCh <- tick
+}
+
+// walkTheBook は板を順に走査し、指定数量分を約定させた場合の平均価格と数量を返します
+func (g *SyncBacktestGateway) walkTheBook(action market.Action, qty float64, limitPrice float64, tick market.Tick) (float64, float64) {
+	remainingQty := qty
+	totalValue := 0.0
+	filledQty := 0.0
+
+	var board []market.Quote
+	if action == market.ACTION_BUY {
+		board = tick.SellBoard
+	} else {
+		board = tick.BuyBoard
+	}
+
+	// 板が空の場合は最良気配をフォールバックに
+	if len(board) == 0 {
+		var bestPrice float64
+		if action == market.ACTION_BUY {
+			bestPrice = tick.BestAsk.Price
+		} else {
+			bestPrice = tick.BestBid.Price
+		}
+		if bestPrice > 0 {
+			if limitPrice > 0 {
+				if action == market.ACTION_BUY && bestPrice > limitPrice {
+					return 0, 0
+				}
+				if action == market.ACTION_SELL && bestPrice < limitPrice {
+					return 0, 0
+				}
+			}
+			return bestPrice, qty
+		}
+		return 0, 0
+	}
+
+	for _, quote := range board {
+		if remainingQty <= 0 {
+			break
+		}
+
+		// 指値チェック
+		if limitPrice > 0 {
+			if action == market.ACTION_BUY && quote.Price > limitPrice {
+				break
+			}
+			if action == market.ACTION_SELL && quote.Price < limitPrice {
+				break
+			}
+		}
+
+		tradeQty := math.Min(remainingQty, quote.Qty)
+		if tradeQty <= 0 {
+			continue
+		}
+
+		totalValue += tradeQty * quote.Price
+		filledQty += tradeQty
+		remainingQty -= tradeQty
+	}
+
+	if filledQty == 0 {
+		return 0, 0
+	}
+	return totalValue / filledQty, filledQty
 }
 
 func (g *SyncBacktestGateway) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
