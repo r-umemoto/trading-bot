@@ -45,8 +45,16 @@ type Order struct {
 	IFDOrderType OrderType // IFD注文の執行条件
 
 	// 疑似約定関連のトラッキング
-	FillExpectedAt time.Time // 疑似約定と判定した時刻
-	TouchTimeout   bool      // 疑似約定がタイムアウト（空振り）したかどうかのフラグ
+	Synthetic SyntheticFillState
+}
+
+// SyntheticFillState は疑似約定（Synthetic Fill）の追跡状態を保持します
+type SyntheticFillState struct {
+	ExpectedAt       time.Time // 疑似約定と判定した時刻
+	TouchTimeout     bool      // 疑似約定がタイムアウト（空振り）したかどうかのフラグ
+	InitialQueueQty  float64   // タッチした瞬間の板の厚み（自分の前の待ち行列）
+	ConsumedVolume   float64   // タッチ後にその価格で消化された累計出来高
+	LastVolumeUpdate float64   // 前回のTick時の総出来高
 }
 
 func NewOrder(id string, symbol string, action Action, price float64, qty float64) Order {
