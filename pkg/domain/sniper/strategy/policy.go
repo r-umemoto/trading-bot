@@ -126,20 +126,32 @@ func (p *VolumeConsumptionPolicy) ApplySyntheticFill(order *market.Order, tick m
 		}
 		order.Synthetic.LastVolumeUpdate = tick.TradingVolume
 
-		// 消化量が閾値（自分の順番）を超えたかチェック
-		if order.Status != market.ORDER_STATUS_FILL_EXPECTED {
-			threshold := order.Synthetic.InitialQueueQty * p.QueueOffsetRatio
-			if order.Synthetic.ConsumedVolume >= threshold {
-				order.Status = market.ORDER_STATUS_FILL_EXPECTED
-				order.Synthetic.ExpectedAt = tick.CurrentPriceTime
-				fmt.Printf("⚡ [%s] 疑似約定(出来高消化)を検知しました: %s (Consumed: %.0f / Queue: %.0f)\n",
-					order.Symbol, order.ID, order.Synthetic.ConsumedVolume, order.Synthetic.InitialQueueQty)
+	// 消化量が閾値（自分の順番）を超えたかチェック
+	if order.Status != market.ORDER_STATUS_FILL_EXPECTED {
+		threshold := order.Synthetic.InitialQueueQty * p.QueueOffsetRatio
+		if order.Synthetic.ConsumedVolume >= threshold {
+			order.Status = market.ORDER_STATUS_FILL_EXPECTED
+			order.Synthetic.ExpectedAt = tick.CurrentPriceTime
+			if order.Synthetic.ExpectedAt.IsZero() {
+				order.Synthetic.ExpectedAt = time.Now()
 			}
+			fmt.Printf("⚡ [%s] 疑似約定(出来高消化)を検知しました: %s (Consumed: %.0f / Queue: %.0f)\n",
+				order.Symbol, order.ID, order.Synthetic.ConsumedVolume, order.Synthetic.InitialQueueQty)
 		}
 	} else {
-		// 価格が離れている間も、総出来高の同期だけは維持する（戻ってきた時の計算が狂わないように）
-		order.Synthetic.LastVolumeUpdate = tick.TradingVolume
+		// すでに疑似約定状態：安全のためのタイムアウト（2秒など）
+		// 出来高で確信していても、一定時間公式通知が来ない場合は「幻」とみなして解除する
+		elapsed := tick.CurrentPriceTime.Sub(order.Synthetic.ExpectedAt)
+		if elapsed > 2*time.Second {
+			order.Status = market.ORDER_STATUS_WAITING
+			order.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
+			fmt.Printf("💔 [%s] 疑似約定(出来高)がタイムアウトしました（幻の約定）: %s\n", order.Symbol, order.ID)
+		}
 	}
+} else {
+	// 価格が離れている間も、総出来高の同期だけは維持する
+	order.Synthetic.LastVolumeUpdate = tick.TradingVolume
+}
 }
 
 // NoopPolicy は疑似約定判定を一切行いません（Observer戦略など向け）。

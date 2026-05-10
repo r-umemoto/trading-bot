@@ -97,6 +97,19 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		totalExposure += p.Price * float64(p.LeavesQty)
 	}
 
+	// [NEW] 疑似約定(FILL_EXPECTED)中の注文も保有数量に先行計上する
+	for _, o := range s.Orders {
+		if o.Status == market.ORDER_STATUS_FILL_EXPECTED {
+			if o.Action == market.ACTION_BUY {
+				holdQty += o.OrderQty
+				totalExposure += o.OrderPrice * o.OrderQty
+			} else if o.Action == market.ACTION_SELL {
+				holdQty -= o.OrderQty
+				// 売り（決済）の場合は平均単価への影響はなしとする（簡略化）
+			}
+		}
+	}
+
 	averagePrice := 0.0
 	if holdQty > 0 {
 		averagePrice = totalExposure / holdQty
@@ -136,9 +149,11 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 			return nil, nil, ""
 		}
 
-		// 疑似約定済みの場合は、戦略が何と言おうとキャンセルをブロックして維持する
+		// 疑似約定済みの場合は、基本的には維持するが、
+		// 戦略が「次の注文（利確など）」を出したい場合は、この注文を「完了したもの」とみなして
+		// 重複発注プロセスへ進ませる。
 		if activeOrder.Status == market.ORDER_STATUS_FILL_EXPECTED {
-			return nil, nil, ""
+			// ここでは何もせず、後続の「意図との比較」へ進む
 		}
 
 		// 現在の注文が戦略の意図（シグナル）と一致しているかチェック
