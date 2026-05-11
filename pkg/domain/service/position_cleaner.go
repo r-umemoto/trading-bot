@@ -22,10 +22,28 @@ func NewPositionCleaner(snipers []*sniper.Sniper, marketGateway market.MarketGat
 	}
 }
 
-// CleanupOnStartup は起動時に残存している建玉をすべて成行で強制決済します
+// CleanupOnStartup は起動時に残存している「注文」と「建玉」をすべてクリーンアップします
 func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	fmt.Println("🧹 起動時のシステム状態チェックを開始します...")
 
+	// 1. 未約定の注文をすべてキャンセル
+	fmt.Println("🔍 未約定注文の確認...")
+	orders, err := c.marketGateway.GetOrders(ctx)
+	if err != nil {
+		fmt.Printf("⚠️ 注文取得エラー (スキップします): %v\n", err)
+	} else {
+		for _, o := range orders {
+			if !o.IsCompleted() && o.Symbol != "" {
+				fmt.Printf("🛑 前回の残存注文をキャンセルします: %s %s @%.1f\n", o.Symbol, o.Action, o.OrderPrice)
+				if err := c.marketGateway.CancelOrder(ctx, o.ID); err != nil {
+					fmt.Printf("❌ キャンセル失敗 (ID: %s): %v\n", o.ID, err)
+				}
+			}
+		}
+	}
+
+	// 2. 建玉の強制決済
+	fmt.Println("🔍 残存建玉の確認...")
 	initialPositions, err := c.marketGateway.GetPositions(ctx, market.PRODUCT_MARGIN)
 	if err != nil {
 		return fmt.Errorf("建玉取得エラー: %w", err)

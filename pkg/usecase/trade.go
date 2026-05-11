@@ -151,11 +151,11 @@ func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report 
 				fmt.Printf("🚀 [%s] IFD決済注文を送信します: %s %.2f株\n", symbol, req.Action, req.Qty)
 				orderID, err := u.gateway.SendOrder(ctx, *req)
 				if err != nil {
-					fmt.Printf("❌ IFD発注失敗: %v\n", err)
+					fmt.Printf("🚨 [%s] IFD決済注文の発注に失敗しました！次のTickでリカバリーを試みます: %v\n", symbol, err)
 					s.FailSendingOrder(orderPtr)
 				} else {
 					s.ConfirmOrder(orderPtr, orderID)
-					fmt.Printf("✅ IFD注文受付IDを記録しました: %s\n", orderID)
+					fmt.Printf("✅ [%s] IFD注文受付IDを記録しました: %s\n", symbol, orderID)
 				}
 			}
 		}

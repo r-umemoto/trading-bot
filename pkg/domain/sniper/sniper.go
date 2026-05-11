@@ -152,7 +152,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 			marketAction, _ := signal.Action.ToMarketAction()
 			if marketAction != "" && activeOrder.Action != marketAction {
 				// 決済（反対売買）の場合は、PENDINGを無視して新規発注フローへ進ませる（デッドロック防止）
-				fmt.Printf("⚠️ [%s] PENDING中の注文(%s)がありますが、反対売買のため発注を優先します\n", s.Detail.Code, activeOrder.Action)
+				fmt.Printf("⚠️ [%s] PENDING中の注文(%s)がありますが、反対売買(Action: %s)のため発注を優先します\n", s.Detail.Code, activeOrder.Action, marketAction)
 				activeOrder = nil
 			} else {
 				return nil, nil, ""
@@ -407,7 +407,7 @@ func (s *Sniper) CalcUnrealizedPnL(currentPrice float64) float64 {
 	return unrealized
 }
 
-// SyncOrders はインフラ層から取得した最新の注文一覧と同期します
+// SyncOrders はインフラ層から取得した最新の注文一覧と同期し、内部状態を「事実」に合わせます
 func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *market.OrderRequest, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -415,7 +415,18 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 	var newExecQty float64
 	var triggeredIFDParent *market.Order
 	var newExecs []market.Execution
+	
+	// 新しい管理リストを作成（事実ベースで再構築）
+	var reconciledOrders []*market.Order
 
+	// 1. IDが未確定（PENDING）の注文をまず保持する（まだAPIに現れていない可能性があるため）
+	for _, o := range s.Orders {
+		if market.IsPendingID(o.ID) {
+			reconciledOrders = append(reconciledOrders, o)
+		}
+	}
+
+	// 2. APIから取得した注文をすべて反映・採用する
 	for _, ext := range externalOrders {
 		if ext.Symbol != s.Detail.Code {
 			continue
@@ -423,40 +434,53 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 
 		// 内部で管理している注文を探す
 		var matchedInternal *market.Order
-		for _, internal := range s.Orders {
-			if internal.ID == ext.ID {
-				matchedInternal = internal
+		for _, o := range s.Orders {
+			if o.ID == ext.ID {
+				matchedInternal = o
 				break
 			}
 		}
 
 		if matchedInternal == nil {
-			// まだIDが紐付いていない（Confirm前）の注文や、再起動前に出された注文の場合
-			// それでも「約定」があれば、建玉として認識させる（リカバリー）
-			for _, exec := range ext.Executions {
-				s.applyExecution(exec, ext.Action)
-			}
+			// 【重要】自分が出した注文ではない（他の戦略の注文など）可能性があるため、一切関知しない。
+			// 起動時の残存建玉は PositionCleaner が掃除するため、ここでは「自分がこのセッションで出した注文」のみを管理する。
 			continue
 		}
 
-		// 1. 状態の同期
+		// 状態の同期
 		matchedInternal.Status = ext.Status
 		matchedInternal.CumQty = ext.CumQty
 
-		// 2. 新しい約定の反映
+		// 約定の反映
 		for _, exec := range ext.Executions {
-			if !matchedInternal.HasExecution(exec.ID) {
-				// 新しい約定を発見
-				matchedInternal.AddExecution(exec)
+			if !s.processedExecutions[exec.ID] {
 				s.applyExecution(exec, matchedInternal.Action)
 				newExecQty += exec.Qty
 				triggeredIFDParent = matchedInternal
 				newExecs = append(newExecs, exec)
 			}
 		}
+
+		// 完了していない注文を管理リストに残す
+		isDataComplete := matchedInternal.FilledQty() >= matchedInternal.CumQty
+		if !matchedInternal.IsCompleted() || !isDataComplete {
+			exists := false
+			for _, ro := range reconciledOrders {
+				if ro.ID == matchedInternal.ID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				reconciledOrders = append(reconciledOrders, matchedInternal)
+			}
+		}
 	}
 
-	// IFDの発火処理
+	// リストを更新（APIにない確定済みIDの注文はここで消える）
+	s.Orders = reconciledOrders
+
+	// 3. IFDの発火処理
 	var ifdPendingOrder *market.Order
 	var ifdRequest *market.OrderRequest
 	if newExecQty > 0 && triggeredIFDParent != nil && triggeredIFDParent.HasIFD {
@@ -464,7 +488,6 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 
 		var closePositions []market.ClosePosition
 		if triggeredIFDParent.IFDAction == market.ACTION_SELL {
-			// 直前に約定したポジションを返済対象として指定する
 			for _, exec := range newExecs {
 				closePositions = append(closePositions, market.ClosePosition{
 					HoldID: exec.ID,
@@ -478,7 +501,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 			closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
 		}
 
-		req := &market.OrderRequest{
+		ifdRequest = &market.OrderRequest{
 			Symbol:             s.Detail.Code,
 			Exchange:           s.Exchange,
 			SecurityType:       market.SECURITY_TYPE_STOCK,
@@ -490,28 +513,12 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 			ClosePositions:     closePositions,
 			Qty:                newExecQty,
 			Price:              triggeredIFDParent.IFDPrice,
-			HasIFD:             false, // IFDの先はなし
+			HasIFD:             false,
 		}
 
-		ptr := market.NewOrderPtr(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
-		s.Orders = append(s.Orders, ptr)
-
-		ifdPendingOrder = ptr
-		ifdRequest = req
+		ifdPendingOrder = market.NewOrderPtr(market.GeneratePendingID(), ifdRequest.Symbol, ifdRequest.Action, ifdRequest.Price, ifdRequest.Qty)
+		s.Orders = append(s.Orders, ifdPendingOrder)
 	}
-
-	// 3. 完了した注文をリストから除去
-	var activeOrders []*market.Order
-	for _, o := range s.Orders {
-		// ステータスが完了(FILLED/CANCELED/EXPIRED)であり、
-		// かつ、受け取った約定明細の合計がAPI報告のCumQtyに達している場合のみリストから除外する
-		isDataComplete := o.FilledQty() >= o.CumQty
-		if o.IsCompleted() && isDataComplete {
-			continue
-		}
-		activeOrders = append(activeOrders, o)
-	}
-	s.Orders = activeOrders
 
 	return ifdPendingOrder, ifdRequest, ""
 }
