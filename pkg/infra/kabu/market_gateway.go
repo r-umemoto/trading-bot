@@ -21,9 +21,20 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 	}
 }
 
+// KabuClientInterface はカブコムAPIクライアントのインターフェースです（テスト用）
+type KabuClientInterface interface {
+	GetOrders() ([]api.Order, error)
+	SendOrder(req api.OrderRequest) (*api.OrderResponse, error)
+	CancelOrder(req api.CancelRequest) (*api.CancelResponse, error)
+	GetPositions(product api.ProductType) ([]api.Position, error)
+	RegisterSymbol(req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error)
+	UnregisterSymbolAll() (*api.UnregisterSymbolAllResponse, error)
+	GetSymbol(symbol string, exchange api.ExchageType) (*api.SymbolSuccess, error)
+}
+
 // MarketGateway はHTTPプロトコルを用いたREST API操作を担当します
 type MarketGateway struct {
-	client   *api.KabuClient
+	client   KabuClientInterface
 	wsClient *api.WSClient
 }
 
