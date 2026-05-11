@@ -6,6 +6,27 @@ import (
 	"fmt"
 )
 
+// OrderState は注文の状態を表します
+const (
+	STATE_WAITING    int32 = 1 // 待機（発注待機）
+	STATE_PROCESSING int32 = 2 // 処理中（発注送信中）
+	STATE_PROCESSED  int32 = 3 // 処理済（発注済・訂正済）
+	STATE_CANCELING  int32 = 4 // 訂正取消送信中
+	STATE_FINISHED   int32 = 5 // 終了（発注エラー・取消済・全約定・失効・期限切れ）
+)
+
+// RecType は明細の種別を表します
+const (
+	RECTYPE_RECEIVE    int32 = 1 // 受付
+	RECTYPE_CARRY_OVER int32 = 2 // 繰越
+	RECTYPE_EXPIRED    int32 = 3 // 期限切れ
+	RECTYPE_ORDERED    int32 = 4 // 発注
+	RECTYPE_EDITED     int32 = 5 // 訂正
+	RECTYPE_CANCELED   int32 = 6 // 取消
+	RECTYPE_INVALID    int32 = 7 // 失効
+	RECTYPE_EXECUTION  int32 = 8 // 約定
+)
+
 type ClosePosition struct {
 	HoldID string  `json:"HoldID"`
 	Qty    float64 `json:"Qty"`

@@ -72,14 +72,19 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		return nil, nil, ""
 	}
 
-	// 1. 未完了の注文（!IsCompleted）を抽出する
+	// 1. 管理対象の注文を特定する
 	var activeOrder *market.Order
 	for _, o := range s.Orders {
-		if !o.IsCompleted() {
-			// 原則として1銘柄1注文なので、最初に見つかったものを対象とする
-			activeOrder = o
-			break
+		if o.IsCompleted() {
+			continue
 		}
+		// キャンセル送信中の注文は、基本的には管理対象から外す（新しい注文を出せるようにするため）
+		// ただし、戦略が「何もしない(HOLD)」と言った場合に、二重にキャンセルを送らないよう保持はする
+		if o.Status == market.ORDER_STATUS_CANCEL_SENT {
+			continue
+		}
+		activeOrder = o
+		break
 	}
 
 	// 1.5 疑似約定 (Synthetic Fill) の判定
@@ -146,6 +151,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 		// すでにキャンセル送信済みの場合は、その確定を待つ
 		if activeOrder.Status == market.ORDER_STATUS_CANCEL_SENT {
+			// ここに来るということは、上記のループで skip されなかった場合（二重キャンセル防止など）
 			return nil, nil, ""
 		}
 
@@ -213,9 +219,6 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		return nil, nil, ""
 	}
 
-	// --- 5. 新規発注フェーズ ---
-	// 未完了注文がない場合のみ、新規発注を検討する
-
 	if signal.Action == brain.ACTION_HOLD {
 		return nil, nil, ""
 	}
@@ -223,6 +226,18 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	marketAction, err := signal.Action.ToMarketAction()
 	if err != nil {
 		return nil, nil, ""
+	}
+
+	// --- 5. 新規発注フェーズ ---
+	// 未完了注文がない場合（または既存の注文がキャンセル送信中の場合）に、新規発注を検討する
+	// ただし、同じアクション（BUY/BUY, SELL/SELL）の注文がすでにキャンセル送信中の場合は、
+	// 二重発注を避けるためにその完了を待つ。
+	for _, o := range s.Orders {
+		if !o.IsCompleted() && o.Status == market.ORDER_STATUS_CANCEL_SENT {
+			if o.Action == marketAction {
+				return nil, nil, ""
+			}
+		}
 	}
 
 	orderType := market.ORDER_TYPE_MARKET

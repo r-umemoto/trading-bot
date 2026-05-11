@@ -169,34 +169,32 @@ func (m *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 		}
 
 		// api.Order.State を market.OrderStatus にマッピング
+		// カブコム仕様: 1:待機, 2:処理中, 3:処理済, 4:訂正取消送信中, 5:終了
 		status := market.ORDER_STATUS_WAITING
 		switch order.State {
-		case 1, 2:
+		case api.STATE_WAITING, api.STATE_PROCESSING:
 			status = market.ORDER_STATUS_WAITING
-		case 3:
+		case api.STATE_PROCESSED:
 			status = market.ORDER_STATUS_IN_PROGRESS
-		case 4:
-			status = market.ORDER_STATUS_CANCEL_SENT
-		case 5:
-			if order.CumQty >= order.OrderQty {
+		case api.STATE_CANCELING:
+			status = market.ORDER_STATUS_CANCEL_SENT // 訂正取消送信中
+		case api.STATE_FINISHED:
+			// State:5 は最終状態。CumQty を見て全約定か一部約定・取消かを判断する
+			if order.CumQty >= order.OrderQty && order.OrderQty > 0 {
 				status = market.ORDER_STATUS_FILLED
 			} else {
-				// Details を走査して理由を探す
-				foundReason := false
+				// 取消・失効・期限切れのいずれか
+				// デフォルトを CANCELED とし、明細から詳細を判断
+				status = market.ORDER_STATUS_CANCELED
 				for _, detail := range order.Details {
-					if detail.RecType == 3 || detail.RecType == 7 {
-						status = market.ORDER_STATUS_EXPIRED
-						foundReason = true
-						break
-					}
-					if detail.RecType == 6 {
+					if detail.RecType == api.RECTYPE_CANCELED { // 取消
 						status = market.ORDER_STATUS_CANCELED
-						foundReason = true
 						break
 					}
-				}
-				if !foundReason {
-					status = market.ORDER_STATUS_CANCELED // Fallback
+					if detail.RecType == api.RECTYPE_EXPIRED || detail.RecType == api.RECTYPE_INVALID { // 期限切れ・失効
+						status = market.ORDER_STATUS_EXPIRED
+						break
+					}
 				}
 			}
 		}
@@ -206,8 +204,8 @@ func (m *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 		o.CumQty = order.CumQty
 
 		for _, execution := range order.Details {
-			// RecType が 8 (約定) の場合のみ Execution として追加
-			if execution.RecType != 8 || execution.ID == "" {
+			// RecType が RECTYPE_EXECUTION (8: 約定) の場合のみ Execution として追加
+			if execution.RecType != api.RECTYPE_EXECUTION || execution.ID == "" {
 				continue
 			}
 			o.AddExecution(
