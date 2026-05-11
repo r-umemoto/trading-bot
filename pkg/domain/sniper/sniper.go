@@ -97,47 +97,10 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		}
 	}
 
-	// 2. パラメータ計算
-	var holdQty float64
-	var totalExposure float64
-	for _, p := range s.positions {
-		holdQty += p.LeavesQty
-		totalExposure += p.Price * float64(p.LeavesQty)
-	}
-
-	// [NEW] 疑似約定(FILL_EXPECTED)中の注文も保有数量に先行計上する
-	for _, o := range s.Orders {
-		if o.Status == market.ORDER_STATUS_FILL_EXPECTED {
-			if o.Action == market.ACTION_BUY {
-				holdQty += o.OrderQty
-				totalExposure += o.OrderPrice * o.OrderQty
-			} else if o.Action == market.ACTION_SELL {
-				holdQty -= o.OrderQty
-				// 売り（決済）の場合は平均単価への影響はなしとする（簡略化）
-			}
-		}
-	}
-
-	averagePrice := 0.0
-	if holdQty > 0 {
-		averagePrice = totalExposure / holdQty
-	}
-
-	// 現在の待機注文リストを作成
-	var activeOrders []market.Order
-	for _, o := range s.Orders {
-		if !o.IsCompleted() {
-			activeOrders = append(activeOrders, *o)
-		}
-	}
-
 	input := strategy.StrategyInput{
-		Symbol:        s.Detail.Code,
-		HoldQty:       holdQty,
-		AveragePrice:  averagePrice,
-		TotalExposure: totalExposure,
+		Orders:        strategy.StrategyOrders(s.Orders),
 		LatestTick:    state.LatestTick,
-		ActiveOrders:  activeOrders,
+		BasePositions: s.positions,
 	}
 
 	// 3. 戦略の判断を仰ぐ
