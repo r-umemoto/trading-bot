@@ -42,6 +42,8 @@ type Sniper struct {
 	AccountType     market.AccountType
 	Exchange        market.ExchangeMarket
 	MarginTradeType market.MarginTradeType
+
+	processedExecutions map[string]bool // 🌟 処理済みの約定IDを記録
 }
 
 // NewSniper の引数と戻り値も修正
@@ -55,6 +57,7 @@ func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.Executio
 		AccountType:     market.ACCOUNT_SPECIAL,
 		Exchange:        exchange,
 		MarginTradeType: market.TRADE_TYPE_GENERAL_DAY,
+		processedExecutions: make(map[string]bool),
 	}
 }
 
@@ -146,7 +149,14 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	if activeOrder != nil {
 		// IDがまだ確定していない（PENDING）場合は、次のアクションを起こさず待機
 		if market.IsPendingID(activeOrder.ID) {
-			return nil, nil, ""
+			marketAction, _ := signal.Action.ToMarketAction()
+			if marketAction != "" && activeOrder.Action != marketAction {
+				// 決済（反対売買）の場合は、PENDINGを無視して新規発注フローへ進ませる（デッドロック防止）
+				fmt.Printf("⚠️ [%s] PENDING中の注文(%s)がありますが、反対売買のため発注を優先します\n", s.Detail.Code, activeOrder.Action)
+				activeOrder = nil
+			} else {
+				return nil, nil, ""
+			}
 		}
 
 		// すでにキャンセル送信済みの場合は、その確定を待つ
@@ -421,13 +431,17 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 		}
 
 		if matchedInternal == nil {
-			// まだIDが紐付いていない（Confirm前）の注文や、他で出された注文などは無視
+			// まだIDが紐付いていない（Confirm前）の注文や、再起動前に出された注文の場合
+			// それでも「約定」があれば、建玉として認識させる（リカバリー）
+			for _, exec := range ext.Executions {
+				s.applyExecution(exec, ext.Action)
+			}
 			continue
 		}
 
 		// 1. 状態の同期
 		matchedInternal.Status = ext.Status
-		matchedInternal.CumQty = ext.CumQty // 🌟 API側の累計約定数量を同期
+		matchedInternal.CumQty = ext.CumQty
 
 		// 2. 新しい約定の反映
 		for _, exec := range ext.Executions {
@@ -503,6 +517,12 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 }
 
 func (s *Sniper) applyExecution(exec market.Execution, action market.Action) {
+	// 🌟 重複チェック（冪等性の担保）
+	if s.processedExecutions[exec.ID] {
+		return
+	}
+	s.processedExecutions[exec.ID] = true
+
 	switch action {
 	case market.ACTION_BUY:
 		s.positions = append(s.positions, market.Position{

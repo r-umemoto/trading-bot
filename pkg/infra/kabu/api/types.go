@@ -20,8 +20,8 @@ type ProductType string
 
 const (
 	ProductAll    ProductType = "0" // すべて (0)
-	ProductCash                     // 現物（1）
-	ProductMargin                   // 信用 (2)
-	ProductFuture                   // 先物（3）
-	ProductOption                   // オプション（4）
+	ProductCash   ProductType = "1" // 現物（1）
+	ProductMargin ProductType = "2" // 信用 (2)
+	ProductFuture ProductType = "3" // 先物（3）
+	ProductOption ProductType = "4" // オプション（4）
 )
