@@ -24,7 +24,8 @@ func (s *SampleStrategy) Name() string {
 
 // Evaluate is purely functional
 func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
-	pos := input.Orders.ExtractPosition(input.BasePositions)
+	holdQty := input.HoldQty()
+	avgPrice := input.AveragePrice()
 
 	if !input.LatestTick.IsExecution() {
 		return brain.Signal{
@@ -32,23 +33,23 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 		}
 	}
 
-	if pos.Qty > 0 {
+	if holdQty > 0 {
 		curretPrice := input.LatestTick.Price
 		if s.highPrice == 0 {
 			s.highPrice = curretPrice
 		}
-		if curretPrice < s.highPrice*0.80 && pos.AveragePrice > curretPrice {
+		if curretPrice < s.highPrice*0.80 && avgPrice > curretPrice {
 			s.highPrice = 0
 			return brain.Signal{
 				Action:   brain.ACTION_SELL,
-				Quantity: pos.Qty,
+				Quantity: holdQty,
 			}
 		}
-		if curretPrice < pos.AveragePrice*0.997 {
+		if curretPrice < avgPrice*0.997 {
 			s.highPrice = 0
 			return brain.Signal{
 				Action:   brain.ACTION_SELL,
-				Quantity: pos.Qty,
+				Quantity: holdQty,
 			}
 		}
 		if curretPrice > s.highPrice {

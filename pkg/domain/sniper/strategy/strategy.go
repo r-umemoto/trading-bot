@@ -14,28 +14,64 @@ type Position struct {
 	AveragePrice float64 // 平均取得単価
 }
 
-// ExtractPosition は注文履歴から現在のポジションの状態を計算します
-// APIからの確定約定に加え、ボットが独自に判断した疑似約定(FILL_EXPECTED)も先行計上します。
-func (os StrategyOrders) ExtractPosition(initialPositions []market.Position) Position {
+// StrategyInput は、戦略が判断を下すための「情報のパケット」です
+// 内部に計算ロジック（知恵）を隠蔽し、戦略側にはシンプルなインターフェースを提供します。
+type StrategyInput struct {
+	Orders        StrategyOrders    // すべての注文履歴
+	LatestTick    market.Tick       // 最新のTick
+	BasePositions []market.Position // Sniperが管理している確定ポジション
+
+	// 内部キャッシュ（複数回メソッドを呼んでも計算は一度だけ）
+	cachedPos *Position
+}
+
+// --- 戦略から利用する「道具箱」メソッド ---
+
+// HoldQty は現在の保有数量を返します
+func (i *StrategyInput) HoldQty() float64 {
+	return i.ensurePosition().Qty
+}
+
+// AveragePrice は現在の平均取得単価を返します
+func (i *StrategyInput) AveragePrice() float64 {
+	return i.ensurePosition().AveragePrice
+}
+
+// ActiveOrders は現在板に出ている（未完了の）注文リストを返します
+func (i *StrategyInput) ActiveOrders() StrategyOrders {
+	var active StrategyOrders
+	for _, o := range i.Orders {
+		if !o.IsCompleted() && o.Status != market.ORDER_STATUS_CANCEL_SENT {
+			active = append(active, o)
+		}
+	}
+	return active
+}
+
+// --- 内部計算ロジック（戦略からは隠蔽） ---
+
+func (i *StrategyInput) ensurePosition() *Position {
+	if i.cachedPos != nil {
+		return i.cachedPos
+	}
+
 	var totalQty float64
 	var totalCost float64
 
-	// 1. APIから取得・同期済みの確定ポジションをベースにする
-	for _, p := range initialPositions {
+	// 1. API確定ポジションをベースにする
+	for _, p := range i.BasePositions {
 		totalQty += p.LeavesQty
 		totalCost += p.Price * float64(p.LeavesQty)
 	}
 
-	// 2. まだ API に反映されていない可能性のある「疑似約定(FILL_EXPECTED)」を先行計上する
-	// ※ 確定約定分は s.positions に反映済みなので、ここでは FILL_EXPECTED のみを対象とする
-	for _, o := range os {
+	// 2. 疑似約定(FILL_EXPECTED)を先行計上
+	for _, o := range i.Orders {
 		if o.Status == market.ORDER_STATUS_FILL_EXPECTED {
 			if o.Action == market.ACTION_BUY {
 				totalQty += o.OrderQty
 				totalCost += o.OrderPrice * o.OrderQty
 			} else if o.Action == market.ACTION_SELL {
 				totalQty -= o.OrderQty
-				// 決済（売り）の場合はコスト（平均単価）は維持
 			}
 		}
 	}
@@ -45,30 +81,11 @@ func (os StrategyOrders) ExtractPosition(initialPositions []market.Position) Pos
 		avgPrice = totalCost / totalQty
 	}
 
-	return Position{
+	i.cachedPos = &Position{
 		Qty:          totalQty,
 		AveragePrice: avgPrice,
 	}
-}
-
-// FilterActive は現在板に出ている（未完了の）注文だけを抽出します
-func (os StrategyOrders) FilterActive() StrategyOrders {
-	var active StrategyOrders
-	for _, o := range os {
-		if !o.IsCompleted() && o.Status != market.ORDER_STATUS_CANCEL_SENT {
-			active = append(active, o)
-		}
-	}
-	return active
-}
-
-// StrategyInput は、戦略が判断を下すための「情報のパケット」です
-type StrategyInput struct {
-	Orders     StrategyOrders // すべての注文履歴
-	LatestTick market.Tick    // 最新のTick
-	
-	// Sniper が管理している確定ポジション（計算の起点として渡す）
-	BasePositions []market.Position
+	return i.cachedPos
 }
 
 type Strategy interface {
