@@ -15,7 +15,7 @@ func (m *MockStrategy) Evaluate(input strategy.StrategyInput) brain.Signal { ret
 
 func TestSniper_SyncOrders(t *testing.T) {
 	detail := market.Symbol{Code: "9434"}
-	policy := &strategy.NoopPolicy{} // 何もしないポリシー
+	policy := &strategy.NoopPolicy{}
 	s := NewSniper(detail, &MockStrategy{}, policy, market.EXCHANGE_TOSHO)
 
 	// 1. 注文を発注した直後の状態（PENDING ID）
@@ -23,8 +23,16 @@ func TestSniper_SyncOrders(t *testing.T) {
 	internalOrder := market.NewOrderPtr(pendingID, "9434", market.ACTION_BUY, 2000, 100)
 	s.Orders = append(s.Orders, internalOrder)
 
-	// 2. 取引所から正式なIDが割り当てられた報告が届く
+	// 2. 取引所から正式なIDが割り当てられたことを反映する
 	realID := "order-123"
+	s.ConfirmOrder(internalOrder, realID)
+
+	// 内部の注文IDが更新されているか確認
+	if internalOrder.ID != realID {
+		t.Fatalf("expected internal ID to be updated to %s, got %s", realID, internalOrder.ID)
+	}
+
+	// 3. 同期処理：取引所から報告が届く
 	extOrders := []market.Order{
 		{
 			ID:         realID,
@@ -35,32 +43,24 @@ func TestSniper_SyncOrders(t *testing.T) {
 			Status:     market.ORDER_STATUS_IN_PROGRESS,
 		},
 	}
+	s.SyncOrders(extOrders)
 
-	// SyncOrders を呼び出し（IDの紐付けが発生するはず）
-	_, _, confirmedID := s.SyncOrders(extOrders)
-	if confirmedID != realID {
-		t.Errorf("expected confirmedID %s, got %s", realID, confirmedID)
-	}
-
-	// 内部の注文IDが更新されているか確認
-	if internalOrder.ID != realID {
-		t.Errorf("expected internal ID to be updated to %s, got %s", realID, internalOrder.ID)
-	}
-
-	// 3. キャンセル送信中の状態にする
+	// 4. キャンセル送信中の状態にする
 	internalOrder.Status = market.ORDER_STATUS_CANCEL_SENT
 
-	// 4. 取引所からキャンセル完了（CANCELED）の報告が届く
+	// 5. 取引所からキャンセル完了（CANCELED）の報告が届く
 	extOrders = []market.Order{
 		{
 			ID:     realID,
+			Symbol: "9434",
 			Status: market.ORDER_STATUS_CANCELED,
 		},
 	}
 	s.SyncOrders(extOrders)
 
+	// ステータスが CANCELED に更新されていることを確認
 	if internalOrder.Status != market.ORDER_STATUS_CANCELED {
-		t.Errorf("expected status CANCELED, got %d", internalOrder.Status)
+		t.Errorf("expected status CANCELED(4), got %d", internalOrder.Status)
 	}
 
 	if !internalOrder.IsCompleted() {
@@ -80,6 +80,7 @@ func TestSniper_SyncOrders_Executions(t *testing.T) {
 	extOrders := []market.Order{
 		{
 			ID:     realID,
+			Symbol: "9434",
 			Status: market.ORDER_STATUS_IN_PROGRESS,
 			CumQty: 50,
 			Executions: []market.Execution{
@@ -91,7 +92,6 @@ func TestSniper_SyncOrders_Executions(t *testing.T) {
 	s.SyncOrders(extOrders)
 
 	// ポジションが更新されているか確認
-	// ※同じパッケージ内なので s.positions に直接アクセス可能
 	holdQty := 0.0
 	for _, p := range s.positions {
 		holdQty += p.LeavesQty
