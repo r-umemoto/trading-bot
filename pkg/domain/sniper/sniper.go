@@ -401,9 +401,10 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 	// 新しい管理リストを作成（事実ベースで再構築）
 	var reconciledOrders []*market.Order
 
-	// 1. IDが未確定（PENDING）の注文をまず保持する（まだAPIに現れていない可能性があるため）
+	// 1. IDが未確定（PENDING）または未完了の注文をまず保持する
+	// APIの一覧に反映されるまでのタイムラグによる注文消失（および再発注スパム）を防ぐため。
 	for _, o := range s.Orders {
-		if market.IsPendingID(o.ID) {
+		if market.IsPendingID(o.ID) || !o.IsCompleted() {
 			reconciledOrders = append(reconciledOrders, o)
 		}
 	}
