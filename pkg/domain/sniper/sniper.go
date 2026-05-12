@@ -75,25 +75,27 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		return nil, nil, ""
 	}
 
-	// 1. 管理対象の注文を特定する
-	var activeOrder *market.Order
+	// 1. 管理対象の注文を特定する（アクションに合わせた注文を抽出）
+	var activeBuyOrder *market.Order
+	var activeSellOrder *market.Order
 	for _, o := range s.Orders {
-		if o.IsCompleted() {
+		if o.IsCompleted() || o.Status == market.ORDER_STATUS_CANCEL_SENT {
 			continue
 		}
-		// キャンセル送信中の注文は、基本的には管理対象から外す（新しい注文を出せるようにするため）
-		// ただし、戦略が「何もしない(HOLD)」と言った場合に、二重にキャンセルを送らないよう保持はする
-		if o.Status == market.ORDER_STATUS_CANCEL_SENT {
-			continue
+		if o.Action == market.ACTION_BUY {
+			activeBuyOrder = o
+		} else if o.Action == market.ACTION_SELL {
+			activeSellOrder = o
 		}
-		activeOrder = o
-		break
 	}
 
-	// 1.5 疑似約定 (Synthetic Fill) の判定
-	if activeOrder != nil && !market.IsPendingID(activeOrder.ID) && activeOrder.Status != market.ORDER_STATUS_CANCEL_SENT {
-		if s.ExecutionPolicy != nil {
-			s.ExecutionPolicy.ApplySyntheticFill(activeOrder, state.LatestTick)
+	// 1.5 疑似約定 (Synthetic Fill) の判定 (両方の注文に対して実施)
+	if s.ExecutionPolicy != nil {
+		if activeBuyOrder != nil && !market.IsPendingID(activeBuyOrder.ID) {
+			s.ExecutionPolicy.ApplySyntheticFill(activeBuyOrder, state.LatestTick)
+		}
+		if activeSellOrder != nil && !market.IsPendingID(activeSellOrder.ID) {
+			s.ExecutionPolicy.ApplySyntheticFill(activeSellOrder, state.LatestTick)
 		}
 	}
 
@@ -105,6 +107,15 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 	// 3. 戦略の判断を仰ぐ
 	signal := s.Strategy.Evaluate(input)
+
+	// 現在の判断に関係する注文を特定
+	var activeOrder *market.Order
+	marketAction, _ := signal.Action.ToMarketAction()
+	if marketAction == market.ACTION_BUY {
+		activeOrder = activeBuyOrder
+	} else if marketAction == market.ACTION_SELL {
+		activeOrder = activeSellOrder
+	}
 
 	// --- 4. 同期（Reconciliation）フェーズ ---
 
