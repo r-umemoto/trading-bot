@@ -195,6 +195,12 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 		// 意図と異なる、または HOLD になった場合はキャンセルを要求
 		if !isStillDesired {
+			// 【重要】疑似約定済みの場合は、キャンセルを禁止して約定確定を待つ
+			// これにより、価格の微細な変化による「キャンセル・再発注スパムループ」を防止する
+			if activeOrder.Status == market.ORDER_STATUS_FILL_EXPECTED {
+				return nil, nil, ""
+			}
+
 			activeOrder.Status = market.ORDER_STATUS_CANCEL_SENT
 			return nil, nil, activeOrder.ID
 		}
@@ -214,11 +220,13 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 	// --- 5. 新規発注フェーズ ---
 	// 未完了注文がない場合（または既存の注文がキャンセル送信中の場合）に、新規発注を検討する
-	// ただし、同じアクション（BUY/BUY, SELL/SELL）の注文がすでにキャンセル送信中の場合は、
-	// 二重発注を避けるためにその完了を待つ。
+	// ただし、同じアクション（BUY/BUY, SELL/SELL）の注文が一つでも残っている場合は、
+	// 二重発注を避けるためにその完了（または確定）を絶対に待つ。
 	for _, o := range s.Orders {
-		if !o.IsCompleted() && o.Status == market.ORDER_STATUS_CANCEL_SENT {
+		if !o.IsCompleted() {
 			if o.Action == marketAction {
+				// すでに同じ方向の注文が（PENDING/WAITING/CANCEL_SENT問わず）存在する場合は、
+				// 重複発注を避けるため、次のアクションを絶対に起こさない。
 				return nil, nil, ""
 			}
 		}
