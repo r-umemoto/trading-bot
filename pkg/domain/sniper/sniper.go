@@ -132,7 +132,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		}
 		s.Logger.Info("STRATEGY_STATUS",
 			slog.String("symbol", s.Detail.Code),
-			slog.String("strategy", s.Strategy.Name()),
+			slog.String("strategy_name", s.Strategy.Name()),
 			slog.Float64("hold_qty", input.HoldQty()),
 			slog.Any("orders", orderDetails),
 			slog.Float64("price", state.LatestTick.Price),
@@ -414,7 +414,7 @@ func (s *Sniper) ForceExit() {
 }
 
 // reducePositions は、指定された数量分だけ古い建玉から順に削減し、損益を計算します
-func (s *Sniper) reducePositions(sellQty float64, sellPrice float64) {
+func (s *Sniper) reducePositions(sellQty float64, sellPrice float64, sellTime time.Time) {
 	remainingToSell := sellQty
 	var newPositions []market.Position
 	var totalTradePnL float64      // 🌟 今回の「売り約定全体」の損益を合算する変数
@@ -464,12 +464,13 @@ func (s *Sniper) reducePositions(sellQty float64, sellPrice float64) {
 
 	// 🌟 アナライザー用のログ (ループの外で1回だけ出力！)
 	holdTimeSec := 0.0
-	if !earliestEntryTime.IsZero() {
+	if !earliestEntryTime.IsZero() && !sellTime.IsZero() {
 		// 売り約定時刻から、最も古い建玉の取得時刻を引いて保有時間を算出
-		holdTimeSec = time.Since(earliestEntryTime).Seconds()
+		holdTimeSec = sellTime.Sub(earliestEntryTime).Seconds()
 	}
 	s.Logger.Info("POSITION_CLOSED",
 		slog.String("symbol", s.Detail.Code),
+		slog.String("strategy_name", s.Strategy.Name()),
 		slog.String("event", "POSITION_CLOSED"),
 		slog.Float64("pnl", totalTradePnL),
 		slog.Float64("hold_time_sec", holdTimeSec),
@@ -640,13 +641,14 @@ func (s *Sniper) applyExecution(exec market.Execution, action market.Action, ord
 		queueTimeMs := exec.ExecutionTime.Sub(orderCreatedAt).Milliseconds()
 		s.Logger.Info("FILLED",
 			slog.String("symbol", s.Detail.Code),
+			slog.String("strategy_name", s.Strategy.Name()),
 			slog.String("event", "FILLED"),
 			slog.Float64("qty", exec.Qty),
 			slog.Float64("price", exec.Price),
 			slog.Int64("queue_time_ms", queueTimeMs),
 		)
 	case market.ACTION_SELL:
-		s.reducePositions(exec.Qty, exec.Price)
+		s.reducePositions(exec.Qty, exec.Price, exec.ExecutionTime)
 		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Detail.Code, exec.Qty)
 	}
 }
