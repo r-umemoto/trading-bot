@@ -70,7 +70,6 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 	// --- 0. クリーンアップフェーズ ---
 	s.cleanupZombiesLocked()
-	s.cleanupProcessedExecutionsLocked()
 
 	// 0. 呼値を最新の価格に基づいて更新
 	state := dataPool.GetState(s.Detail.Code)
@@ -351,18 +350,6 @@ func (s *Sniper) cleanupZombiesLocked() {
 			}
 		}
 	}
-}
-
-func (s *Sniper) cleanupProcessedExecutionsLocked() {
-	// 【注意】約定履歴マップをクリアすると、古い約定報告を「新規」と誤認して二重約定が発生するリスクがあります。
-	// Goのマップにおいて数万件程度のbool値はメモリ消費が極めて小さいため、
-	// 基本的にはセッション中（1日）はクリアせず、リスク回避を優先します。
-	/*
-		if len(s.processedExecutions) > 100000 {
-			fmt.Printf("🧹 [%s] 約定処理済みマップをクリーンアップします (%d 件)\n", s.Detail.Code, len(s.processedExecutions))
-			s.processedExecutions = make(map[string]bool)
-		}
-	*/
 }
 
 // FailSendingOrder は発注失敗時に呼ばれ、Ordersリストから仮注文をクリアします
