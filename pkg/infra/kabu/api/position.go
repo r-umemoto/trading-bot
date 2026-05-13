@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 )
 
@@ -33,12 +32,10 @@ func (c *KabuClient) GetPositions(product ProductType) ([]Position, error) {
 	if err != nil {
 		return nil, fmt.Errorf("建玉照会API通信エラー: %v", err)
 	}
-	defer resp.Body.Close()
 
-	// レスポンスは JSON の配列（[]Position）として返ってくる
 	var positions []Position
-	if err := json.NewDecoder(resp.Body).Decode(&positions); err != nil {
-		return nil, fmt.Errorf("建玉データ解析エラー: %v", err)
+	if err := c.DecodeResponse(resp, &positions); err != nil {
+		return nil, fmt.Errorf("建玉取得失敗: %w", err)
 	}
 
 	return positions, nil

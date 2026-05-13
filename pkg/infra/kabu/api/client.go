@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -40,4 +42,24 @@ func (c *KabuClient) doRequest(method, endpoint string, body io.Reader) (*http.R
 	}
 
 	return c.HTTPClient.Do(req)
+}
+
+// DecodeResponse はHTTPレスポンスのステータスコードをチェックし、正常であればJSONデコードを行います
+func (c *KabuClient) DecodeResponse(resp *http.Response, out interface{}) error {
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("APIエラー (Status: %d): %s", resp.StatusCode, string(body))
+	}
+
+	if out == nil {
+		return nil
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("レスポンス解析エラー: %v", err)
+	}
+
+	return nil
 }

@@ -161,7 +161,7 @@ func (m *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
 	req := api.CancelRequest{OrderID: orderID}
 	_, err := m.client.CancelOrder(req)
 	if err != nil {
-		return fmt.Errorf("キャンセル失敗 (ResultCode: %s)", orderID)
+		return fmt.Errorf("キャンセル失敗 (OrderID: %s): %w", orderID, err)
 	}
 	return nil
 }

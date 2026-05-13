@@ -44,6 +44,8 @@ type Order struct {
 	IFDPrice     float64   // IFD注文の価格
 	IFDOrderType OrderType // IFD注文の執行条件
 
+	CancelSentAt time.Time // 🌟 キャンセル送信時刻（ゾンビ防止用）
+
 	// 疑似約定関連のトラッキング
 	Synthetic SyntheticFillState
 }

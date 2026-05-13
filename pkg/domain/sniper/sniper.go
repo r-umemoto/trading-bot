@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
@@ -201,7 +202,10 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 				return nil, nil, ""
 			}
 
+			fmt.Printf("🔄 [%s] 意図と異なる注文(%s: %s@%.1f)をキャンセル要求します (Signal: %s@%.1f, Qty: %.1f)\n", 
+				s.Detail.Code, activeOrder.ID, activeOrder.Action, activeOrder.OrderPrice, signal.Action, signal.Price, signal.Quantity)
 			activeOrder.Status = market.ORDER_STATUS_CANCEL_SENT
+			activeOrder.CancelSentAt = time.Now()
 			return nil, nil, activeOrder.ID
 		}
 
@@ -227,6 +231,16 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 			if o.Action == marketAction {
 				// すでに同じ方向の注文が（PENDING/WAITING/CANCEL_SENT問わず）存在する場合は、
 				// 重複発注を避けるため、次のアクションを絶対に起こさない。
+				if o.Status == market.ORDER_STATUS_CANCEL_SENT {
+					// キャンセル送信から一定時間（例：30秒）経過しても応答がない場合はゾンビとみなし、
+					// ブロックを解除して新規発注フローへの進行を許可する。
+					if !o.CancelSentAt.IsZero() && time.Since(o.CancelSentAt) > 30*time.Second {
+						fmt.Printf("⚠️ [%s] キャンセル送信から30秒以上経過しても応答がありません(ID:%s)。ゾンビとみなしてブロックを解除します。\n", s.Detail.Code, o.ID)
+						continue
+					}
+					// キャンセルがAPI側で確定するのを待つ
+					return nil, nil, ""
+				}
 				return nil, nil, ""
 			}
 		}

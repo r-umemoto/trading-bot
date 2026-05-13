@@ -89,17 +89,19 @@ func (c *KabuClient) SendOrder(req OrderRequest) (*OrderResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("発注API通信エラー: %v", err)
 	}
-	defer resp.Body.Close()
 
-	// レスポンスを受け止める
 	var orderResp OrderResponse
-	if err := json.NewDecoder(resp.Body).Decode(&orderResp); err != nil {
-		return nil, fmt.Errorf("発注レスポンス解析エラー: %v", err)
+	if err := c.DecodeResponse(resp, &orderResp); err != nil {
+		return nil, fmt.Errorf("発注失敗: %w", err)
 	}
 
 	// サーバーからエラーが返ってきていないかチェック
 	if orderResp.Result != 0 {
 		return nil, fmt.Errorf("発注失敗 (ResultCode: %d)", orderResp.Result)
+	}
+
+	if orderResp.OrderId == "" {
+		return nil, fmt.Errorf("発注は成功しましたが、受付番号(OrderId)が空です")
 	}
 
 	return &orderResp, nil
@@ -128,11 +130,10 @@ func (c *KabuClient) CancelOrder(req CancelRequest) (*CancelResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("キャンセルAPI通信エラー: %v", err)
 	}
-	defer resp.Body.Close()
 
 	var cancelResp CancelResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cancelResp); err != nil {
-		return nil, fmt.Errorf("キャンセルレスポンス解析エラー: %v", err)
+	if err := c.DecodeResponse(resp, &cancelResp); err != nil {
+		return nil, fmt.Errorf("キャンセル失敗: %w", err)
 	}
 
 	if cancelResp.Result != 0 {
@@ -148,11 +149,10 @@ func (c *KabuClient) GetOrders() ([]Order, error) {
 	if err != nil {
 		return nil, fmt.Errorf("注文照会API通信エラー: %v", err)
 	}
-	defer resp.Body.Close()
 
 	var orders []Order
-	if err := json.NewDecoder(resp.Body).Decode(&orders); err != nil {
-		return nil, fmt.Errorf("注文データ解析エラー: %v", err)
+	if err := c.DecodeResponse(resp, &orders); err != nil {
+		return nil, fmt.Errorf("注文取得失敗: %w", err)
 	}
 
 	return orders, nil
