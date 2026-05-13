@@ -2,3 +2,4 @@
 .devcontainer
 bot.exe
 data
+logs/
