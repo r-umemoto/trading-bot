@@ -36,9 +36,9 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 	// 銘柄ごとにチャネルを作成
 	for _, s := range snipers {
 		if _, exists := uc.tickChannels[s.Detail.Code]; !exists {
-			// バッファサイズは適宜調整（ここでは100）
-			uc.tickChannels[s.Detail.Code] = make(chan market.Tick, 100)
-			uc.orderChannels[s.Detail.Code] = make(chan market.OrdersReport, 100)
+			// バッファサイズを拡張 (100 -> 1000) してスパイク耐性を高める
+			uc.tickChannels[s.Detail.Code] = make(chan market.Tick, 1000)
+			uc.orderChannels[s.Detail.Code] = make(chan market.OrdersReport, 1000)
 		}
 	}
 
@@ -80,7 +80,10 @@ func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tic
 			// 2. キャンセル要求があれば実行
 			if cancelOrderID != "" {
 				fmt.Printf("🛑 自動キャンセルを実行します: %s\n", cancelOrderID)
-				if err := u.gateway.CancelOrder(ctx, cancelOrderID); err != nil {
+				apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				err := u.gateway.CancelOrder(apiCtx, cancelOrderID)
+				cancel()
+				if err != nil {
 					fmt.Printf("❌ キャンセル失敗: %v\n", err)
 				}
 				continue
@@ -88,7 +91,9 @@ func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tic
 
 			if req != nil {
 				// 2. 要求があれば、市場（インフラ）に発注する
-				orderID, err := u.gateway.SendOrder(ctx, *req)
+				apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				orderID, err := u.gateway.SendOrder(apiCtx, *req)
+				cancel()
 				if err != nil {
 					fmt.Printf("❌ 発注失敗: %v\n", err)
 					s.FailSendingOrder(orderPtr) // 通信失敗時は仮注文をリストから消去
@@ -110,10 +115,9 @@ func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
 		case ch <- tick:
 			// 正常にキューイング完了
 		default:
-			// チャネルが詰まっている場合（ワーカの処理が追いついていない）
-			fmt.Printf("⚠️ 警告: %s のTickチャネルがフルです。Tickがスキップされるか遅延します。\n", tick.Symbol)
-			// ブロックさせるか、破棄するかは要件次第（ここではブロックする）
-			ch <- tick
+			// 🚨 チャネルがフル（ワーカーが重い、またはAPI遅延中）の場合は、
+			// 上流のWebSocket受信を止めないために「最新のTick以外は破棄（スキップ）」する。
+			fmt.Printf("⚠️ [%s] ワーカー過負荷: Tickチャネルがフルのため、このTickを破棄(スキップ)します\n", tick.Symbol)
 		}
 	}
 }
@@ -123,12 +127,15 @@ func (u *TradeUseCase) HandleExecution(report market.OrdersReport) {
 	// 全銘柄分を個別にルーティングするのは効率が悪いが、現状の構造に合わせる
 	// 本来は OrdersReport が銘柄ごとに分割されているか、ここで分割して投げる
 	for symbol, ch := range u.orderChannels {
-		// report.Orders の中から該当銘柄のものだけを抽出するフィルタリングが必要だが、
-		// Sniper.SyncOrders 側でも Symbol チェックしているので、一旦そのまま流す
 		select {
 		case ch <- report:
 		default:
-			fmt.Printf("⚠️ 警告: %s のOrdersReportチャネルがフルです。処理がスキップされるか遅延します。\n", symbol)
+			// 🚨 約定通知は絶対に破棄してはいけない（状態がズレるため）。
+			// ただし、メインスレッドをブロックすると全銘柄に波及するため、非同期で押し込む。
+			fmt.Printf("⚠️ 🚨 [%s] OrdersReportチャネルがフルです。非同期でキューイングを試みます。\n", symbol)
+			go func(c chan<- market.OrdersReport, r market.OrdersReport) {
+				c <- r // バックグラウンドでブロックして待つ
+			}(ch, report)
 		}
 	}
 }
@@ -141,7 +148,10 @@ func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report 
 			// IFD等によるキャンセル要求があれば実行
 			if cancelOrderID != "" {
 				fmt.Printf("🛑 [%s] 連動キャンセルを実行します: %s\n", symbol, cancelOrderID)
-				if err := u.gateway.CancelOrder(ctx, cancelOrderID); err != nil {
+				apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				err := u.gateway.CancelOrder(apiCtx, cancelOrderID)
+				cancel()
+				if err != nil {
 					fmt.Printf("❌ キャンセル失敗: %v\n", err)
 				}
 			}
@@ -149,7 +159,9 @@ func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report 
 			// IFD発火による自動発注要求があれば実行
 			if req != nil {
 				fmt.Printf("🚀 [%s] IFD決済注文を送信します: %s %.2f株\n", symbol, req.Action, req.Qty)
-				orderID, err := u.gateway.SendOrder(ctx, *req)
+				apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				orderID, err := u.gateway.SendOrder(apiCtx, *req)
+				cancel()
 				if err != nil {
 					fmt.Printf("🚨 [%s] IFD決済注文の発注に失敗しました！次のTickでリカバリーを試みます: %v\n", symbol, err)
 					s.FailSendingOrder(orderPtr)
