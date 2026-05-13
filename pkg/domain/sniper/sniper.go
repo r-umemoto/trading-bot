@@ -15,6 +15,7 @@ import (
 type Strategy interface {
 	Name() string
 	Evaluate(input strategy.StrategyInput) brain.Signal
+	AnalysisLogger() *slog.Logger // 🌟 解析用ロガーを取得
 }
 
 // ★ スナイパー内で定義する「オプショナルな機能」の規格
@@ -36,10 +37,11 @@ type Sniper struct {
 	positions       []market.Position
 	Performance     Performance // 🌟 追加
 	Strategy        Strategy
-	State           strategy.StrategyState // 👈 銘柄ごとの戦略ステート
+	State           strategy.StrategyState   // 👈 銘柄ごとの戦略ステート
 	ExecutionPolicy strategy.ExecutionPolicy // 👈 執行ポリシー（疑似約定判定）
 	Orders          []*market.Order
-	mu              sync.Mutex // 👈 状態をロックするための鍵
+	Logger          *slog.Logger // 🌟 解析用ロガー
+	mu              sync.Mutex   // 👈 状態をロックするための鍵
 	isExiting       bool       // 👈 撤収作業中かどうかのフラグ
 	AccountType     market.AccountType
 	Exchange        market.ExchangeMarket
@@ -50,8 +52,14 @@ type Sniper struct {
 	lastSignalReason    string          // 🌟 戦略が最後に指定した理由
 }
 
-// NewSniper の引数と戻り値も修正
-func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange market.ExchangeMarket) *Sniper {
+// NewSniper は新しいスナイパーを生成します
+func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange market.ExchangeMarket, logger *slog.Logger) *Sniper {
+	if logger == nil {
+		logger = strategy.AnalysisLogger()
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Sniper{
 		Detail:          detail,
 		Strategy:        strategy,
@@ -62,6 +70,7 @@ func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.Executio
 		Exchange:        exchange,
 		MarginTradeType: market.TRADE_TYPE_GENERAL_DAY,
 		processedExecutions: make(map[string]bool),
+		Logger:              logger,
 	}
 }
 
@@ -121,7 +130,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 				orderDetails = append(orderDetails, fmt.Sprintf("%s:%s@%.1f(%.0f)", o.ID, o.Action, o.OrderPrice, o.OrderQty))
 			}
 		}
-		slog.Info("STRATEGY_STATUS",
+		s.Logger.Info("STRATEGY_STATUS",
 			slog.String("symbol", s.Detail.Code),
 			slog.String("strategy", s.Strategy.Name()),
 			slog.Float64("hold_qty", input.HoldQty()),
@@ -459,7 +468,7 @@ func (s *Sniper) reducePositions(sellQty float64, sellPrice float64) {
 		// 売り約定時刻から、最も古い建玉の取得時刻を引いて保有時間を算出
 		holdTimeSec = time.Since(earliestEntryTime).Seconds()
 	}
-	slog.Info("POSITION_CLOSED",
+	s.Logger.Info("POSITION_CLOSED",
 		slog.String("symbol", s.Detail.Code),
 		slog.String("event", "POSITION_CLOSED"),
 		slog.Float64("pnl", totalTradePnL),
@@ -629,7 +638,7 @@ func (s *Sniper) applyExecution(exec market.Execution, action market.Action, ord
 
 		// 🌟 アナライザー用のログ
 		queueTimeMs := exec.ExecutionTime.Sub(orderCreatedAt).Milliseconds()
-		slog.Info("FILLED",
+		s.Logger.Info("FILLED",
 			slog.String("symbol", s.Detail.Code),
 			slog.String("event", "FILLED"),
 			slog.Float64("qty", exec.Qty),

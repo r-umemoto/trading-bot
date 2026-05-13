@@ -1,6 +1,8 @@
 package strategy
 
 import (
+	"log/slog"
+
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 )
@@ -91,4 +93,5 @@ func (i *StrategyInput) ensurePosition() *Position {
 type Strategy interface {
 	Name() string
 	Evaluate(input StrategyInput) brain.Signal
+	AnalysisLogger() *slog.Logger // 🌟 解析用ロガーを取得
 }

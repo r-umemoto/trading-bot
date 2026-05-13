@@ -4,7 +4,11 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/config"
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
@@ -75,6 +79,12 @@ func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]
 	var watchSymbols []string
 	symbolMap := make(map[string]bool)
 
+	// ログディレクトリの準備
+	logDir := filepath.Join("logs", time.Now().Format("20060102"))
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, nil, fmt.Errorf("ログディレクトリの作成に失敗: %w", err)
+	}
+
 	for _, t := range watchList {
 		factory, err := strategy.GetFactory(t.StrategyName)
 		if err != nil {
@@ -82,8 +92,19 @@ func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]
 		}
 
 		st := factory.NewStrategy(t.Detail, dataPool, t.Params)
-		policy := factory.CreateExecutionPolicy(t.Params) // [NEW] 執行ポリシーの生成
-		s := sniper.NewSniper(t.Detail, st, policy, t.Exchange)
+		policy := factory.CreateExecutionPolicy(t.Params)
+
+		// 銘柄別のロガーを生成
+		logPath := filepath.Join(logDir, fmt.Sprintf("%s_%s.jsonl", t.Detail.Code, t.StrategyName))
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		var analysisLogger *slog.Logger
+		if err == nil {
+			analysisLogger = slog.New(slog.NewJSONHandler(f, nil))
+		} else {
+			slog.Error("ログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
+		}
+
+		s := sniper.NewSniper(t.Detail, st, policy, t.Exchange, analysisLogger)
 		snipers = append(snipers, s)
 
 		if !symbolMap[t.Detail.Code] {

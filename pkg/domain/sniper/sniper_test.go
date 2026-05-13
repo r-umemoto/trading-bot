@@ -1,6 +1,7 @@
 package sniper
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
@@ -12,11 +13,12 @@ type MockStrategy struct{}
 
 func (m *MockStrategy) Name() string                                { return "mock" }
 func (m *MockStrategy) Evaluate(input strategy.StrategyInput) brain.Signal { return brain.Signal{} }
+func (m *MockStrategy) AnalysisLogger() *slog.Logger                   { return nil }
 
 func TestSniper_SyncOrders(t *testing.T) {
 	detail := market.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, market.EXCHANGE_TOSHO)
+	s := NewSniper(detail, &MockStrategy{}, policy, market.EXCHANGE_TOSHO, nil)
 
 	// 1. 注文を発注した直後の状態（PENDING ID）
 	pendingID := market.GeneratePendingID()
@@ -71,7 +73,7 @@ func TestSniper_SyncOrders(t *testing.T) {
 func TestSniper_SyncOrders_Executions(t *testing.T) {
 	detail := market.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, market.EXCHANGE_TOSHO)
+	s := NewSniper(detail, &MockStrategy{}, policy, market.EXCHANGE_TOSHO, nil)
 	realID := "order-456"
 	internalOrder := market.NewOrderPtr(realID, "9434", market.ACTION_BUY, 2000, 100)
 	s.Orders = append(s.Orders, internalOrder)

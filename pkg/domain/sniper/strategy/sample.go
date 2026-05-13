@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"log/slog"
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 )
@@ -20,6 +21,10 @@ type SampleStrategy struct {
 
 func (s *SampleStrategy) Name() string {
 	return s.name
+}
+
+func (s *SampleStrategy) AnalysisLogger() *slog.Logger {
+	return nil
 }
 
 // Evaluate is purely functional

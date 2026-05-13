@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -50,6 +52,12 @@ func RunBacktest() error {
 		return err
 	}
 
+	// バックテストログディレクトリの準備
+	logDir := filepath.Join("backtest_logs", time.Now().Format("20060102_150405"))
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return fmt.Errorf("バックテストログディレクトリの作成に失敗: %w", err)
+	}
+
 	var snipers []*sniper.Sniper
 	for _, sym := range watchList {
 		factory, err := strategy.GetFactory(sym.StrategyName)
@@ -58,7 +66,18 @@ func RunBacktest() error {
 		}
 		st := factory.NewStrategy(sym.Detail, dataPool, sym.Params)
 		policy := factory.CreateExecutionPolicy(sym.Params)
-		s := sniper.NewSniper(sym.Detail, st, policy, sym.Exchange)
+
+		// 銘柄別のロガーを生成
+		logPath := filepath.Join(logDir, fmt.Sprintf("%s_%s.jsonl", sym.Detail.Code, sym.StrategyName))
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		var analysisLogger *slog.Logger
+		if err == nil {
+			analysisLogger = slog.New(slog.NewJSONHandler(f, nil))
+		} else {
+			slog.Error("バックテストログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
+		}
+
+		s := sniper.NewSniper(sym.Detail, st, policy, sym.Exchange, analysisLogger)
 		snipers = append(snipers, s)
 	}
 

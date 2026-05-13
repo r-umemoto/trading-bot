@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"log/slog"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 )
 
@@ -28,6 +29,10 @@ func NewKillSwitch(mainLogic Strategy, qty float64) Strategy {
 
 func (k *KillSwitch) Name() string {
 	return "KillSwitch(" + k.MainLogic.Name() + ")"
+}
+
+func (k *KillSwitch) AnalysisLogger() *slog.Logger {
+	return k.MainLogic.AnalysisLogger()
 }
 
 // 外部（main.goのCtrl+Cなど）から手動でキルスイッチを起動する
