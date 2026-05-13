@@ -354,11 +354,15 @@ func (s *Sniper) cleanupZombiesLocked() {
 }
 
 func (s *Sniper) cleanupProcessedExecutionsLocked() {
-	// 約定履歴マップが肥大化した場合にクリーンアップ (1000件目安)
-	if len(s.processedExecutions) > 1000 {
-		fmt.Printf("🧹 [%s] 約定処理済みマップをクリーンアップします (%d 件)\n", s.Detail.Code, len(s.processedExecutions))
-		s.processedExecutions = make(map[string]bool)
-	}
+	// 【注意】約定履歴マップをクリアすると、古い約定報告を「新規」と誤認して二重約定が発生するリスクがあります。
+	// Goのマップにおいて数万件程度のbool値はメモリ消費が極めて小さいため、
+	// 基本的にはセッション中（1日）はクリアせず、リスク回避を優先します。
+	/*
+		if len(s.processedExecutions) > 100000 {
+			fmt.Printf("🧹 [%s] 約定処理済みマップをクリーンアップします (%d 件)\n", s.Detail.Code, len(s.processedExecutions))
+			s.processedExecutions = make(map[string]bool)
+		}
+	*/
 }
 
 // FailSendingOrder は発注失敗時に呼ばれ、Ordersリストから仮注文をクリアします
@@ -458,14 +462,18 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 
 	// 1. IDが未確定（PENDING）または未完了の注文をまず保持する
 	// APIの一覧に反映されるまでのタイムラグによる注文消失（および再発注スパム）を防ぐため。
-	// 【ゾンビ対策】ただし、発注から30秒以上経過してもAPIに現れないものは、異常とみなしてパージする。
 	for _, o := range s.Orders {
-		if market.IsPendingID(o.ID) || !o.IsCompleted() {
+		if market.IsPendingID(o.ID) {
+			// 仮ID（PENDING）はAPI未達の可能性があるため、30秒間は無条件で保持する
 			if time.Since(o.CreatedAt) < 30*time.Second {
 				reconciledOrders = append(reconciledOrders, o)
 			} else {
-				fmt.Printf("🗑️ [%s] API一覧に30秒以上現れない(ID:%s)ため、Ordersから削除します\n", s.Detail.Code, o.ID)
+				fmt.Printf("🗑️ [%s] APIに30秒以上現れない仮ID(%s)をOrdersから削除します\n", s.Detail.Code, o.ID)
 			}
+		} else if !o.IsCompleted() {
+			// 既にIDが確定している未完了注文は、APIの瞬断に備えて一旦リストに残す
+			// （確定済み注文は30秒制限の対象外。指値でずっと待機している場合があるため）
+			reconciledOrders = append(reconciledOrders, o)
 		}
 	}
 
