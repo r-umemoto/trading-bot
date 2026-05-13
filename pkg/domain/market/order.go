@@ -34,6 +34,7 @@ type Order struct {
 	OrderPrice float64 // 発注時の指値（成行の場合は0など）
 	OrderQty   float64 // 発注した総数量
 
+	CreatedAt    time.Time // 🌟 発注（オブジェクト作成）時刻
 	Executions []Execution // 🌟 約定のコレクション
 
 	Status OrderStatus // 注文の状態
@@ -67,6 +68,7 @@ func NewOrder(id string, symbol string, action Action, price float64, qty float6
 		OrderPrice: price,
 		OrderQty:   qty,
 		Status:     ORDER_STATUS_WAITING,
+		CreatedAt:  time.Now(),
 	}
 }
 
@@ -78,6 +80,7 @@ func NewOrderPtr(id string, symbol string, action Action, price float64, qty flo
 		OrderPrice: price,
 		OrderQty:   qty,
 		Status:     ORDER_STATUS_WAITING,
+		CreatedAt:  time.Now(),
 	}
 }
 

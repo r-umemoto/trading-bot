@@ -68,6 +68,10 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
 
+	// --- 0. クリーンアップフェーズ ---
+	s.cleanupZombiesLocked()
+	s.cleanupProcessedExecutionsLocked()
+
 	// 0. 呼値を最新の価格に基づいて更新
 	state := dataPool.GetState(s.Detail.Code)
 
@@ -320,6 +324,43 @@ func (s *Sniper) ConfirmOrder(order *market.Order, realID string) {
 	order.ID = realID
 }
 
+func (s *Sniper) cleanupZombiesLocked() {
+	for i := 0; i < len(s.Orders); i++ {
+		o := s.Orders[i]
+		if o.IsCompleted() {
+			continue
+		}
+
+		// 1. PENDING (仮ID) のタイムアウト (30秒)
+		// 発注要求から30秒経ってもIDが確定しない場合は、通信失敗やAPIの受付拒否とみなす
+		if market.IsPendingID(o.ID) {
+			if time.Since(o.CreatedAt) > 30*time.Second {
+				fmt.Printf("⚠️ [%s] PENDING注文がタイムアウト(30s)したため削除します: %s\n", s.Detail.Code, o.ID)
+				s.Orders = append(s.Orders[:i], s.Orders[i+1:]...)
+				i--
+				continue
+			}
+		}
+
+		// 2. FILL_EXPECTED (疑似約定) のタイムアウト (20秒)
+		// 本物の約定通知が来ない場合は、板の動きを見誤ったか貫通しなかったとみなして元に戻す
+		if o.Status == market.ORDER_STATUS_FILL_EXPECTED {
+			if !o.Synthetic.ExpectedAt.IsZero() && time.Since(o.Synthetic.ExpectedAt) > 20*time.Second {
+				fmt.Printf("⚠️ [%s] 疑似約定から20秒経過しても通知がないため、待機状態に戻します: %s\n", s.Detail.Code, o.ID)
+				o.Status = market.ORDER_STATUS_IN_PROGRESS
+			}
+		}
+	}
+}
+
+func (s *Sniper) cleanupProcessedExecutionsLocked() {
+	// 約定履歴マップが肥大化した場合にクリーンアップ (1000件目安)
+	if len(s.processedExecutions) > 1000 {
+		fmt.Printf("🧹 [%s] 約定処理済みマップをクリーンアップします (%d 件)\n", s.Detail.Code, len(s.processedExecutions))
+		s.processedExecutions = make(map[string]bool)
+	}
+}
+
 // FailSendingOrder は発注失敗時に呼ばれ、Ordersリストから仮注文をクリアします
 func (s *Sniper) FailSendingOrder(order *market.Order) {
 	s.mu.Lock()
@@ -417,9 +458,14 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 
 	// 1. IDが未確定（PENDING）または未完了の注文をまず保持する
 	// APIの一覧に反映されるまでのタイムラグによる注文消失（および再発注スパム）を防ぐため。
+	// 【ゾンビ対策】ただし、発注から30秒以上経過してもAPIに現れないものは、異常とみなしてパージする。
 	for _, o := range s.Orders {
 		if market.IsPendingID(o.ID) || !o.IsCompleted() {
-			reconciledOrders = append(reconciledOrders, o)
+			if time.Since(o.CreatedAt) < 30*time.Second {
+				reconciledOrders = append(reconciledOrders, o)
+			} else {
+				fmt.Printf("🗑️ [%s] API一覧に30秒以上現れない(ID:%s)ため、Ordersから削除します\n", s.Detail.Code, o.ID)
+			}
 		}
 	}
 
