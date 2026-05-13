@@ -20,10 +20,10 @@ const (
 
 // Execution は1回の約定の事実を表す値オブジェクトです
 type Execution struct {
-	ID    string
-	Price float64
-	Qty   float64
-	// 必要に応じて約定日時なども持たせます
+	ID            string
+	Price         float64
+	Qty           float64
+	ExecutionTime time.Time // 🌟 約定日時
 }
 
 // Order は注文全体を管理する集約ルート（エンティティ）です

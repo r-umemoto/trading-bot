@@ -20,6 +20,7 @@ type Signal struct {
 	Quantity     float64
 	Price        float64
 	OrderType    market.OrderType
+	Reason       string           // 🌟 命令の理由 (分析用)
 	HasIFD       bool             // IFD注文を伴うか
 	IFDAction    Action           // IFD注文のアクション (BUY/SELL)
 	IFDPrice     float64          // IFD注文の価格

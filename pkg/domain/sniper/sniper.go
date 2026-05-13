@@ -2,6 +2,7 @@ package sniper
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
@@ -45,6 +46,8 @@ type Sniper struct {
 	MarginTradeType market.MarginTradeType
 
 	processedExecutions map[string]bool // 🌟 処理済みの約定IDを記録
+	tickCount           uint64          // 🌟 ログ出力用のカウンタ
+	lastSignalReason    string          // 🌟 戦略が最後に指定した理由
 }
 
 // NewSniper の引数と戻り値も修正
@@ -109,8 +112,29 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		BasePositions: s.positions,
 	}
 
-	// 3. 戦略の判断を仰ぐ
+	// 3. 定期的なステータスログ (分析用)
+	s.tickCount++
+	if s.tickCount%100 == 0 {
+		var orderDetails []string
+		for _, o := range s.Orders {
+			if !o.IsCompleted() {
+				orderDetails = append(orderDetails, fmt.Sprintf("%s:%s@%.1f(%.0f)", o.ID, o.Action, o.OrderPrice, o.OrderQty))
+			}
+		}
+		slog.Info("STRATEGY_STATUS",
+			slog.String("symbol", s.Detail.Code),
+			slog.String("strategy", s.Strategy.Name()),
+			slog.Float64("hold_qty", input.HoldQty()),
+			slog.Any("orders", orderDetails),
+			slog.Float64("price", state.LatestTick.Price),
+		)
+	}
+
+	// 4. 戦略の判断を仰ぐ
 	signal := s.Strategy.Evaluate(input)
+	if signal.Reason != "" {
+		s.lastSignalReason = signal.Reason
+	}
 
 	// 現在の判断に関係する注文を特定
 	var activeOrder *market.Order
@@ -384,11 +408,14 @@ func (s *Sniper) ForceExit() {
 func (s *Sniper) reducePositions(sellQty float64, sellPrice float64) {
 	remainingToSell := sellQty
 	var newPositions []market.Position
+	var totalTradePnL float64      // 🌟 今回の「売り約定全体」の損益を合算する変数
+	var earliestEntryTime time.Time // 🌟 保有時間の計算用
 
 	for _, p := range s.positions {
 		if remainingToSell <= 0 {
 			// 売却分を消化しきったら、残りの建玉はそのまま保持リストへ
-			newPositions = append(newPositions, p)
+			newPositions = append(newPositions, p,
+			)
 			continue
 		}
 
@@ -397,8 +424,15 @@ func (s *Sniper) reducePositions(sellQty float64, sellPrice float64) {
 			closeQty = remainingToSell
 		}
 
+		// 最も古い建玉の時間を取得
+		if earliestEntryTime.IsZero() || (!p.Meta.EntryTime.IsZero() && p.Meta.EntryTime.Before(earliestEntryTime)) {
+			earliestEntryTime = p.Meta.EntryTime
+		}
+
 		// 🌟 損益計算
 		tradePnL := (sellPrice - p.Price) * closeQty
+		totalTradePnL += tradePnL // 全体の損益に加算
+
 		s.Performance.RealizedPnL += tradePnL
 		s.Performance.Trades++
 		if tradePnL > 0 {
@@ -418,6 +452,20 @@ func (s *Sniper) reducePositions(sellQty float64, sellPrice float64) {
 			newPositions = append(newPositions, p)
 		}
 	}
+
+	// 🌟 アナライザー用のログ (ループの外で1回だけ出力！)
+	holdTimeSec := 0.0
+	if !earliestEntryTime.IsZero() {
+		// 売り約定時刻から、最も古い建玉の取得時刻を引いて保有時間を算出
+		holdTimeSec = time.Since(earliestEntryTime).Seconds()
+	}
+	slog.Info("POSITION_CLOSED",
+		slog.String("symbol", s.Detail.Code),
+		slog.String("event", "POSITION_CLOSED"),
+		slog.Float64("pnl", totalTradePnL),
+		slog.Float64("hold_time_sec", holdTimeSec),
+		slog.String("exit_reason", s.lastSignalReason),
+	)
 
 	// 更新された建玉リストで上書き
 	s.positions = newPositions
@@ -492,7 +540,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 		// 約定の反映
 		for _, exec := range ext.Executions {
 			if !s.processedExecutions[exec.ID] {
-				s.applyExecution(exec, matchedInternal.Action)
+				s.applyExecution(exec, matchedInternal.Action, matchedInternal.CreatedAt)
 				newExecQty += exec.Qty
 				triggeredIFDParent = matchedInternal
 				newExecs = append(newExecs, exec)
@@ -561,7 +609,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 	return ifdPendingOrder, ifdRequest, ""
 }
 
-func (s *Sniper) applyExecution(exec market.Execution, action market.Action) {
+func (s *Sniper) applyExecution(exec market.Execution, action market.Action, orderCreatedAt time.Time) {
 	// 🌟 重複チェック（冪等性の担保）
 	if s.processedExecutions[exec.ID] {
 		return
@@ -575,8 +623,19 @@ func (s *Sniper) applyExecution(exec market.Execution, action market.Action) {
 			Symbol:      s.Detail.Code,
 			LeavesQty:   exec.Qty,
 			Price:       exec.Price,
+			Meta:        market.PositionMeta{EntryTime: exec.ExecutionTime}, // 🌟 メタデータとして記録
 		})
 		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Detail.Code, exec.Price, exec.Qty)
+
+		// 🌟 アナライザー用のログ
+		queueTimeMs := exec.ExecutionTime.Sub(orderCreatedAt).Milliseconds()
+		slog.Info("FILLED",
+			slog.String("symbol", s.Detail.Code),
+			slog.String("event", "FILLED"),
+			slog.Float64("qty", exec.Qty),
+			slog.Float64("price", exec.Price),
+			slog.Int64("queue_time_ms", queueTimeMs),
+		)
 	case market.ACTION_SELL:
 		s.reducePositions(exec.Qty, exec.Price)
 		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Detail.Code, exec.Qty)
