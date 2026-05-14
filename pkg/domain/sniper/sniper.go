@@ -48,8 +48,8 @@ type Sniper struct {
 	MarginTradeType market.MarginTradeType
 
 	processedExecutions map[string]bool // 🌟 処理済みの約定IDを記録
-	tickCount           uint64          // 🌟 ログ出力用のカウンタ
-	lastSignalReason    string          // 🌟 戦略が最後に指定した理由
+	lastSignalReason    string          // 🌟 最新のシグナル理由（分析用）
+	lastStatusLogAt     time.Time       // 🌟 最後にステータスログを出力した時刻
 }
 
 // NewSniper は新しいスナイパーを生成します
@@ -121,28 +121,31 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		BasePositions: s.positions,
 	}
 
-	// 3. 定期的なステータスログ (分析用)
-	s.tickCount++
-	if s.tickCount%100 == 0 {
+	// 4. 戦略の判断を仰ぐ
+	signal := s.Strategy.Evaluate(input)
+	if signal.Reason != "" {
+		s.lastSignalReason = signal.Reason
+	}
+
+	// 🌟 定期的なステータスログ (分析用: 1秒に1回程度)
+	if time.Since(s.lastStatusLogAt) > 1*time.Second {
 		var orderDetails []string
 		for _, o := range s.Orders {
 			if !o.IsCompleted() {
 				orderDetails = append(orderDetails, fmt.Sprintf("%s:%s@%.1f(%.0f)", o.ID, o.Action, o.OrderPrice, o.OrderQty))
 			}
 		}
+
 		s.Logger.Info("STRATEGY_STATUS",
 			slog.String("symbol", s.Detail.Code),
 			slog.String("strategy_name", s.Strategy.Name()),
+			slog.String("event", "STRATEGY_STATUS"),
+			slog.Float64("price", state.LatestTick.Price),
 			slog.Float64("hold_qty", input.HoldQty()),
 			slog.Any("orders", orderDetails),
-			slog.Float64("price", state.LatestTick.Price),
+			slog.Float64("realized_pnl", s.Performance.RealizedPnL),
 		)
-	}
-
-	// 4. 戦略の判断を仰ぐ
-	signal := s.Strategy.Evaluate(input)
-	if signal.Reason != "" {
-		s.lastSignalReason = signal.Reason
+		s.lastStatusLogAt = time.Now()
 	}
 
 	// 現在の判断に関係する注文を特定
@@ -472,9 +475,9 @@ func (s *Sniper) reducePositions(sellQty float64, sellPrice float64, sellTime ti
 		slog.String("symbol", s.Detail.Code),
 		slog.String("strategy_name", s.Strategy.Name()),
 		slog.String("event", "POSITION_CLOSED"),
+		slog.String("exit_reason", s.lastSignalReason), // 🌟 決済理由を記録
 		slog.Float64("pnl", totalTradePnL),
 		slog.Float64("hold_time_sec", holdTimeSec),
-		slog.String("exit_reason", s.lastSignalReason),
 	)
 
 	// 更新された建玉リストで上書き
@@ -643,6 +646,7 @@ func (s *Sniper) applyExecution(exec market.Execution, action market.Action, ord
 			slog.String("symbol", s.Detail.Code),
 			slog.String("strategy_name", s.Strategy.Name()),
 			slog.String("event", "FILLED"),
+			slog.String("entry_reason", s.lastSignalReason), // 🌟 エントリー理由を記録
 			slog.Float64("qty", exec.Qty),
 			slog.Float64("price", exec.Price),
 			slog.Int64("queue_time_ms", queueTimeMs),

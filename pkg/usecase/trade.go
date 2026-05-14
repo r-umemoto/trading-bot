@@ -7,13 +7,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 )
+
+// OrderJob はディスパッチャによって非同期に処理される発注ジョブです
+type OrderJob struct {
+	Symbol      string
+	Sniper      *sniper.Sniper
+	Request     *market.OrderRequest
+	CancelID    string
+	OrderPtr    *market.Order
+	Priority    int
+	UpdateCount int // 🌟 上書き（待機）回数。これが多いほど優先度が上がる
+	RequestedAt time.Time
+}
 
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
@@ -22,6 +36,10 @@ type TradeUseCase struct {
 	dataPool      market.DataPool
 	tickChannels  map[string]chan market.Tick         // 銘柄ごとのTick処理チャネル
 	orderChannels map[string]chan market.OrdersReport // 銘柄ごとの注文レポートチャネル
+
+	// 🌟 発注ディスパッチャ用の状態
+	pendingJobs map[string]*OrderJob
+	jobMu       sync.Mutex
 }
 
 func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dataPool market.DataPool) *TradeUseCase {
@@ -31,6 +49,7 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 		dataPool:      dataPool,
 		tickChannels:  make(map[string]chan market.Tick),
 		orderChannels: make(map[string]chan market.OrdersReport),
+		pendingJobs:   make(map[string]*OrderJob),
 	}
 
 	// 銘柄ごとにチャネルを作成
@@ -48,9 +67,13 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 // StartWorkers は銘柄ごとのワーカー（Goroutine）を起動します
 // Engineの起動時（Run）などに呼ばれることを想定しています
 func (u *TradeUseCase) StartWorkers(ctx context.Context) {
+	// 1. 各銘柄のロジックワーカーを起動
 	for symbol := range u.tickChannels {
 		go u.worker(ctx, symbol, u.tickChannels[symbol], u.orderChannels[symbol])
 	}
+
+	// 2. 🌟 全銘柄共通の発注ディスパッチャ（秒間10回制限の門番）を起動
+	go u.dispatchWorker(ctx)
 }
 
 // worker は特定の銘柄のTickや約定通知を専用に処理するGoroutineです
@@ -77,33 +100,8 @@ func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tic
 			// 1. スナイパーに考えさせる
 			orderPtr, req, cancelOrderID := s.Tick(u.dataPool)
 
-			// 2. キャンセル要求があれば実行
-			if cancelOrderID != "" {
-				fmt.Printf("🛑 自動キャンセルを実行します: %s\n", cancelOrderID)
-				apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				err := u.gateway.CancelOrder(apiCtx, cancelOrderID)
-				cancel()
-				if err != nil {
-					fmt.Printf("❌ キャンセル失敗: %v\n", err)
-				}
-				continue
-			}
-
-			if req != nil {
-				// 2. 要求があれば、市場（インフラ）に発注する
-				apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				orderID, err := u.gateway.SendOrder(apiCtx, *req)
-				cancel()
-				if err != nil {
-					fmt.Printf("❌ 発注失敗: %v\n", err)
-					s.FailSendingOrder(orderPtr) // 通信失敗時は仮注文をリストから消去
-					continue
-				}
-
-				// 3. 発注が成功したら、スナイパー側の仮注文オブジェクトIDを正式なものに更新する
-				s.ConfirmOrder(orderPtr, orderID)
-				fmt.Printf("✅ 注文受付IDを記録しました: %s\n", orderID)
-			}
+			// 2. 🌟 直接発注せず、ディスパッチャに委ねる
+			u.submitJob(s, req, cancelOrderID, orderPtr)
 		}
 	}
 }
@@ -145,32 +143,126 @@ func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report 
 		if s.Detail.Code == symbol {
 			orderPtr, req, cancelOrderID := s.SyncOrders(report.Orders)
 
-			// IFD等によるキャンセル要求があれば実行
-			if cancelOrderID != "" {
-				fmt.Printf("🛑 [%s] 連動キャンセルを実行します: %s\n", symbol, cancelOrderID)
-				apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				err := u.gateway.CancelOrder(apiCtx, cancelOrderID)
-				cancel()
-				if err != nil {
-					fmt.Printf("❌ キャンセル失敗: %v\n", err)
-				}
-			}
+			// 2. 🌟 直接発注せず、ディスパッチャに委ねる
+			u.submitJob(s, req, cancelOrderID, orderPtr)
+		}
+	}
+}
 
-			// IFD発火による自動発注要求があれば実行
-			if req != nil {
-				fmt.Printf("🚀 [%s] IFD決済注文を送信します: %s %.2f株\n", symbol, req.Action, req.Qty)
-				apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				orderID, err := u.gateway.SendOrder(apiCtx, *req)
-				cancel()
-				if err != nil {
-					fmt.Printf("🚨 [%s] IFD決済注文の発注に失敗しました！次のTickでリカバリーを試みます: %v\n", symbol, err)
-					s.FailSendingOrder(orderPtr)
-				} else {
-					s.ConfirmOrder(orderPtr, orderID)
-					fmt.Printf("✅ [%s] IFD注文受付IDを記録しました: %s\n", symbol, orderID)
-				}
+// submitJob は新しい発注・キャンセル要求をキューに登録（または既存分を更新）します
+func (u *TradeUseCase) submitJob(s *sniper.Sniper, req *market.OrderRequest, cancelID string, orderPtr *market.Order) {
+	if req == nil && cancelID == "" {
+		// 意図が HOLD の場合、もし待機中のジョブがあれば削除する（最新の意図を優先）
+		u.jobMu.Lock()
+		delete(u.pendingJobs, s.Detail.Code)
+		u.jobMu.Unlock()
+		return
+	}
+
+	priority := 1 // デフォルトは低優先（新規エントリー：ENTRY）
+	if cancelID != "" {
+		priority = 10 // キャンセルは中優先（CANCEL）
+	} else if req != nil && (req.ClosePositionOrder != market.CLOSE_POSITION_ORDER_NONE || len(req.ClosePositions) > 0) {
+		priority = 20 // 決済注文（損切り・利確：EXIT）は最優先
+	}
+
+	u.jobMu.Lock()
+	existing, ok := u.pendingJobs[s.Detail.Code]
+	updateCount := 0
+	if ok {
+		// すでに待機中のジョブがあれば、その更新回数（溜まっていたフラストレーション）を引き継ぐ
+		updateCount = existing.UpdateCount + 1
+	}
+
+	job := &OrderJob{
+		Symbol:      s.Detail.Code,
+		Sniper:      s,
+		Request:     req,
+		CancelID:    cancelID,
+		OrderPtr:    orderPtr,
+		Priority:    priority,
+		UpdateCount: updateCount,
+		RequestedAt: time.Now(),
+	}
+
+	u.pendingJobs[s.Detail.Code] = job
+	u.jobMu.Unlock()
+}
+
+// dispatchWorker は秒間10回（安全のため110ms間隔）のペースでキューから最も重要なジョブを取り出して実行します
+func (u *TradeUseCase) dispatchWorker(ctx context.Context) {
+	ticker := time.NewTicker(110 * time.Millisecond) // 約9回/秒
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			job := u.pickBestJob()
+			if job != nil {
+				go u.executeJob(ctx, job)
 			}
 		}
+	}
+}
+
+func (u *TradeUseCase) pickBestJob() *OrderJob {
+	u.jobMu.Lock()
+	defer u.jobMu.Unlock()
+
+	if len(u.pendingJobs) == 0 {
+		return nil
+	}
+
+	// 全ジョブをリスト化してソート
+	var jobs []*OrderJob
+	for _, j := range u.pendingJobs {
+		jobs = append(jobs, j)
+	}
+
+	sort.Slice(jobs, func(i, j int) bool {
+		// 🌟 優先度 + 更新回数（お待たせボーナス）で総合スコアを計算
+		scoreI := jobs[i].Priority + jobs[i].UpdateCount
+		scoreJ := jobs[j].Priority + jobs[j].UpdateCount
+
+		if scoreI != scoreJ {
+			return scoreI > scoreJ
+		}
+		// 2. 同じスコアなら、より古いリクエスト順
+		return jobs[i].RequestedAt.Before(jobs[j].RequestedAt)
+	})
+
+	best := jobs[0]
+	delete(u.pendingJobs, best.Symbol)
+	return best
+}
+
+func (u *TradeUseCase) executeJob(ctx context.Context, job *OrderJob) {
+	// API通信用のタイムアウト付きコンテキスト
+	apiCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if job.CancelID != "" {
+		fmt.Printf("🛑 [%s] 注文キャンセルを実行中 (ID: %s, Priority: %d)\n", job.Symbol, job.CancelID, job.Priority)
+		if err := u.gateway.CancelOrder(apiCtx, job.CancelID); err != nil {
+			fmt.Printf("❌ [%s] キャンセル失敗: %v\n", job.Symbol, err)
+		}
+		return
+	}
+
+	if job.Request != nil {
+		fmt.Printf("🚀 [%s] 発注を実行中 (%s %.0f株 @%.1f, Priority: %d)\n", job.Symbol, job.Request.Action, job.Request.Qty, job.Request.Price, job.Priority)
+		orderID, err := u.gateway.SendOrder(apiCtx, *job.Request)
+		if err != nil {
+			fmt.Printf("❌ [%s] 発注失敗: %v\n", job.Symbol, err)
+			job.Sniper.FailSendingOrder(job.OrderPtr)
+			return
+		}
+
+		// 成功したらIDを確定
+		job.Sniper.ConfirmOrder(job.OrderPtr, orderID)
+		fmt.Printf("✅ [%s] 注文受付完了 (ID: %s)\n", job.Symbol, orderID)
 	}
 }
 
