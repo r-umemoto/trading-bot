@@ -84,11 +84,15 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 
 	tradeType := 0
 	switch req.MarginTradeType {
+	case market.TRADE_TYPE_SYSTEM:
+		tradeType = 1
+	case market.TRADE_TYPE_GENERAL:
+		tradeType = 2
 	case market.TRADE_TYPE_GENERAL_DAY:
 		tradeType = 3
 	}
 	if tradeType == 0 {
-		return "", fmt.Errorf("取引種別が不正です")
+		return "", fmt.Errorf("取引種別が不正です (MarginTradeType: %d)", req.MarginTradeType)
 	}
 
 	orderType := 0

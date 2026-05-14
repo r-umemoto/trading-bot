@@ -142,9 +142,14 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 				} else {
 					cancel.Status = market.ORDER_STATUS_CANCELED // キャンセル完了として扱う
 				}
+				// 🌟 連射を避けるために少し待機
+				time.Sleep(200 * time.Millisecond)
 			}
 		}
 	}
+
+	// 🌟 キャンセルが浸透するまで少し待つ
+	time.Sleep(1 * time.Second)
 
 	// --- 第二段階：証券会社側でのロック解除を待機しつつ、全決済を完遂する ---
 	safety := 0
@@ -184,6 +189,8 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 					if err != nil {
 						fmt.Printf("❌ [%s] 強送決済エラー: %v\n", pos.Symbol, err)
 					}
+					// 🌟 連射を避けるために少し待機
+					time.Sleep(200 * time.Millisecond)
 				}
 			}
 
@@ -196,7 +203,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 		}
 
 		safety++
-		if safety > 3 {
+		if safety > 5 { // リトライ回数を少し増やす
 			fmt.Println("🔄 リトライ上限に達しました。")
 			break
 		}
