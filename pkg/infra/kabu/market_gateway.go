@@ -412,20 +412,46 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan mark
 }
 
 func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterSymbolRequest) error {
+	return m.RegisterSymbols(ctx, []market.ResisterSymbolRequest{req})
+}
 
-	clientReq := api.RegisterSymbolRequest{
-		Symbols: []api.RegisterSymbolsItem{
-			{
+func (m *MarketGateway) RegisterSymbols(ctx context.Context, reqs []market.ResisterSymbolRequest) error {
+	if len(reqs) == 0 {
+		return nil
+	}
+
+	// 50銘柄ずつバッチ処理
+	const batchSize = 50
+	for i := 0; i < len(reqs); i += batchSize {
+		end := i + batchSize
+		if end > len(reqs) {
+			end = len(reqs)
+		}
+
+		batch := reqs[i:end]
+		clientReq := api.RegisterSymbolRequest{
+			Symbols: make([]api.RegisterSymbolsItem, 0, len(batch)),
+		}
+
+		for _, req := range batch {
+			clientReq.Symbols = append(clientReq.Symbols, api.RegisterSymbolsItem{
 				Symbol:   req.Symbol,
 				Exchange: m.toBaseKabuExchageType(req.Exchange),
-			},
-		},
+			})
+		}
+
+		_, err := m.client.RegisterSymbol(clientReq)
+		if err != nil {
+			return fmt.Errorf("銘柄一括登録失敗 (batch %d-%d): %w", i, end, err)
+		}
+		fmt.Printf("✅ 銘柄一括登録完了 (%d/%d): %d銘柄\n", end, len(reqs), len(batch))
+
+		// レート制限（秒間上限）を考慮し、複数バッチある場合は少し待機
+		if end < len(reqs) {
+			time.Sleep(1 * time.Second)
+		}
 	}
 
-	_, err := m.client.RegisterSymbol(clientReq)
-	if err != nil {
-		return fmt.Errorf("銘柄登録失敗: %+v)", req)
-	}
 	return nil
 }
 

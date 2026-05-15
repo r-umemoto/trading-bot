@@ -39,7 +39,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	dataPool := market.NewDefaultDataPool()
 
 	// 4. ドメイン層（スナイパー）の配備
-	snipers, watchSymbols, err := deploySnipers(watchList, dataPool)
+	snipers, err := deploySnipers(watchList, dataPool)
 	if err != nil {
 		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
 	}
@@ -48,7 +48,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	cleaner := service.NewPositionCleaner(snipers, gateway)
 
 	// 5. エンジンの完成
-	return NewEngine(gateway, tradeUC, cleaner, watchSymbols), nil
+	return NewEngine(gateway, tradeUC, cleaner), nil
 }
 
 // ---------------------------------------------------------
@@ -74,21 +74,19 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 	return marketGateway, nil
 }
 
-func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]*sniper.Sniper, []string, error) {
+func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]*sniper.Sniper, error) {
 	var snipers []*sniper.Sniper
-	var watchSymbols []string
-	symbolMap := make(map[string]bool)
 
 	// ログディレクトリの準備
 	logDir := filepath.Join("logs", time.Now().Format("20060102"))
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil, nil, fmt.Errorf("ログディレクトリの作成に失敗: %w", err)
+		return nil, fmt.Errorf("ログディレクトリの作成に失敗: %w", err)
 	}
 
 	for _, t := range watchList {
 		factory, err := strategy.GetFactory(t.StrategyName)
 		if err != nil {
-			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
+			return nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
 		st := factory.NewStrategy(t.Detail, dataPool, t.Params)
@@ -106,12 +104,7 @@ func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]
 
 		s := sniper.NewSniper(t.Detail, st, policy, t.Exchange, analysisLogger)
 		snipers = append(snipers, s)
-
-		if !symbolMap[t.Detail.Code] {
-			symbolMap[t.Detail.Code] = true
-			watchSymbols = append(watchSymbols, t.Detail.Code)
-		}
 	}
 
-	return snipers, watchSymbols, nil
+	return snipers, nil
 }

@@ -96,38 +96,11 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 		fmt.Println("✅ 残存建玉はありません。クリーンな状態で起動します。")
 	}
 
-	// 監視銘柄を登録　TODOいったん仮でここに実装
-	registered := make(map[string]bool)
-	for _, s := range c.snipers {
-		key := fmt.Sprintf("%s:%d", s.Detail.Code, s.Exchange)
-		if registered[key] {
-			continue
-		}
-
-		req := market.ResisterSymbolRequest{
-			Symbol:   s.Detail.Code,
-			Exchange: s.Exchange,
-		}
-		err := c.marketGateway.RegisterSymbol(ctx, req)
-		if err != nil {
-			return fmt.Errorf("銘柄登録失敗: %s", s.Detail.Code)
-		}
-		fmt.Printf("✅ 銘柄登録 %s \n", s.Detail.Code)
-		registered[key] = true
-
-		// APIの秒間上限を回避するため1秒スリープ
-		time.Sleep(1 * time.Second)
-	}
-
 	return nil
 }
 
 // CleanAllPositions は終了時に全スナイパーを撤収させ、ノーポジになるまで見届けます
 func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
-
-	// 銘柄解除 TODO いったんここで
-	fmt.Println("\n🚨 銘柄登録全解除")
-	c.marketGateway.UnregisterSymbolAll(ctx)
 
 	fmt.Println("\n🚨 全スナイパーに緊急撤退命令を出します...")
 

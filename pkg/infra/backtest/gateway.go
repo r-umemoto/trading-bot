@@ -322,6 +322,10 @@ func (g *SyncBacktestGateway) RegisterSymbol(ctx context.Context, req market.Res
 	return nil
 }
 
+func (g *SyncBacktestGateway) RegisterSymbols(ctx context.Context, reqs []market.ResisterSymbolRequest) error {
+	return nil
+}
+
 func (g *SyncBacktestGateway) UnregisterSymbolAll(ctx context.Context) error {
 	return nil
 }
