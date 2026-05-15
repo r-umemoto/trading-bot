@@ -223,11 +223,16 @@ func (m *MarketGateway) GetOrders(ctx context.Context) ([]market.Order, error) {
 			if execution.RecType != api.RECTYPE_EXECUTION || execution.ID == "" {
 				continue
 			}
+
+			// 約定時刻をパース (Kabusapiは RFC3339 形式)
+			execTime, _ := time.Parse(time.RFC3339, execution.ExecutionTime)
+
 			o.AddExecution(
 				market.Execution{
-					ID:    execution.ID,
-					Price: execution.Price,
-					Qty:   execution.Qty,
+					ID:            execution.ID,
+					Price:         execution.Price,
+					Qty:           execution.Qty,
+					ExecutionTime: execTime,
 				},
 			)
 		}

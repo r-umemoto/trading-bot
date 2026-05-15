@@ -125,9 +125,10 @@ func (g *SyncBacktestGateway) ProcessTick(tick market.Tick) {
 		if executed && execQty > 0 {
 			execID := fmt.Sprintf("exec_%d_%s", time.Now().UnixNano(), o.ID)
 			exec := market.Execution{
-				ID:    execID,
-				Price: execPrice,
-				Qty:   execQty,
+				ID:            execID,
+				Price:         execPrice,
+				Qty:           execQty,
+				ExecutionTime: tick.CurrentPriceTime,
 			}
 			o.AddExecution(exec)
 			o.CumQty = o.FilledQty()

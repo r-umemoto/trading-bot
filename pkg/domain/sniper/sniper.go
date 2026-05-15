@@ -342,6 +342,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 	// 仮IDで管理リストに追加
 	ptr := market.NewOrderPtr(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
+	ptr.CreatedAt = state.LatestTick.CurrentPriceTime // 🌟 約定レイテンシ計算のためにTick時刻に合わせる
 	ptr.HasIFD = req.HasIFD
 	ptr.IFDAction = req.IFDAction
 	ptr.IFDPrice = req.IFDPrice
