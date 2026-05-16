@@ -89,6 +89,10 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 	return brain.Signal{Action: brain.ACTION_HOLD}
 }
 
+func (s *SampleStrategy) IfDone(input StrategyInput, prevSignal brain.Signal) brain.Signal {
+	return brain.Signal{Action: brain.ACTION_HOLD}
+}
+
 // ----------------------------------------------------------------------------
 // Factory & Registration
 // ----------------------------------------------------------------------------

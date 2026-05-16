@@ -15,6 +15,7 @@ import (
 type Strategy interface {
 	Name() string
 	Evaluate(input strategy.StrategyInput) brain.Signal
+	IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal
 	AnalysisLogger() *slog.Logger // 🌟 解析用ロガーを取得
 }
 
@@ -42,7 +43,7 @@ type Sniper struct {
 	Orders          []*market.Order
 	Logger          *slog.Logger // 🌟 解析用ロガー
 	mu              sync.Mutex   // 👈 状態をロックするための鍵
-	isExiting       bool       // 👈 撤収作業中かどうかのフラグ
+	isExiting       bool         // 👈 撤収作業中かどうかのフラグ
 	AccountType     market.AccountType
 	Exchange        market.ExchangeMarket
 	MarginTradeType market.MarginTradeType
@@ -61,14 +62,14 @@ func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.Executio
 		logger = slog.Default()
 	}
 	return &Sniper{
-		Detail:          detail,
-		Strategy:        strategy,
-		ExecutionPolicy: policy,
-		Orders:          make([]*market.Order, 0),
-		positions:       []market.Position{}, // 初期状態は空
-		AccountType:     market.ACCOUNT_SPECIAL,
-		Exchange:        exchange,
-		MarginTradeType: market.TRADE_TYPE_GENERAL_DAY,
+		Detail:              detail,
+		Strategy:            strategy,
+		ExecutionPolicy:     policy,
+		Orders:              make([]*market.Order, 0),
+		positions:           []market.Position{}, // 初期状態は空
+		AccountType:         market.ACCOUNT_SPECIAL,
+		Exchange:            exchange,
+		MarginTradeType:     market.TRADE_TYPE_GENERAL_DAY,
 		processedExecutions: make(map[string]bool),
 		Logger:              logger,
 	}
@@ -206,31 +207,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		}
 
 		if isStillDesired {
-			// IFD情報のみの更新チェック
-			if signal.HasIFD {
-				marketIFDAction, err := signal.IFDAction.ToMarketAction()
-				if err == nil {
-					if activeOrder.HasIFD {
-						if activeOrder.IFDPrice != signal.IFDPrice || activeOrder.IFDAction != marketIFDAction || activeOrder.IFDOrderType != signal.IFDOrderType {
-							fmt.Printf("🔄 [%s] 待機中注文のIFD情報を更新します\n", s.Detail.Code)
-							activeOrder.IFDPrice = signal.IFDPrice
-							activeOrder.IFDAction = marketIFDAction
-							activeOrder.IFDOrderType = signal.IFDOrderType
-						}
-					} else {
-						// IFDが後から追加された
-						fmt.Printf("🔄 [%s] 待機中注文にIFD情報を追加します\n", s.Detail.Code)
-						activeOrder.HasIFD = true
-						activeOrder.IFDPrice = signal.IFDPrice
-						activeOrder.IFDAction = marketIFDAction
-						activeOrder.IFDOrderType = signal.IFDOrderType
-					}
-				}
-			} else if activeOrder.HasIFD && !signal.HasIFD {
-				// IFDが取り消された
-				fmt.Printf("🔄 [%s] 待機中注文のIFD情報を取り消します\n", s.Detail.Code)
-				activeOrder.HasIFD = false
-			}
+			// 何もしない（維持）
 		}
 
 		// 意図と異なる、または HOLD になった場合はキャンセルを要求
@@ -241,7 +218,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 				return nil, nil, ""
 			}
 
-			fmt.Printf("🔄 [%s] 意図と異なる注文(%s: %s@%.1f)をキャンセル要求します (Signal: %s@%.1f, Qty: %.1f)\n", 
+			fmt.Printf("🔄 [%s] 意図と異なる注文(%s: %s@%.1f)をキャンセル要求します (Signal: %s@%.1f, Qty: %.1f)\n",
 				s.Detail.Code, activeOrder.ID, activeOrder.Action, activeOrder.OrderPrice, signal.Action, signal.Price, signal.Quantity)
 			activeOrder.Status = market.ORDER_STATUS_CANCEL_SENT
 			activeOrder.CancelSentAt = time.Now()
@@ -317,9 +294,15 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
 	}
 
+
+	// --- 6. IFD (If-Done) 注文の組み立て ---
+	// 直前のシグナルが約定したと仮定して、次の意図を問う
+	ifDoneSignal := s.Strategy.IfDone(input.SimulateSignal(signal), signal)
 	var marketIFDAction market.Action
-	if signal.HasIFD {
-		marketIFDAction, _ = signal.IFDAction.ToMarketAction()
+	var hasIFD bool
+	if ifDoneSignal.Action != brain.ACTION_HOLD {
+		marketIFDAction, _ = ifDoneSignal.Action.ToMarketAction()
+		hasIFD = true
 	}
 
 	req := &market.OrderRequest{
@@ -334,10 +317,10 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		ClosePositions:     closePositions,
 		Qty:                signal.Quantity,
 		Price:              signal.Price,
-		HasIFD:             signal.HasIFD,
+		HasIFD:             hasIFD,
 		IFDAction:          marketIFDAction,
-		IFDPrice:           signal.IFDPrice,
-		IFDOrderType:       signal.IFDOrderType,
+		IFDPrice:           ifDoneSignal.Price,
+		IFDOrderType:       ifDoneSignal.OrderType,
 	}
 
 	// 仮IDで管理リストに追加
@@ -421,14 +404,13 @@ func (s *Sniper) ForceExit() {
 func (s *Sniper) reducePositions(sellQty float64, sellPrice float64, sellTime time.Time) {
 	remainingToSell := sellQty
 	var newPositions []market.Position
-	var totalTradePnL float64      // 🌟 今回の「売り約定全体」の損益を合算する変数
+	var totalTradePnL float64       // 🌟 今回の「売り約定全体」の損益を合算する変数
 	var earliestEntryTime time.Time // 🌟 保有時間の計算用
 
 	for _, p := range s.positions {
 		if remainingToSell <= 0 {
 			// 売却分を消化しきったら、残りの建玉はそのまま保持リストへ
-			newPositions = append(newPositions, p,
-			)
+			newPositions = append(newPositions, p)
 			continue
 		}
 
@@ -505,7 +487,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 	var newExecQty float64
 	var triggeredIFDParent *market.Order
 	var newExecs []market.Execution
-	
+
 	// 新しい管理リストを作成（事実ベースで再構築）
 	var reconciledOrders []*market.Order
 

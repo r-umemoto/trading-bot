@@ -14,6 +14,9 @@ type MockStrategy struct{}
 func (m *MockStrategy) Name() string                                { return "mock" }
 func (m *MockStrategy) Evaluate(input strategy.StrategyInput) brain.Signal { return brain.Signal{} }
 func (m *MockStrategy) AnalysisLogger() *slog.Logger                   { return nil }
+func (m *MockStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal {
+	return brain.Signal{Action: brain.ACTION_HOLD}
+}
 
 func TestSniper_SyncOrders(t *testing.T) {
 	detail := market.Symbol{Code: "9434"}

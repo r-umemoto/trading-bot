@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"log/slog"
+
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 )
 
@@ -69,4 +70,11 @@ func (k *KillSwitch) Evaluate(input StrategyInput) brain.Signal {
 	}
 
 	return sig
+}
+
+func (k *KillSwitch) IfDone(input StrategyInput, prevSignal brain.Signal) brain.Signal {
+	if k.State.IsTriggered {
+		return brain.Signal{Action: brain.ACTION_HOLD}
+	}
+	return k.MainLogic.IfDone(input, prevSignal)
 }

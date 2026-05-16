@@ -39,6 +39,30 @@ func (i *StrategyInput) AveragePrice() float64 {
 	return i.ensurePosition().AveragePrice
 }
 
+// SimulateSignal は、特定のシグナルが約定したと仮定した新しい入力状態を作成します。
+// これは IfDone (IFD注文の組み立て) の判定に使用されます。
+func (i StrategyInput) SimulateSignal(sig brain.Signal) StrategyInput {
+	if sig.Action == brain.ACTION_HOLD {
+		return i
+	}
+
+	marketAction, _ := sig.Action.ToMarketAction()
+	// 疑似注文を作成 (ステータスを FILL_EXPECTED にして約定済みに見せかける)
+	simOrder := market.NewOrderPtr("sim-id", i.LatestTick.Symbol, marketAction, sig.Price, sig.Quantity)
+	simOrder.Status = market.ORDER_STATUS_FILL_EXPECTED
+
+	newOrders := make(StrategyOrders, len(i.Orders)+1)
+	copy(newOrders, i.Orders)
+	newOrders[len(i.Orders)] = simOrder
+
+	return StrategyInput{
+		Orders:        newOrders,
+		LatestTick:    i.LatestTick,
+		BasePositions: i.BasePositions,
+		cachedPos:     nil, // 再計算させる
+	}
+}
+
 // ActiveOrders は現在板に出ている（未完了の）注文リストを返します
 func (i *StrategyInput) ActiveOrders() StrategyOrders {
 	var active StrategyOrders
@@ -93,5 +117,8 @@ func (i *StrategyInput) ensurePosition() *Position {
 type Strategy interface {
 	Name() string
 	Evaluate(input StrategyInput) brain.Signal
+	// IfDone は、直前のシグナルが約定したと仮定した場合の「次の意図」を返します。
+	// 不要な場合は ACTION_HOLD を返します。
+	IfDone(input StrategyInput, prevSignal brain.Signal) brain.Signal
 	AnalysisLogger() *slog.Logger // 🌟 解析用ロガーを取得
 }
