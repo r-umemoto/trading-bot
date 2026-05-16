@@ -99,9 +99,10 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		if o.IsCompleted() || o.Status == market.ORDER_STATUS_CANCEL_SENT {
 			continue
 		}
-		if o.Action == market.ACTION_BUY {
+		switch o.Action {
+		case market.ACTION_BUY:
 			activeBuyOrder = o
-		} else if o.Action == market.ACTION_SELL {
+		case market.ACTION_SELL:
 			activeSellOrder = o
 		}
 	}
@@ -152,9 +153,10 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	// 現在の判断に関係する注文を特定
 	var activeOrder *market.Order
 	marketAction, _ := signal.Action.ToMarketAction()
-	if marketAction == market.ACTION_BUY {
+	switch marketAction {
+	case market.ACTION_BUY:
 		activeOrder = activeBuyOrder
-	} else if marketAction == market.ACTION_SELL {
+	case market.ACTION_SELL:
 		activeOrder = activeSellOrder
 	}
 
@@ -164,27 +166,13 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	if activeOrder != nil {
 		// IDがまだ確定していない（PENDING）場合は、次のアクションを起こさず待機
 		if market.IsPendingID(activeOrder.ID) {
-			marketAction, _ := signal.Action.ToMarketAction()
-			if marketAction != "" && activeOrder.Action != marketAction {
-				// 決済（反対売買）の場合は、PENDINGを無視して新規発注フローへ進ませる（デッドロック防止）
-				fmt.Printf("⚠️ [%s] PENDING中の注文(%s)がありますが、反対売買(Action: %s)のため発注を優先します\n", s.Detail.Code, activeOrder.Action, marketAction)
-				activeOrder = nil
-			} else {
-				return nil, nil, ""
-			}
+			return nil, nil, ""
 		}
 
 		// すでにキャンセル送信済みの場合は、その確定を待つ
 		if activeOrder.Status == market.ORDER_STATUS_CANCEL_SENT {
 			// ここに来るということは、上記のループで skip されなかった場合（二重キャンセル防止など）
 			return nil, nil, ""
-		}
-
-		// 疑似約定済みの場合は、基本的には維持するが、
-		// 戦略が「次の注文（利確など）」を出したい場合は、この注文を「完了したもの」とみなして
-		// 重複発注プロセスへ進ませる。
-		if activeOrder.Status == market.ORDER_STATUS_FILL_EXPECTED {
-			// ここでは何もせず、後続の「意図との比較」へ進む
 		}
 
 		// 現在の注文が戦略の意図（シグナル）と一致しているかチェック
@@ -204,10 +192,6 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 					}
 				}
 			}
-		}
-
-		if isStillDesired {
-			// 何もしない（維持）
 		}
 
 		// 意図と異なる、または HOLD になった場合はキャンセルを要求
@@ -293,7 +277,6 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	if marketAction == market.ACTION_SELL && len(closePositions) == 0 {
 		closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
 	}
-
 
 	// --- 6. IFD (If-Done) 注文の組み立て ---
 	// 直前のシグナルが約定したと仮定して、次の意図を問う
