@@ -30,11 +30,14 @@ func RunBacktest() error {
 	flag.StringVar(&portfolioPath, "portfolio", "./configs/portfolio.json", "ポートフォリオJSONファイルのパス")
 	var execModelStr string
 	flag.StringVar(&execModelStr, "execution-model", "pessimistic", "約定モデル (touch, pessimistic, volume)")
+	var latencyMs int
+	flag.IntVar(&latencyMs, "latency", 0, "発注・キャンセル遅延時間 (ミリ秒)")
 	flag.Parse()
 
 	execModel := backtest.ExecutionModel(execModelStr)
+	latency := time.Duration(latencyMs) * time.Millisecond
 
-	fmt.Printf("戦略のバックテストを開始します... (データ: %s, 約定モデル: %s)\n", csvPath, execModel)
+	fmt.Printf("戦略のバックテストを開始します... (データ: %s, 約定モデル: %s, 遅延: %v)\n", csvPath, execModel, latency)
 
 	// 2. 監視銘柄（Sniper）のセットアップ
 	targets, err := portfolio.LoadFromJSON(portfolioPath)
@@ -43,7 +46,7 @@ func RunBacktest() error {
 	}
 
 	// 3. バックテスト用インフラ（Mock Gateway）の準備
-	gateway := backtest.NewBacktestGateway(execModel)
+	gateway := backtest.NewBacktestGateway(execModel, latency)
 	dataPool := gateway.DataPool()
 	_, _, _ = gateway.Listen(context.Background())
 	tickCh := gateway.TickCh()

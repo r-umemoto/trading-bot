@@ -31,6 +31,12 @@ type SyncBacktestGateway struct {
 	orderKeys []string // 順序を保証するためのキーリスト
 	orderIdx  int
 	Model     ExecutionModel // 採用する約定モデル
+	Latency   time.Duration  // シミュレートする遅延時間 (e.g. 100ms)
+
+	// 遅延関連トラッキング
+	activeAt       map[string]time.Time // orderID -> 取引所に到達する時刻
+	cancelActiveAt map[string]time.Time // orderID -> キャンセルが確定する時刻
+	currentTime    time.Time            // 現在のTickのタイムスタンプ
 
 	// ボリュームベース約定用のトラッキング
 	lastTradingVolumes map[string]float64
@@ -41,7 +47,7 @@ type SyncBacktestGateway struct {
 	dataPool           tick.DataPool
 }
 
-func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
+func NewBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBacktestGateway {
 	return &SyncBacktestGateway{
 		tickCh:             make(chan tick.Tick, 10000),
 		orderCh:            make(chan order.Orders, 10000), // 大きめのバッファ
@@ -49,6 +55,9 @@ func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
 		orders:             make(map[string]*order.Order),
 		orderKeys:          make([]string, 0),
 		Model:              model,
+		Latency:            latency,
+		activeAt:           make(map[string]time.Time),
+		cancelActiveAt:     make(map[string]time.Time),
 		lastTradingVolumes: make(map[string]float64),
 		lastTicks:          make(map[string]tick.Tick),
 		initialDepths:      make(map[string]float64),
@@ -71,6 +80,27 @@ func (g *SyncBacktestGateway) ProcessTick(tick tick.Tick) {
 	// 内部の DataPool を更新
 	g.dataPool.PushTick(tick)
 
+	// 仮想時刻を更新
+	g.currentTime = tick.CurrentPriceTime
+
+	// 1. キャンセル要求の到達・反映処理
+	for id, cancelTime := range g.cancelActiveAt {
+		o, ok := g.orders[id]
+		if !ok || o.IsCompleted() {
+			delete(g.cancelActiveAt, id)
+			continue
+		}
+		if !tick.CurrentPriceTime.Before(cancelTime) {
+			// 取引所にキャンセル要求が到達し、未約定部分をキャンセル確定
+			o.Status = order.ORDER_STATUS_CANCELED
+			delete(g.cancelActiveAt, id)
+
+			// キャンセル確定を通知
+			orders, _ := g.GetOrders(context.Background())
+			g.orderCh <- orders
+		}
+	}
+
 	// Delta volume calculation for volume-based logic
 	deltaVolume := 0.0
 	if lastVol, ok := g.lastTradingVolumes[tick.Symbol]; ok {
@@ -86,6 +116,37 @@ func (g *SyncBacktestGateway) ProcessTick(tick tick.Tick) {
 		}
 		if o.Symbol != tick.Symbol {
 			continue
+		}
+
+		// 🌟 発注遅延（レイテンシ）シミュレーション: 取引所に到達したかチェック
+		if activeTime, ok := g.activeAt[o.ID]; ok {
+			if tick.CurrentPriceTime.Before(activeTime) {
+				continue // まだ取引所に到達していないためスキップ
+			}
+			// 到達したためトラッキングから除外
+			delete(g.activeAt, o.ID)
+
+			// Volumeモデルの場合、取引所に到達した瞬間の板状況で初期並び（キュー深度）を決定
+			if g.Model == ExecutionModelVolume {
+				depth := 0.0
+				if o.Action == order.ACTION_BUY {
+					for _, q := range tick.BuyBoard {
+						if q.Price == o.OrderPrice {
+							depth = q.Qty
+							break
+						}
+					}
+				} else {
+					for _, q := range tick.SellBoard {
+						if q.Price == o.OrderPrice {
+							depth = q.Qty
+							break
+						}
+					}
+				}
+				g.initialDepths[o.ID] = depth
+				g.cumulativeVolumes[o.ID] = 0
+			}
 		}
 
 		executed := false
@@ -255,8 +316,14 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrd
 	g.orderKeys = append(g.orderKeys, orderID)
 	g.orderTypes[orderID] = req.OrderType
 
-	// ボリュームベース約定用の初期情報を記録
-	if g.Model == ExecutionModelVolume {
+	// 発注遅延（レイテンシ）シミュレーション
+	if g.Latency > 0 {
+		activeTime := g.currentTime.Add(g.Latency)
+		g.activeAt[orderID] = activeTime
+	}
+
+	// ボリュームベース約定用の初期情報を記録（遅延がない場合のみ即時記録。遅延がある場合はProcessTick側で到達時に記録）
+	if g.Model == ExecutionModelVolume && g.Latency == 0 {
 		depth := 0.0
 		if lastTick, ok := g.lastTicks[ord.Symbol]; ok {
 			if ord.Action == order.ACTION_BUY {
@@ -284,6 +351,23 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrd
 
 func (g *SyncBacktestGateway) CancelOrder(ctx context.Context, orderID string) error {
 	if o, ok := g.orders[orderID]; ok {
+		if o.IsCompleted() {
+			return nil // すでに完了している場合は何もしない
+		}
+
+		if g.Latency > 0 {
+			// 取消送信中状態へ遷移し、遅延キャンセルをスケジュール
+			o.Status = order.ORDER_STATUS_CANCEL_SENT
+			cancelTime := g.currentTime.Add(g.Latency)
+			g.cancelActiveAt[orderID] = cancelTime
+
+			// 取消送信中状態になったことを通知
+			orders, _ := g.GetOrders(ctx)
+			g.orderCh <- orders
+			return nil
+		}
+
+		// 遅延がない場合は即時キャンセル
 		o.Status = order.ORDER_STATUS_CANCELED
 		// キャンセルを通知
 		orders, _ := g.GetOrders(ctx)
