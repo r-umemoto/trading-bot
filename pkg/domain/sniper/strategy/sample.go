@@ -2,8 +2,10 @@ package strategy
 
 import (
 	"log/slog"
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
+	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // StrategyState は、戦略が銘柄ごとに保持したい固有のステートを表します
@@ -15,7 +17,7 @@ type StrategyState struct {
 type SampleStrategy struct {
 	name      string
 	state     StrategyState
-	oneMinBar *market.OneMinBarIndicator
+	oneMinBar *tick.OneMinBarIndicator
 	highPrice float64
 }
 
@@ -99,11 +101,11 @@ func (s *SampleStrategy) IfDone(input StrategyInput, prevSignal brain.Signal) br
 
 type SimpleStrategyFactory struct{}
 
-func (f *SimpleStrategyFactory) NewStrategy(detail market.Symbol, dataPool market.DataPool, params interface{}) Strategy {
+func (f *SimpleStrategyFactory) NewStrategy(detail symbol.Symbol, dataPool tick.DataPool, params interface{}) Strategy {
 	// Sample戦略が必要とするインジケーター（1分足）をDataPoolに要求・生成する
-	oneMinBar := dataPool.GetOrCreateIndicator(detail.Code, "1min_bar", func() market.Indicator {
-		return market.NewOneMinBarIndicator("1min_bar")
-	}).(*market.OneMinBarIndicator)
+	oneMinBar := dataPool.GetOrCreateIndicator(detail.Code, "1min_bar", func() tick.Indicator {
+		return tick.NewOneMinBarIndicator("1min_bar")
+	}).(*tick.OneMinBarIndicator)
 
 	return &SampleStrategy{
 		name: "sample",

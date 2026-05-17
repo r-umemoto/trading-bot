@@ -15,6 +15,8 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
+	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 	"github.com/r-umemoto/trading-bot/pkg/portfolio"
@@ -36,7 +38,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	}
 
 	// 3. ユースケースとサービスの組み立て用のDataPool準備
-	dataPool := market.NewDefaultDataPool()
+	dataPool := tick.NewDefaultDataPool()
 
 	// 4. ドメイン層（スナイパー）の配備
 	snipers, err := deploySnipers(watchList, dataPool)
@@ -74,7 +76,7 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 	return marketGateway, nil
 }
 
-func deploySnipers(watchList []market.WatchTarget, dataPool market.DataPool) ([]*sniper.Sniper, error) {
+func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*sniper.Sniper, error) {
 	var snipers []*sniper.Sniper
 
 	// ログディレクトリの準備

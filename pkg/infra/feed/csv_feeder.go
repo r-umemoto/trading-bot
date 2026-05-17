@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // CSVTickFeeder はCSVからTickデータを読み込み、システムに供給します
@@ -22,7 +22,7 @@ func NewCSVTickFeeder(filePath string) *CSVTickFeeder {
 }
 
 // Run はCSVを末尾まで読み込み、tickChan にデータを送信し続けます
-func (f *CSVTickFeeder) Run(tickChan chan<- market.Tick) error {
+func (f *CSVTickFeeder) Run(tickChan chan<- tick.Tick) error {
 	file, err := os.Open(f.filePath)
 	if err != nil {
 		return err
@@ -52,7 +52,7 @@ func (f *CSVTickFeeder) Run(tickChan chan<- market.Tick) error {
 		volume, _ := strconv.ParseFloat(record[3], 64)
 		vwap, _ := strconv.ParseFloat(record[4], 64)
 
-		tick := market.Tick{
+		tick := tick.Tick{
 			Symbol:        record[1],
 			Price:         price,
 			TradingVolume: volume,

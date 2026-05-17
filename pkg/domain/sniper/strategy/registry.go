@@ -2,11 +2,13 @@ package strategy
 
 import (
 	"fmt"
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+
+	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 type StrategyFactory interface {
-	NewStrategy(detail market.Symbol, dataPool market.DataPool, params interface{}) Strategy
+	NewStrategy(detail symbol.Symbol, dataPool tick.DataPool, params interface{}) Strategy
 	CreateExecutionPolicy(params interface{}) ExecutionPolicy
 }
 

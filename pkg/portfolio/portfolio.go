@@ -5,22 +5,24 @@ import (
 	"fmt"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 )
 
 // SymbolTarget defines a symbol to watch, including the multiple strategies to apply and metadata.
 type SymbolTarget struct {
-	Symbol     string                `json:"symbol"`
-	Exchange   market.ExchangeMarket `json:"exchange"`
-	Strategies []string              `json:"strategies"`
-	Sector     string                `json:"sector"`
+	Symbol     string                 `json:"symbol"`
+	Exchange   ord.ExchangeMarket     `json:"exchange"`
+	Strategies []string               `json:"strategies"`
+	Sector     string                 `json:"sector"`
 	Params     map[string]interface{} `json:"params"`
 }
 
-// BuildWatchList flattens a slice of SymbolTarget into a slice of market.WatchTarget.
-// This allows a single symbol to be mapped to multiple market.WatchTarget instances
+// BuildWatchList flattens a slice of SymbolTarget into a slice of symbol.WatchTarget.
+// This allows a single symbol to be mapped to multiple symbol.WatchTarget instances
 // when multiple strategies are specified.
-func BuildWatchList(ctx context.Context, gateway market.MarketGateway, targets []SymbolTarget) ([]market.WatchTarget, error) {
-	var watchList []market.WatchTarget
+func BuildWatchList(ctx context.Context, gateway market.MarketGateway, targets []SymbolTarget) ([]symbol.WatchTarget, error) {
+	var watchList []symbol.WatchTarget
 
 	for _, t := range targets {
 		// 🌟 APIから詳細情報を取得
@@ -30,7 +32,7 @@ func BuildWatchList(ctx context.Context, gateway market.MarketGateway, targets [
 		}
 
 		for _, strategy := range t.Strategies {
-			watchList = append(watchList, market.WatchTarget{
+			watchList = append(watchList, symbol.WatchTarget{
 				Detail:       detail,
 				StrategyName: strategy,
 				Exchange:     t.Exchange,

@@ -12,22 +12,28 @@ import (
 )
 
 type LogEntry struct {
-	Event        string  `json:"event"`
-	Symbol       string  `json:"symbol"`
-	Strategy     string  `json:"strategy_name"`
-	ExitReason   string  `json:"exit_reason"`
-	Pnl          float64 `json:"pnl"`
-	HoldTimeSec  float64 `json:"hold_time_sec"`
-	QueueTimeMs  int64   `json:"queue_time_ms"`
+	Event       string  `json:"event"`
+	Symbol      string  `json:"symbol"`
+	Strategy    string  `json:"strategy_name"`
+	ExitReason  string  `json:"exit_reason"`
+	Pnl         float64 `json:"pnl"`
+	HoldTimeSec float64 `json:"hold_time_sec"`
+	QueueTimeMs int64   `json:"queue_time_ms"`
 }
 
-type ExitStat struct{ Count int; PnlSum, HoldSum float64 }
+type ExitStat struct {
+	Count           int
+	PnlSum, HoldSum float64
+}
 type SymbolStat struct {
 	Count, WinCount int
 	PnlSum          float64
 	PnlDist         map[float64]int
 }
-type QueueStat struct{ Count int; TimeSum, Min, Max int64 }
+type QueueStat struct {
+	Count             int
+	TimeSum, Min, Max int64
+}
 
 func main() {
 	logFile := flag.String("file", "", "解析する単一のログファイルパス")
@@ -79,9 +85,9 @@ func main() {
 			continue
 		}
 		fmt.Printf("\n【対象: %s】\n", sym)
-		fmt.Printf("  取引数: %d, 勝率: %.1f%%, 合計損益: %.1f (平均: %.2f)\n", 
+		fmt.Printf("  取引数: %d, 勝率: %.1f%%, 合計損益: %.1f (平均: %.2f)\n",
 			stat.Count, float64(stat.WinCount)/float64(stat.Count)*100, stat.PnlSum, stat.PnlSum/float64(stat.Count))
-		
+
 		// 決済理由別の詳細
 		fmt.Println("  [決済理由別の内訳]")
 		reasons := make([]string, 0, len(symbolExitStats[sym]))
@@ -91,13 +97,13 @@ func main() {
 		sort.Strings(reasons)
 		for _, r := range reasons {
 			es := symbolExitStats[sym][r]
-			fmt.Printf("    - %-20s: %3d回, 損益: %8.1f, 平均保有: %5.1fs\n", 
+			fmt.Printf("    - %-20s: %3d回, 損益: %8.1f, 平均保有: %5.1fs\n",
 				r, es.Count, es.PnlSum, es.HoldSum/float64(es.Count))
 		}
 
 		// 約定待ち時間
 		if qs, ok := queueStats[sym]; ok {
-			fmt.Printf("  [約定待ち時間] 平均: %dms, 最小: %dms, 最大: %dms\n", 
+			fmt.Printf("  [約定待ち時間] 平均: %dms, 最小: %dms, 最大: %dms\n",
 				qs.TimeSum/int64(qs.Count), qs.Min, qs.Max)
 		}
 
@@ -172,4 +178,3 @@ func processFile(path string, symbolStats map[string]*SymbolStat, queueStats map
 		}
 	}
 }
-

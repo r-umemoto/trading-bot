@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 )
 
@@ -21,7 +21,9 @@ func (m *MockKabuClient) SendOrder(req api.OrderRequest) (*api.OrderResponse, er
 func (m *MockKabuClient) CancelOrder(req api.CancelRequest) (*api.CancelResponse, error) {
 	return nil, nil
 }
-func (m *MockKabuClient) GetPositions(product api.ProductType) ([]api.Position, error) { return nil, nil }
+func (m *MockKabuClient) GetPositions(product api.ProductType) ([]api.Position, error) {
+	return nil, nil
+}
 func (m *MockKabuClient) RegisterSymbol(req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error) {
 	return nil, nil
 }
@@ -42,7 +44,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 	tests := []struct {
 		name     string
 		apiOrder api.Order
-		expected market.OrderStatus
+		expected ord.OrderStatus
 	}{
 		{
 			name: "State 4: Canceling",
@@ -50,7 +52,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 				ID:    "order-1",
 				State: api.STATE_CANCELING,
 			},
-			expected: market.ORDER_STATUS_CANCEL_SENT,
+			expected: ord.ORDER_STATUS_CANCEL_SENT,
 		},
 		{
 			name: "State 5 with RecType 6: Canceled",
@@ -61,7 +63,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 					{RecType: api.RECTYPE_CANCELED},
 				},
 			},
-			expected: market.ORDER_STATUS_CANCELED,
+			expected: ord.ORDER_STATUS_CANCELED,
 		},
 		{
 			name: "State 5 with Full Fill",
@@ -71,7 +73,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 				OrderQty: 100,
 				CumQty:   100,
 			},
-			expected: market.ORDER_STATUS_FILLED,
+			expected: ord.ORDER_STATUS_FILLED,
 		},
 		{
 			name: "State 5 with RecType 7: Expired",
@@ -82,7 +84,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 					{RecType: api.RECTYPE_INVALID},
 				},
 			},
-			expected: market.ORDER_STATUS_EXPIRED,
+			expected: ord.ORDER_STATUS_EXPIRED,
 		},
 	}
 
@@ -94,12 +96,12 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 				t.Fatalf("GetOrders failed: %v", err)
 			}
 
-			if len(orders) != 1 {
-				t.Fatalf("expected 1 order, got %d", len(orders))
+			if len(orders.Orders) != 1 {
+				t.Fatalf("expected 1 order, got %d", len(orders.Orders))
 			}
 
-			if orders[0].Status != tt.expected {
-				t.Errorf("expected status %d, got %d", tt.expected, orders[0].Status)
+			if orders.Orders[0].Status != tt.expected {
+				t.Errorf("expected status %d, got %d", tt.expected, orders.Orders[0].Status)
 			}
 		})
 	}

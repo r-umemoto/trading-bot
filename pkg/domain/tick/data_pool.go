@@ -1,5 +1,5 @@
 // internal/domain/market/analyzer.go
-package market
+package tick
 
 import (
 	"fmt"

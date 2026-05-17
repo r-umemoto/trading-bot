@@ -12,10 +12,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/backtest"
 	"github.com/r-umemoto/trading-bot/pkg/portfolio"
 	"github.com/r-umemoto/trading-bot/pkg/usecase"
@@ -43,7 +44,7 @@ func RunBacktest() error {
 
 	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
 	gateway := backtest.NewBacktestGateway(execModel)
-	dataPool := market.NewDefaultDataPool()
+	dataPool := tick.NewDefaultDataPool()
 	tickCh, orderReportCh, _ := gateway.Start(context.Background())
 
 	// 4. 監視リストの構築 (Gatewayを使用して情報を埋める)
@@ -85,7 +86,7 @@ func RunBacktest() error {
 	_ = service.NewPositionCleaner(snipers, gateway)
 
 	// 5. Feederの準備
-	csvTickChan := make(chan market.Tick, 1000)
+	csvTickChan := make(chan tick.Tick, 1000)
 
 	// Feederを別ゴルーチンで起動し、CSVの読み込みを開始
 	go func() {
@@ -106,7 +107,7 @@ func RunBacktest() error {
 			report := <-orderReportCh
 			for _, s := range snipers {
 				// 🌟 修正: SyncOrders から戻る IFD 発注要求を処理する
-				ifdOrderPtr, _ := s.SyncOrders(report.Orders)
+				ifdOrderPtr, _ := s.SyncOrders(report)
 				if ifdOrderPtr != nil {
 					fmt.Printf("🚀 [%s] SyncOrders経由でIFD決済注文を送信します: %s %.2f株\n", s.Detail.Code, ifdOrderPtr.Action, ifdOrderPtr.OrderQty)
 					updatedOrder, err := gateway.SendOrder(context.Background(), *ifdOrderPtr)
@@ -150,8 +151,8 @@ func RunBacktest() error {
 
 	// 7. 取引終了後のクリーンアップ
 	ordersToMopUp, _ := gateway.GetOrders(context.Background())
-	fmt.Printf("クリーンアップ開始: 未約定の可能性がある注文数 %d件\n", len(ordersToMopUp))
-	for _, o := range ordersToMopUp {
+	fmt.Printf("クリーンアップ開始: 未約定の可能性がある注文数 %d件\n", len(ordersToMopUp.Orders))
+	for _, o := range ordersToMopUp.Orders {
 		if !o.IsCompleted() {
 			state := dataPool.GetState(o.Symbol)
 			if !state.LatestTick.CurrentPriceTime.IsZero() {
@@ -159,7 +160,7 @@ func RunBacktest() error {
 				for len(orderReportCh) > 0 {
 					report := <-orderReportCh
 					for _, s := range snipers {
-						ifdOrderPtr, _ := s.SyncOrders(report.Orders)
+						ifdOrderPtr, _ := s.SyncOrders(report)
 						if ifdOrderPtr != nil {
 							updatedOrder, err := gateway.SendOrder(context.Background(), *ifdOrderPtr)
 							if err != nil {
@@ -180,7 +181,7 @@ func RunBacktest() error {
 	fmt.Printf("バックテスト完了: 総処理Tick数 %d件\n", tickCount)
 
 	// 結果の出力
-	positions, _ := gateway.GetPositions(context.Background(), market.PRODICT_CASH)
+	positions, _ := gateway.GetPositions(context.Background(), ord.PRODICT_CASH)
 	orders, _ := gateway.GetOrders(context.Background())
 	fmt.Println("\n=============================================")
 	fmt.Println("             バックテスト結果")
@@ -188,7 +189,7 @@ func RunBacktest() error {
 	for _, p := range positions {
 		fmt.Printf("最終建玉: 銘柄 %s, 数量 %.f\n", p.Symbol, p.LeavesQty)
 	}
-	fmt.Printf("総発注数: %d件\n", len(orders))
+	fmt.Printf("総発注数: %d件\n", len(orders.Orders))
 
 	// 結果の出力
 	uc := usecase.NewTradeUseCase(snipers, gateway, dataPool)
@@ -197,7 +198,7 @@ func RunBacktest() error {
 	return nil
 }
 
-func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
+func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 	file, err := os.Open(csvPath)
 	if err != nil {
 		return err
@@ -230,8 +231,8 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 		bidPrice, _ := strconv.ParseFloat(record[7], 64)
 		bidQty, _ := strconv.ParseFloat(record[8], 64)
 
-		var sellBoard []market.Quote
-		var buyBoard []market.Quote
+		var sellBoard []tick.Quote
+		var buyBoard []tick.Quote
 		statusIdx := 9 // デフォルト（旧フォーマット）
 
 		// フル板情報がある場合 (新フォーマット)
@@ -245,10 +246,10 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 				bidQ, _ := strconv.ParseFloat(record[base+3], 64)
 
 				if askP > 0 {
-					sellBoard = append(sellBoard, market.Quote{Price: askP, Qty: askQ})
+					sellBoard = append(sellBoard, tick.Quote{Price: askP, Qty: askQ})
 				}
 				if bidP > 0 {
-					buyBoard = append(buyBoard, market.Quote{Price: bidP, Qty: bidQ})
+					buyBoard = append(buyBoard, tick.Quote{Price: bidP, Qty: bidQ})
 				}
 			}
 		}
@@ -260,23 +261,23 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- market.Tick) error {
 			}
 		}
 
-		tick := market.Tick{
+		tick := tick.Tick{
 			Symbol:        record[1],
 			Price:         price,
 			TradingVolume: volume,
 			VWAP:          vwap,
-			BestAsk: market.FirstQuote{
+			BestAsk: tick.FirstQuote{
 				Price: askPrice,
 				Qty:   askQty,
 			},
-			BestBid: market.FirstQuote{
+			BestBid: tick.FirstQuote{
 				Price: bidPrice,
 				Qty:   bidQty,
 			},
 			SellBoard:          sellBoard,
 			BuyBoard:           buyBoard,
 			CurrentPriceTime:   parsedTime,
-			CurrentPriceStatus: market.PriceStatus(status),
+			CurrentPriceStatus: tick.PriceStatus(status),
 		}
 
 		tickChan <- tick

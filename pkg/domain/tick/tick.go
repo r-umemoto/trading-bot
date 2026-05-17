@@ -1,4 +1,4 @@
-package market
+package tick
 
 import "time"
 

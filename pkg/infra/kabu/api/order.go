@@ -35,20 +35,20 @@ type ClosePosition struct {
 // OrderRequest は新規・決済注文を発注するためのリクエストデータです
 // https://kabucom.github.io/kabusapi/reference/index.html#operation/sendorderPost
 type OrderRequest struct {
-	Symbol             string      `json:"Symbol"`             // 銘柄コード (例: "9434")
-	Exchange           ExchageType `json:"Exchange"`           // 市場コード (1: 東証)
-	SecurityType       int         `json:"SecurityType"`       // 商品種別 (1: 株式)
-	Side               string      `json:"Side"`               // 売買区分 ("1": 売, "2": 買)
-	CashMargin         int         `json:"CashMargin"`         // 信用区分 (1: 現物, 2: 信用新規, 3: 信用返済)
-	MarginTradeType    int         `json:"MarginTradeType"`    // 信用取引区分 (1: 制度信用, 3: 一般信用デイトレ)
-	AccountType        int         `json:"AccountType"`        // 口座種別 (4: 特定口座)
-	Qty                float64     `json:"Qty"`                // 注文数量
-	Price              float64     `json:"Price"`              // 注文価格 (0: 成行)
-	ExpireDay          int         `json:"ExpireDay"`          // 注文有効期限 (0: 当日)
-	FrontOrderType     int32       `json:"FrontOrderType"`     // 執行条件 (10: 成行, 20: 指値)
-	DelivType          int32           `json:"DelivType"`          // 受渡区分 (0: 指定なし, 2: お預かり金, 3: Auマネーコネクト)
-	ClosePositionOrder *int32           `json:"ClosePositionOrder,omitempty"` // 決済順序
-	ClosePositions     []ClosePosition `json:"ClosePositions,omitempty"` // 指定返済
+	Symbol             string          `json:"Symbol"`                       // 銘柄コード (例: "9434")
+	Exchange           ExchageType     `json:"Exchange"`                     // 市場コード (1: 東証)
+	SecurityType       int             `json:"SecurityType"`                 // 商品種別 (1: 株式)
+	Side               string          `json:"Side"`                         // 売買区分 ("1": 売, "2": 買)
+	CashMargin         int             `json:"CashMargin"`                   // 信用区分 (1: 現物, 2: 信用新規, 3: 信用返済)
+	MarginTradeType    int             `json:"MarginTradeType"`              // 信用取引区分 (1: 制度信用, 3: 一般信用デイトレ)
+	AccountType        int             `json:"AccountType"`                  // 口座種別 (4: 特定口座)
+	Qty                float64         `json:"Qty"`                          // 注文数量
+	Price              float64         `json:"Price"`                        // 注文価格 (0: 成行)
+	ExpireDay          int             `json:"ExpireDay"`                    // 注文有効期限 (0: 当日)
+	FrontOrderType     int32           `json:"FrontOrderType"`               // 執行条件 (10: 成行, 20: 指値)
+	DelivType          int32           `json:"DelivType"`                    // 受渡区分 (0: 指定なし, 2: お預かり金, 3: Auマネーコネクト)
+	ClosePositionOrder *int32          `json:"ClosePositionOrder,omitempty"` // 決済順序
+	ClosePositions     []ClosePosition `json:"ClosePositions,omitempty"`     // 指定返済
 }
 
 // OrderResponse は発注後のレスポンスデータです

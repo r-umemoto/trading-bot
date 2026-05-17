@@ -3,12 +3,14 @@ package strategy
 import (
 	"log/slog"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // StrategyOrders は注文の集合に対する操作を提供します
-type StrategyOrders []*market.Order
+type StrategyOrders []*ord.Order
 
 // Position は特定の時点における銘柄の保有状態を表します
 type Position struct {
@@ -19,9 +21,9 @@ type Position struct {
 // StrategyInput は、戦略が判断を下すための「情報のパケット」です
 // 内部に計算ロジック（知恵）を隠蔽し、戦略側にはシンプルなインターフェースを提供します。
 type StrategyInput struct {
-	Orders        StrategyOrders    // すべての注文履歴
-	LatestTick    market.Tick       // 最新のTick
-	BasePositions []market.Position // Sniperが管理している確定ポジション
+	Orders        StrategyOrders      // すべての注文履歴
+	LatestTick    tick.Tick           // 最新のTick
+	BasePositions []position.Position // Sniperが管理している確定ポジション
 
 	// 内部キャッシュ（複数回メソッドを呼んでも計算は一度だけ）
 	cachedPos *Position
@@ -48,8 +50,8 @@ func (i StrategyInput) SimulateSignal(sig brain.Signal) StrategyInput {
 
 	marketAction, _ := sig.Action.ToMarketAction()
 	// 疑似注文を作成 (ステータスを FILL_EXPECTED にして約定済みに見せかける)
-	simOrder := market.NewOrderPtr("sim-id", i.LatestTick.Symbol, marketAction, sig.Price, sig.Quantity)
-	simOrder.Status = market.ORDER_STATUS_FILL_EXPECTED
+	simOrder := ord.NewOrderPtr("sim-id", i.LatestTick.Symbol, marketAction, sig.Price, sig.Quantity)
+	simOrder.Status = ord.ORDER_STATUS_FILL_EXPECTED
 
 	newOrders := make(StrategyOrders, len(i.Orders)+1)
 	copy(newOrders, i.Orders)
@@ -67,7 +69,7 @@ func (i StrategyInput) SimulateSignal(sig brain.Signal) StrategyInput {
 func (i *StrategyInput) ActiveOrders() StrategyOrders {
 	var active StrategyOrders
 	for _, o := range i.Orders {
-		if !o.IsCompleted() && o.Status != market.ORDER_STATUS_CANCEL_SENT {
+		if !o.IsCompleted() && o.Status != ord.ORDER_STATUS_CANCEL_SENT {
 			active = append(active, o)
 		}
 	}
@@ -92,11 +94,12 @@ func (i *StrategyInput) ensurePosition() *Position {
 
 	// 2. 疑似約定(FILL_EXPECTED)を先行計上
 	for _, o := range i.Orders {
-		if o.Status == market.ORDER_STATUS_FILL_EXPECTED {
-			if o.Action == market.ACTION_BUY {
+		if o.Status == ord.ORDER_STATUS_FILL_EXPECTED {
+			switch o.Action {
+			case ord.ACTION_BUY:
 				totalQty += o.OrderQty
 				totalCost += o.OrderPrice * o.OrderQty
-			} else if o.Action == market.ACTION_SELL {
+			case ord.ACTION_SELL:
 				totalQty -= o.OrderQty
 			}
 		}

@@ -1,4 +1,4 @@
-package market
+package tick
 
 // Indicator は各種計算指標が満たすべきインターフェースです。
 type Indicator interface {

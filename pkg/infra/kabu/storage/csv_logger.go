@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // CSVLogger はTickデータを非同期でCSVに書き込むための構造体です
 type CSVLogger struct {
-	tickChan chan market.Tick
+	tickChan chan tick.Tick
 	file     *os.File
 	writer   *csv.Writer
 }
@@ -60,7 +60,7 @@ func NewCSVLogger(symbol string, date string, outputDir string) (*CSVLogger, err
 	}
 
 	logger := &CSVLogger{
-		tickChan: make(chan market.Tick, 10000), // バッファサイズ1万（急激なTick流入に備える）
+		tickChan: make(chan tick.Tick, 10000), // バッファサイズ1万（急激なTick流入に備える）
 		file:     file,
 		writer:   writer,
 	}
@@ -72,7 +72,7 @@ func NewCSVLogger(symbol string, date string, outputDir string) (*CSVLogger, err
 }
 
 // Log はTickデータをチャネルに送信します（呼び出し元はブロックされません）
-func (l *CSVLogger) Log(tick market.Tick) {
+func (l *CSVLogger) Log(tick tick.Tick) {
 	// バッファが一杯の場合は破棄するか待つかの制御が必要ですが、
 	// 10000のバッファがあれば通常のTick流量で詰まることはほぼありません
 	l.tickChan <- tick

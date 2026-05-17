@@ -6,9 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
+	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 type Strategy interface {
@@ -33,19 +36,19 @@ type Performance struct {
 
 // Sniper は戦略とAPIクライアントを持ち、執行を担います
 type Sniper struct {
-	Detail          market.Symbol // 🌟 銘柄詳細（Symbol, PriceRangeGroup等を含む）
-	positions       []market.Position
+	Detail          symbol.Symbol // 🌟 銘柄詳細（Symbol, PriceRangeGroup等を含む）
+	positions       []position.Position
 	Performance     Performance // 🌟 追加
 	Strategy        Strategy
 	State           strategy.StrategyState   // 👈 銘柄ごとの戦略ステート
 	ExecutionPolicy strategy.ExecutionPolicy // 👈 執行ポリシー（疑似約定判定）
-	Orders          []*market.Order
+	Orders          []*ord.Order
 	Logger          *slog.Logger // 🌟 解析用ロガー
 	mu              sync.Mutex   // 👈 状態をロックするための鍵
 	isExiting       bool         // 👈 撤収作業中かどうかのフラグ
-	AccountType     market.AccountType
-	Exchange        market.ExchangeMarket
-	MarginTradeType market.MarginTradeType
+	AccountType     ord.AccountType
+	Exchange        ord.ExchangeMarket
+	MarginTradeType ord.MarginTradeType
 
 	processedExecutions map[string]bool // 🌟 処理済みの約定IDを記録
 	lastSignalReason    string          // 🌟 最新のシグナル理由（分析用）
@@ -53,7 +56,7 @@ type Sniper struct {
 }
 
 // NewSniper は新しいスナイパーを生成します
-func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange market.ExchangeMarket, logger *slog.Logger) *Sniper {
+func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange ord.ExchangeMarket, logger *slog.Logger) *Sniper {
 	if logger == nil {
 		logger = strategy.AnalysisLogger()
 	}
@@ -64,18 +67,18 @@ func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.Executio
 		Detail:              detail,
 		Strategy:            strategy,
 		ExecutionPolicy:     policy,
-		Orders:              make([]*market.Order, 0),
-		positions:           []market.Position{}, // 初期状態は空
-		AccountType:         market.ACCOUNT_SPECIAL,
+		Orders:              make([]*ord.Order, 0),
+		positions:           []position.Position{}, // 初期状態は空
+		AccountType:         ord.ACCOUNT_SPECIAL,
 		Exchange:            exchange,
-		MarginTradeType:     market.TRADE_TYPE_GENERAL_DAY,
+		MarginTradeType:     ord.TRADE_TYPE_GENERAL_DAY,
 		processedExecutions: make(map[string]bool),
 		Logger:              logger,
 	}
 }
 
 // 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
+func (s *Sniper) Tick(dataPool tick.DataPool) (*ord.Order, string) {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
@@ -92,16 +95,16 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 	}
 
 	// 1. 管理対象の注文を特定する（アクションに合わせた注文を抽出）
-	var activeBuyOrder *market.Order
-	var activeSellOrder *market.Order
+	var activeBuyOrder *ord.Order
+	var activeSellOrder *ord.Order
 	for _, o := range s.Orders {
-		if o.IsCompleted() || o.Status == market.ORDER_STATUS_CANCEL_SENT {
+		if o.IsCompleted() || o.Status == ord.ORDER_STATUS_CANCEL_SENT {
 			continue
 		}
 		switch o.Action {
-		case market.ACTION_BUY:
+		case ord.ACTION_BUY:
 			activeBuyOrder = o
-		case market.ACTION_SELL:
+		case ord.ACTION_SELL:
 			activeSellOrder = o
 		}
 	}
@@ -151,12 +154,12 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 	}
 
 	// 現在の判断に関係する注文を特定
-	var activeOrder *market.Order
+	var activeOrder *ord.Order
 	marketAction, _ := signal.Action.ToMarketAction()
 	switch marketAction {
-	case market.ACTION_BUY:
+	case ord.ACTION_BUY:
 		activeOrder = activeBuyOrder
-	case market.ACTION_SELL:
+	case ord.ACTION_SELL:
 		activeOrder = activeSellOrder
 	}
 
@@ -170,7 +173,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 		}
 
 		// すでにキャンセル送信済みの場合は、その確定を待つ
-		if activeOrder.Status == market.ORDER_STATUS_CANCEL_SENT {
+		if activeOrder.Status == ord.ORDER_STATUS_CANCEL_SENT {
 			// ここに来るということは、上記のループで skip されなかった場合（二重キャンセル防止など）
 			return nil, ""
 		}
@@ -185,13 +188,13 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 		if !isStillDesired {
 			// 【重要】疑似約定済みの場合は、キャンセルを禁止して約定確定を待つ
 			// これにより、価格の微細な変化による「キャンセル・再発注スパムループ」を防止する
-			if activeOrder.Status == market.ORDER_STATUS_FILL_EXPECTED {
+			if activeOrder.Status == ord.ORDER_STATUS_FILL_EXPECTED {
 				return nil, ""
 			}
 
 			fmt.Printf("🔄 [%s] 意図と異なる注文(%s: %s@%.1f)をキャンセル要求します (Signal: %s@%.1f, Qty: %.1f)\n",
 				s.Detail.Code, activeOrder.ID, activeOrder.Action, activeOrder.OrderPrice, signal.Action, signal.Price, signal.Quantity)
-			activeOrder.Status = market.ORDER_STATUS_CANCEL_SENT
+			activeOrder.Status = ord.ORDER_STATUS_CANCEL_SENT
 			activeOrder.CancelSentAt = time.Now()
 			return nil, activeOrder.ID
 		}
@@ -218,7 +221,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 			if o.Action == marketAction {
 				// すでに同じ方向の注文が（PENDING/WAITING/CANCEL_SENT問わず）存在する場合は、
 				// 重複発注を避けるため、次のアクションを絶対に起こさない。
-				if o.Status == market.ORDER_STATUS_CANCEL_SENT {
+				if o.Status == ord.ORDER_STATUS_CANCEL_SENT {
 					// キャンセル送信から一定時間（例：30秒）経過しても応答がない場合はゾンビとみなし、
 					// ブロックを解除して新規発注フローへの進行を許可する。
 					if !o.CancelSentAt.IsZero() && time.Since(o.CancelSentAt) > 30*time.Second {
@@ -233,16 +236,16 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 		}
 	}
 
-	orderType := market.ORDER_TYPE_MARKET
+	orderType := ord.ORDER_TYPE_MARKET
 	if signal.Price > 0 {
-		orderType = market.ORDER_TYPE_LIMIT
+		orderType = ord.ORDER_TYPE_LIMIT
 	} else if signal.OrderType != 0 {
 		orderType = signal.OrderType
 	}
 
 	// 決済注文（売り）の場合のポジション指定ロジック
-	var closePositions []market.ClosePosition
-	if marketAction == market.ACTION_SELL {
+	var closePositions []ord.ClosePosition
+	if marketAction == ord.ACTION_SELL {
 		var remainingSellQty = signal.Quantity
 		for _, p := range s.positions {
 			if remainingSellQty <= 0 {
@@ -252,7 +255,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 			if closeQty > remainingSellQty {
 				closeQty = remainingSellQty
 			}
-			closePositions = append(closePositions, market.ClosePosition{
+			closePositions = append(closePositions, ord.ClosePosition{
 				HoldID: p.ExecutionID,
 				Qty:    closeQty,
 			})
@@ -260,15 +263,15 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 		}
 	}
 
-	closeOrder := market.CLOSE_POSITION_ORDER_NONE
-	if marketAction == market.ACTION_SELL && len(closePositions) == 0 {
-		closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
+	closeOrder := ord.CLOSE_POSITION_ORDER_NONE
+	if marketAction == ord.ACTION_SELL && len(closePositions) == 0 {
+		closeOrder = ord.CLOSE_POSITION_ASC_DAY_DEC_PL
 	}
 
 	// --- 6. IFD (If-Done) 注文の組み立て ---
 	// 直前のシグナルが約定したと仮定して、次の意図を問う
 	ifDoneSignal := s.Strategy.IfDone(input.SimulateSignal(signal), signal)
-	var marketIFDAction market.Action
+	var marketIFDAction ord.Action
 	var hasIFD bool
 	if ifDoneSignal.Action != brain.ACTION_HOLD {
 		marketIFDAction, _ = ifDoneSignal.Action.ToMarketAction()
@@ -276,23 +279,23 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 	}
 
 	// Order を作成する
-	ptr := market.NewOrderPtr(market.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
-	ptr.InternalState = market.STATE_PENDING // 🌟 作成後は送信待ちとなるため PENDING に設定
+	ptr := ord.NewOrderPtr(ord.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
+	ptr.InternalState = ord.STATE_PENDING // 🌟 作成後は送信待ちとなるため PENDING に設定
 	ptr.Exchange = s.Exchange
-	ptr.SecurityType = market.SECURITY_TYPE_STOCK
-	ptr.MarginTradeType = market.TRADE_TYPE_GENERAL_DAY
-	ptr.AccountType = market.ACCOUNT_SPECIAL
+	ptr.SecurityType = ord.SECURITY_TYPE_STOCK
+	ptr.MarginTradeType = ord.TRADE_TYPE_GENERAL_DAY
+	ptr.AccountType = ord.ACCOUNT_SPECIAL
 	ptr.OrderType = orderType
 	ptr.ClosePositionOrder = closeOrder
 	ptr.ClosePositions = closePositions
-	
+
 	ptr.HasIFD = hasIFD
 	ptr.IFDAction = marketIFDAction
 	ptr.IFDPrice = ifDoneSignal.Price
 	ptr.IFDOrderType = ifDoneSignal.OrderType
 
 	ptr.CreatedAt = state.LatestTick.CurrentPriceTime // 🌟 約定レイテンシ計算のためにTick時刻に合わせる
-	
+
 	s.Orders = append(s.Orders, ptr)
 
 	return ptr, ""
@@ -320,17 +323,17 @@ func (s *Sniper) cleanupZombiesLocked() {
 
 		// 2. FILL_EXPECTED (疑似約定) のタイムアウト (20秒)
 		// 本物の約定通知が来ない場合は、板の動きを見誤ったか貫通しなかったとみなして元に戻す
-		if o.Status == market.ORDER_STATUS_FILL_EXPECTED {
+		if o.Status == ord.ORDER_STATUS_FILL_EXPECTED {
 			if !o.Synthetic.ExpectedAt.IsZero() && time.Since(o.Synthetic.ExpectedAt) > 20*time.Second {
 				fmt.Printf("⚠️ [%s] 疑似約定から20秒経過しても通知がないため、待機状態に戻します: %s\n", s.Detail.Code, o.ID)
-				o.Status = market.ORDER_STATUS_IN_PROGRESS
+				o.Status = ord.ORDER_STATUS_IN_PROGRESS
 			}
 		}
 	}
 }
 
 // FailSendingOrder は発注失敗時に呼ばれ、Ordersリストから仮注文をクリアします
-func (s *Sniper) FailSendingOrder(order *market.Order) {
+func (s *Sniper) FailSendingOrder(order *ord.Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -360,7 +363,7 @@ func (s *Sniper) ForceExit() {
 // reducePositions は、指定された数量分だけ古い建玉から順に削減し、損益を計算します
 func (s *Sniper) reducePositions(sellQty float64, sellPrice float64, sellTime time.Time) {
 	remainingToSell := sellQty
-	var newPositions []market.Position
+	var newPositions []position.Position
 	var totalTradePnL float64       // 🌟 今回の「売り約定全体」の損益を合算する変数
 	var earliestEntryTime time.Time // 🌟 保有時間の計算用
 
@@ -437,16 +440,16 @@ func (s *Sniper) CalcUnrealizedPnL(currentPrice float64) float64 {
 }
 
 // SyncOrders はインフラ層から取得した最新の注文一覧と同期し、内部状態を「事実」に合わせます
-func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, string) {
+func (s *Sniper) SyncOrders(externalOrders ord.Orders) (*ord.Order, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var newExecQty float64
-	var triggeredIFDParent *market.Order
-	var newExecs []market.Execution
+	var triggeredIFDParent *ord.Order
+	var newExecs []ord.Execution
 
 	// 新しい管理リストを作成（事実ベースで再構築）
-	var reconciledOrders []*market.Order
+	var reconciledOrders []*ord.Order
 
 	// 1. InternalState が未確定（PENDING/PREPARING）または未完了の注文をまず保持する
 	// APIの一覧に反映されるまでのタイムラグによる注文消失（および再発注スパム）を防ぐため。
@@ -466,13 +469,13 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, strin
 	}
 
 	// 2. APIから取得した注文をすべて反映・採用する
-	for _, ext := range externalOrders {
+	for _, ext := range externalOrders.Orders {
 		if ext.Symbol != s.Detail.Code {
 			continue
 		}
 
 		// 内部で管理している注文を探す
-		var matchedInternal *market.Order
+		var matchedInternal *ord.Order
 		for _, o := range s.Orders {
 			if o.ID == ext.ID {
 				matchedInternal = o
@@ -490,7 +493,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, strin
 		matchedInternal.Status = ext.Status
 		matchedInternal.CumQty = ext.CumQty
 		if matchedInternal.IsPending() {
-			matchedInternal.InternalState = market.STATE_ACTIVE // API側に存在することが確認できたらACTIVEへ遷移
+			matchedInternal.InternalState = ord.STATE_ACTIVE // API側に存在することが確認できたらACTIVEへ遷移
 		}
 
 		// 約定の反映
@@ -523,31 +526,31 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, strin
 	s.Orders = reconciledOrders
 
 	// 3. IFDの発火処理
-	var ifdPendingOrder *market.Order
+	var ifdPendingOrder *ord.Order
 	if newExecQty > 0 && triggeredIFDParent != nil && triggeredIFDParent.HasIFD {
 		fmt.Printf("⚡ [%s] IFD発火: %.2f株の約定に伴い、決済注文を発注します\n", s.Detail.Code, newExecQty)
 
-		var closePositions []market.ClosePosition
-		if triggeredIFDParent.IFDAction == market.ACTION_SELL {
+		var closePositions []ord.ClosePosition
+		if triggeredIFDParent.IFDAction == ord.ACTION_SELL {
 			for _, exec := range newExecs {
-				closePositions = append(closePositions, market.ClosePosition{
+				closePositions = append(closePositions, ord.ClosePosition{
 					HoldID: exec.ID,
 					Qty:    exec.Qty,
 				})
 			}
 		}
 
-		closeOrder := market.CLOSE_POSITION_ORDER_NONE
-		if triggeredIFDParent.IFDAction == market.ACTION_SELL && len(closePositions) == 0 {
-			closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
+		closeOrder := ord.CLOSE_POSITION_ORDER_NONE
+		if triggeredIFDParent.IFDAction == ord.ACTION_SELL && len(closePositions) == 0 {
+			closeOrder = ord.CLOSE_POSITION_ASC_DAY_DEC_PL
 		}
 
-		ifdPendingOrder = market.NewOrderPtr(market.GenerateLocalID(), s.Detail.Code, triggeredIFDParent.IFDAction, triggeredIFDParent.IFDPrice, newExecQty)
-		ifdPendingOrder.InternalState = market.STATE_PENDING
+		ifdPendingOrder = ord.NewOrderPtr(ord.GenerateLocalID(), s.Detail.Code, triggeredIFDParent.IFDAction, triggeredIFDParent.IFDPrice, newExecQty)
+		ifdPendingOrder.InternalState = ord.STATE_PENDING
 		ifdPendingOrder.Exchange = s.Exchange
-		ifdPendingOrder.SecurityType = market.SECURITY_TYPE_STOCK
-		ifdPendingOrder.MarginTradeType = market.TRADE_TYPE_GENERAL_DAY
-		ifdPendingOrder.AccountType = market.ACCOUNT_SPECIAL
+		ifdPendingOrder.SecurityType = ord.SECURITY_TYPE_STOCK
+		ifdPendingOrder.MarginTradeType = ord.TRADE_TYPE_GENERAL_DAY
+		ifdPendingOrder.AccountType = ord.ACCOUNT_SPECIAL
 		ifdPendingOrder.OrderType = triggeredIFDParent.IFDOrderType
 		ifdPendingOrder.ClosePositionOrder = closeOrder
 		ifdPendingOrder.ClosePositions = closePositions
@@ -559,7 +562,7 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, strin
 	return ifdPendingOrder, ""
 }
 
-func (s *Sniper) applyExecution(exec market.Execution, action market.Action, orderCreatedAt time.Time) {
+func (s *Sniper) applyExecution(exec ord.Execution, action ord.Action, orderCreatedAt time.Time) {
 	// 🌟 重複チェック（冪等性の担保）
 	if s.processedExecutions[exec.ID] {
 		return
@@ -567,13 +570,13 @@ func (s *Sniper) applyExecution(exec market.Execution, action market.Action, ord
 	s.processedExecutions[exec.ID] = true
 
 	switch action {
-	case market.ACTION_BUY:
-		s.positions = append(s.positions, market.Position{
+	case ord.ACTION_BUY:
+		s.positions = append(s.positions, position.Position{
 			ExecutionID: exec.ID,
 			Symbol:      s.Detail.Code,
 			LeavesQty:   exec.Qty,
 			Price:       exec.Price,
-			Meta:        market.PositionMeta{EntryTime: exec.ExecutionTime}, // 🌟 メタデータとして記録
+			Meta:        position.PositionMeta{EntryTime: exec.ExecutionTime}, // 🌟 メタデータとして記録
 		})
 		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Detail.Code, exec.Price, exec.Qty)
 
@@ -588,7 +591,7 @@ func (s *Sniper) applyExecution(exec market.Execution, action market.Action, ord
 			slog.Float64("price", exec.Price),
 			slog.Int64("queue_time_ms", queueTimeMs),
 		)
-	case market.ACTION_SELL:
+	case ord.ACTION_SELL:
 		s.reducePositions(exec.Qty, exec.Price, exec.ExecutionTime)
 		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Detail.Code, exec.Qty)
 	}

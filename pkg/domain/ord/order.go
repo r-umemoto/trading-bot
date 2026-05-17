@@ -1,4 +1,4 @@
-package market
+package ord
 
 import (
 	"fmt"
@@ -50,7 +50,7 @@ type Order struct {
 	OrderPrice float64 // 発注時の指値（成行の場合は0など）
 	OrderQty   float64 // 発注した総数量
 
-	CreatedAt    time.Time // 🌟 発注（オブジェクト作成）時刻
+	CreatedAt  time.Time   // 🌟 発注（オブジェクト作成）時刻
 	Executions []Execution // 🌟 約定のコレクション
 
 	Status OrderStatus // 注文の状態
@@ -88,8 +88,8 @@ type SyntheticFillState struct {
 
 func NewOrder(id string, symbol string, action Action, price float64, qty float64) Order {
 	return Order{
-		ID:         id,
-		Symbol:     symbol,
+		ID:            id,
+		Symbol:        symbol,
 		Action:        action,
 		OrderPrice:    price,
 		OrderQty:      qty,
@@ -101,8 +101,8 @@ func NewOrder(id string, symbol string, action Action, price float64, qty float6
 
 func NewOrderPtr(id string, symbol string, action Action, price float64, qty float64) *Order {
 	return &Order{
-		ID:         id,
-		Symbol:     symbol,
+		ID:            id,
+		Symbol:        symbol,
 		Action:        action,
 		OrderPrice:    price,
 		OrderQty:      qty,
@@ -169,4 +169,9 @@ const LOCAL_ID_PREFIX = "local-"
 // GenerateLocalID はAPIからのレスポンス待ちの間に使用するローカル専用の仮IDを生成します
 func GenerateLocalID() string {
 	return fmt.Sprintf("%s%d", LOCAL_ID_PREFIX, time.Now().UnixNano())
+}
+
+// Orders は最新の注文状態の一覧を通知します
+type Orders struct {
+	Orders []Order
 }

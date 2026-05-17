@@ -3,7 +3,7 @@ package brain
 import (
 	"fmt"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
 )
 
 type Action string
@@ -19,16 +19,16 @@ type Signal struct {
 	Action    Action
 	Quantity  float64
 	Price     float64
-	OrderType market.OrderType
+	OrderType ord.OrderType
 	Reason    string // 🌟 命令の理由 (分析用)
 }
 
-func (a Action) ToMarketAction() (market.Action, error) {
+func (a Action) ToMarketAction() (ord.Action, error) {
 	switch a {
 	case ACTION_BUY:
-		return market.ACTION_BUY, nil
+		return ord.ACTION_BUY, nil
 	case ACTION_SELL:
-		return market.ACTION_SELL, nil
+		return ord.ACTION_SELL, nil
 	}
 	return "", fmt.Errorf("変換できないアクションタイプ")
 }

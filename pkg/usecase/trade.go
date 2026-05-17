@@ -14,14 +14,16 @@ import (
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 type OrderJob struct {
 	Symbol      string
 	Sniper      *sniper.Sniper
 	CancelID    string
-	OrderPtr    *market.Order
+	OrderPtr    *ord.Order
 	Priority    int
 	UpdateCount int // 🌟 上書き（待機）回数。これが多いほど優先度が上がる
 	RequestedAt time.Time
@@ -31,22 +33,22 @@ type OrderJob struct {
 type TradeUseCase struct {
 	snipers       []*sniper.Sniper
 	gateway       market.MarketGateway
-	dataPool      market.DataPool
-	tickChannels  map[string]chan market.Tick         // 銘柄ごとのTick処理チャネル
-	orderChannels map[string]chan market.OrdersReport // 銘柄ごとの注文レポートチャネル
+	dataPool      tick.DataPool
+	tickChannels  map[string]chan tick.Tick  // 銘柄ごとのTick処理チャネル
+	orderChannels map[string]chan ord.Orders // 銘柄ごとの注文レポートチャネル
 
 	// 🌟 発注ディスパッチャ用の状態
 	pendingJobs map[string]*OrderJob
 	jobMu       sync.Mutex
 }
 
-func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dataPool market.DataPool) *TradeUseCase {
+func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dataPool tick.DataPool) *TradeUseCase {
 	uc := &TradeUseCase{
 		snipers:       snipers,
 		gateway:       gateway,
 		dataPool:      dataPool,
-		tickChannels:  make(map[string]chan market.Tick),
-		orderChannels: make(map[string]chan market.OrdersReport),
+		tickChannels:  make(map[string]chan tick.Tick),
+		orderChannels: make(map[string]chan ord.Orders),
 		pendingJobs:   make(map[string]*OrderJob),
 	}
 
@@ -54,8 +56,8 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 	for _, s := range snipers {
 		if _, exists := uc.tickChannels[s.Detail.Code]; !exists {
 			// バッファサイズを拡張 (100 -> 1000) してスパイク耐性を高める
-			uc.tickChannels[s.Detail.Code] = make(chan market.Tick, 1000)
-			uc.orderChannels[s.Detail.Code] = make(chan market.OrdersReport, 1000)
+			uc.tickChannels[s.Detail.Code] = make(chan tick.Tick, 1000)
+			uc.orderChannels[s.Detail.Code] = make(chan ord.Orders, 1000)
 		}
 	}
 
@@ -75,7 +77,7 @@ func (u *TradeUseCase) StartWorkers(ctx context.Context) {
 }
 
 // worker は特定の銘柄のTickや約定通知を専用に処理するGoroutineです
-func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan market.Tick, orderCh <-chan market.OrdersReport) {
+func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan tick.Tick, orderCh <-chan ord.Orders) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -90,7 +92,7 @@ func (u *TradeUseCase) worker(ctx context.Context, symbol string, tickCh <-chan 
 	}
 }
 
-func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tick, symbol string) {
+func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick tick.Tick, symbol string) {
 	u.dataPool.PushTick(tick)
 
 	for _, s := range u.snipers {
@@ -105,7 +107,7 @@ func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick market.Tic
 }
 
 // HandleTick は市場のTickデータを受け取り、該当銘柄のチャネルへルーティングします
-func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
+func (u *TradeUseCase) HandleTick(ctx context.Context, tick tick.Tick) {
 	if ch, ok := u.tickChannels[tick.Symbol]; ok {
 		select {
 		case ch <- tick:
@@ -119,7 +121,7 @@ func (u *TradeUseCase) HandleTick(ctx context.Context, tick market.Tick) {
 }
 
 // HandleExecution は、インフラ層から流れてきた注文レポートを該当銘柄のチャネルへルーティングします
-func (u *TradeUseCase) HandleExecution(report market.OrdersReport) {
+func (u *TradeUseCase) HandleExecution(report ord.Orders) {
 	// 全銘柄分を個別にルーティングするのは効率が悪いが、現状の構造に合わせる
 	// 本来は OrdersReport が銘柄ごとに分割されているか、ここで分割して投げる
 	for symbol, ch := range u.orderChannels {
@@ -129,17 +131,17 @@ func (u *TradeUseCase) HandleExecution(report market.OrdersReport) {
 			// 🚨 約定通知は絶対に破棄してはいけない（状態がズレるため）。
 			// ただし、メインスレッドをブロックすると全銘柄に波及するため、非同期で押し込む。
 			fmt.Printf("⚠️ 🚨 [%s] OrdersReportチャネルがフルです。非同期でキューイングを試みます。\n", symbol)
-			go func(c chan<- market.OrdersReport, r market.OrdersReport) {
+			go func(c chan<- ord.Orders, r ord.Orders) {
 				c <- r // バックグラウンドでブロックして待つ
 			}(ch, report)
 		}
 	}
 }
 
-func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report market.OrdersReport, symbol string) {
+func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report ord.Orders, symbol string) {
 	for _, s := range u.snipers {
 		if s.Detail.Code == symbol {
-			orderPtr, cancelOrderID := s.SyncOrders(report.Orders)
+			orderPtr, cancelOrderID := s.SyncOrders(report)
 
 			// 2. 🌟 直接発注せず、ディスパッチャに委ねる
 			u.submitJob(s, cancelOrderID, orderPtr)
@@ -148,7 +150,7 @@ func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report 
 }
 
 // submitJob は新しい発注・キャンセル要求をキューに登録（または既存分を更新）します
-func (u *TradeUseCase) submitJob(s *sniper.Sniper, cancelID string, orderPtr *market.Order) {
+func (u *TradeUseCase) submitJob(s *sniper.Sniper, cancelID string, orderPtr *ord.Order) {
 	if orderPtr == nil && cancelID == "" {
 		// 意図が HOLD の場合、もし待機中のジョブがあれば削除する（最新の意図を優先）
 		u.jobMu.Lock()
@@ -160,7 +162,7 @@ func (u *TradeUseCase) submitJob(s *sniper.Sniper, cancelID string, orderPtr *ma
 	priority := 1 // デフォルトは低優先（新規エントリー：ENTRY）
 	if cancelID != "" {
 		priority = 10 // キャンセルは中優先（CANCEL）
-	} else if orderPtr != nil && (orderPtr.ClosePositionOrder != market.CLOSE_POSITION_ORDER_NONE || len(orderPtr.ClosePositions) > 0) {
+	} else if orderPtr != nil && (orderPtr.ClosePositionOrder != ord.CLOSE_POSITION_ORDER_NONE || len(orderPtr.ClosePositions) > 0) {
 		priority = 20 // 決済注文（損切り・利確：EXIT）は最優先
 	}
 
@@ -267,7 +269,7 @@ func (u *TradeUseCase) GetSnipers() []*sniper.Sniper {
 	return u.snipers
 }
 
-func (u *TradeUseCase) GetDataPool() market.DataPool {
+func (u *TradeUseCase) GetDataPool() tick.DataPool {
 	return u.dataPool
 }
 

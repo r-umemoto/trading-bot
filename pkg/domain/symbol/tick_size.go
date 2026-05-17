@@ -1,4 +1,4 @@
-package market
+package symbol
 
 import "math"
 
