@@ -291,27 +291,9 @@ func (s *Sniper) Tick() Bullet {
 
 	// 決済注文（売り）の場合のポジション指定ロジック
 	var closePositions []order.ClosePosition
-	if marketAction == order.ACTION_SELL {
-		var remainingSellQty = signal.Quantity
-		for _, p := range s.positions {
-			if remainingSellQty <= 0 {
-				break
-			}
-			closeQty := p.LeavesQty
-			if closeQty > remainingSellQty {
-				closeQty = remainingSellQty
-			}
-			closePositions = append(closePositions, order.ClosePosition{
-				HoldID: p.ExecutionID,
-				Qty:    closeQty,
-			})
-			remainingSellQty -= closeQty
-		}
-	}
-
 	closeOrder := order.CLOSE_POSITION_ORDER_NONE
-	if marketAction == order.ACTION_SELL && len(closePositions) == 0 {
-		closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
+	if marketAction == order.ACTION_SELL {
+		closePositions, closeOrder = s.matchPositionsToClose(signal.Quantity)
 	}
 
 	// --- 6. IFD (If-Done) 注文の組み立て ---
@@ -324,18 +306,8 @@ func (s *Sniper) Tick() Bullet {
 		hasIFD = true
 	}
 
-	// Order を作成する
-	ptr := order.NewOrder(order.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
-	ptr.InternalState = order.STATE_PENDING // 🌟 作成後は送信待ちとなるため PENDING に設定
-	orderReq := order.NewOrderRequest(
-		s.Exchange,
-		order.SECURITY_TYPE_STOCK,
-		order.TRADE_TYPE_GENERAL_DAY,
-		order.ACCOUNT_SPECIAL,
-		closeOrder,
-		closePositions,
-		orderType,
-	)
+	// Order/Request を作成する
+	ptr, orderReq := s.buildOrderRequest(marketAction, signal.Price, signal.Quantity, orderType, closePositions, closeOrder)
 
 	ptr.HasIFD = hasIFD
 	ptr.IFDAction = marketIFDAction
@@ -349,11 +321,60 @@ func (s *Sniper) Tick() Bullet {
 	return Bullet{Order: ptr, Request: &orderReq}
 }
 
-// ConfirmOrder は廃止されました (Gateway がポインタを直接更新するため不要)
+// matchPositionsToClose は指定した数量分だけ、保有している建玉を FIFO（先入先出）で返済用に対象指定します
+func (s *Sniper) matchPositionsToClose(qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
+	var closePositions []order.ClosePosition
+	remainingSellQty := qty
+	for _, p := range s.positions {
+		if remainingSellQty <= 0 {
+			break
+		}
+		closeQty := p.LeavesQty
+		if closeQty > remainingSellQty {
+			closeQty = remainingSellQty
+		}
+		closePositions = append(closePositions, order.ClosePosition{
+			HoldID: p.ExecutionID,
+			Qty:    closeQty,
+		})
+		remainingSellQty -= closeQty
+	}
+
+	closeOrder := order.CLOSE_POSITION_ORDER_NONE
+	if len(closePositions) == 0 {
+		closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
+	}
+	return closePositions, closeOrder
+}
+
+// buildOrderRequest は注文情報のエンティティ生成とインフラ用リクエストパラメータ作成をカプセル化して行います
+func (s *Sniper) buildOrderRequest(action order.Action, price float64, qty float64, orderType order.OrderType, closePositions []order.ClosePosition, closeOrder order.ClosePositionOrder) (*order.Order, order.OrderRequest) {
+	ptr := order.NewOrder(order.GenerateLocalID(), s.Detail.Code, action, price, qty)
+	ptr.InternalState = order.STATE_PENDING // 生成時は API 送信待ち (PENDING)
+
+	reqType := order.ORDER_TYPE_MARKET
+	if price > 0 {
+		reqType = order.ORDER_TYPE_LIMIT
+	} else if orderType != 0 {
+		reqType = orderType
+	}
+
+	orderReq := order.NewOrderRequest(
+		s.Exchange,
+		order.SECURITY_TYPE_STOCK,
+		order.TRADE_TYPE_GENERAL_DAY,
+		order.ACCOUNT_SPECIAL,
+		closeOrder,
+		closePositions,
+		reqType,
+	)
+
+	return ptr, orderReq
+}
 
 func (s *Sniper) cleanupZombiesLocked() {
-	for i := 0; i < len(s.Orders); i++ {
-		o := s.Orders[i]
+	active := make([]*order.Order, 0, len(s.Orders))
+	for _, o := range s.Orders {
 		if o.IsCompleted() {
 			continue
 		}
@@ -363,8 +384,6 @@ func (s *Sniper) cleanupZombiesLocked() {
 		if o.IsPending() {
 			if time.Since(o.CreatedAt) > 30*time.Second {
 				fmt.Printf("⚠️ [%s] PENDING注文がタイムアウト(30s)したため削除します: %s\n", s.Detail.Code, o.ID)
-				s.Orders = append(s.Orders[:i], s.Orders[i+1:]...)
-				i--
 				continue
 			}
 		}
@@ -377,7 +396,10 @@ func (s *Sniper) cleanupZombiesLocked() {
 				o.Status = order.ORDER_STATUS_IN_PROGRESS
 			}
 		}
+
+		active = append(active, o)
 	}
+	s.Orders = active
 }
 
 // FailSendingOrder は発注失敗時に呼ばれ、Ordersリストから仮注文をクリアします
@@ -589,7 +611,6 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 	s.Orders = reconciledOrders
 
 	// 3. IFDの発火処理
-	var ifdPendingOrder *order.Order
 	if newExecQty > 0 && triggeredIFDParent != nil && triggeredIFDParent.HasIFD {
 		fmt.Printf("⚡ [%s] IFD発火: %.2f株の約定に伴い、決済注文を発注します\n", s.Detail.Code, newExecQty)
 
@@ -608,18 +629,16 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 			closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
 		}
 
-		ifdPendingOrder = order.NewOrder(order.GenerateLocalID(), s.Detail.Code, triggeredIFDParent.IFDAction, triggeredIFDParent.IFDPrice, newExecQty)
-		ifdPendingOrder.InternalState = order.STATE_PENDING
-		orderReq := order.NewOrderRequest(
-			s.Exchange,
-			order.SECURITY_TYPE_STOCK,
-			order.TRADE_TYPE_GENERAL_DAY,
-			order.ACCOUNT_SPECIAL,
-			closeOrder,
-			closePositions,
+		ifdPendingOrder, orderReq := s.buildOrderRequest(
+			triggeredIFDParent.IFDAction,
+			triggeredIFDParent.IFDPrice,
+			newExecQty,
 			triggeredIFDParent.IFDOrderType,
+			closePositions,
+			closeOrder,
 		)
 		ifdPendingOrder.HasIFD = false
+		ifdPendingOrder.CreatedAt = time.Now()
 
 		s.Orders = append(s.Orders, ifdPendingOrder)
 		return Bullet{Order: ifdPendingOrder, Request: &orderReq}
