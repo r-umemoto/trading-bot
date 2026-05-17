@@ -50,7 +50,7 @@ func (i StrategyInput) SimulateSignal(sig brain.Signal) StrategyInput {
 
 	marketAction, _ := sig.Action.ToMarketAction()
 	// 疑似注文を作成 (ステータスを FILL_EXPECTED にして約定済みに見せかける)
-	simOrder := order.NewOrderPtr("sim-id", i.LatestTick.Symbol, marketAction, sig.Price, sig.Quantity)
+	simOrder := order.NewOrder("sim-id", i.LatestTick.Symbol, marketAction, sig.Price, sig.Quantity)
 	simOrder.Status = order.ORDER_STATUS_FILL_EXPECTED
 
 	newOrders := make(StrategyOrders, len(i.Orders)+1)

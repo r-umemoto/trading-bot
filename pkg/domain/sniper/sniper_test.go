@@ -26,7 +26,7 @@ func TestSniper_SyncOrders(t *testing.T) {
 
 	// 1. 注文を発注した直後の状態（PENDING ID）
 	pendingID := order.GenerateLocalID()
-	internalOrder := order.NewOrderPtr(pendingID, "9434", order.ACTION_BUY, 2000, 100)
+	internalOrder := order.NewOrder(pendingID, "9434", order.ACTION_BUY, 2000, 100)
 	s.Orders = append(s.Orders, internalOrder)
 
 	// 2. 取引所から正式なIDが割り当てられたことを反映する (Gatewayが行う処理のモック)
@@ -79,7 +79,7 @@ func TestSniper_SyncOrders_Executions(t *testing.T) {
 	policy := &strategy.NoopPolicy{}
 	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
 	realID := "order-456"
-	internalOrder := order.NewOrderPtr(realID, "9434", order.ACTION_BUY, 2000, 100)
+	internalOrder := order.NewOrder(realID, "9434", order.ACTION_BUY, 2000, 100)
 	s.Orders = append(s.Orders, internalOrder)
 
 	// 約定が発生した報告が届く

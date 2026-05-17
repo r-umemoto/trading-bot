@@ -296,7 +296,7 @@ func (s *Sniper) Tick(dataPool tick.DataPool) Bullet {
 	}
 
 	// Order を作成する
-	ptr := order.NewOrderPtr(order.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
+	ptr := order.NewOrder(order.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
 	ptr.InternalState = order.STATE_PENDING // 🌟 作成後は送信待ちとなるため PENDING に設定
 	orderReq := order.NewOrderRequest(
 		s.Exchange,
@@ -564,7 +564,7 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 			closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
 		}
 
-		ifdPendingOrder = order.NewOrderPtr(order.GenerateLocalID(), s.Detail.Code, triggeredIFDParent.IFDAction, triggeredIFDParent.IFDPrice, newExecQty)
+		ifdPendingOrder = order.NewOrder(order.GenerateLocalID(), s.Detail.Code, triggeredIFDParent.IFDAction, triggeredIFDParent.IFDPrice, newExecQty)
 		ifdPendingOrder.InternalState = order.STATE_PENDING
 		orderReq := order.NewOrderRequest(
 			s.Exchange,

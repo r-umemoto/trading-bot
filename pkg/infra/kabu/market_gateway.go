@@ -247,7 +247,7 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 				},
 			)
 		}
-		domainOrders = append(domainOrders, o)
+		domainOrders = append(domainOrders, *o)
 	}
 
 	return order.Orders{Orders: domainOrders}, nil

@@ -60,7 +60,7 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 				action = order.ACTION_BUY
 			}
 
-			ord := order.NewOrderPtr(order.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
+			ord := order.NewOrder(order.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
 			req := order.NewOrderRequest(
 				pos.Exchange,
 				order.SECURITY_TYPE_STOCK,
@@ -148,7 +148,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 
 					fmt.Printf("🔥 成行で強制決済を試みます: %s (%s)\n", pos.Symbol, action)
 
-					ord := order.NewOrderPtr(order.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
+					ord := order.NewOrder(order.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
 					req := order.NewOrderRequest(
 						pos.Exchange,
 						order.SECURITY_TYPE_STOCK,

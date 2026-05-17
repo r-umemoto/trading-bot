@@ -87,20 +87,7 @@ type SyntheticFillState struct {
 	LastVolumeUpdate float64   // 前回のTick時の総出来高
 }
 
-func NewOrder(id string, symbol string, action Action, price float64, qty float64) Order {
-	return Order{
-		ID:            id,
-		Symbol:        symbol,
-		Action:        action,
-		OrderPrice:    price,
-		OrderQty:      qty,
-		Status:        ORDER_STATUS_WAITING,
-		InternalState: STATE_PREPARING,
-		CreatedAt:     time.Now(),
-	}
-}
-
-func NewOrderPtr(id string, symbol string, action Action, price float64, qty float64) *Order {
+func NewOrder(id string, symbol string, action Action, price float64, qty float64) *Order {
 	return &Order{
 		ID:            id,
 		Symbol:        symbol,
