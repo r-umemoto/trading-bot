@@ -57,19 +57,22 @@ func (m *MarketGateway) Start(ctx context.Context) (<-chan tick.Tick, <-chan ord
 }
 
 // SendOrder は market.MarketGateway (Orderer) の実装です
-func (m *MarketGateway) SendOrder(ctx context.Context, ord order.Order) (order.Order, error) {
+func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (order.Order, error) {
+	ord := input.Order
+	req := input.Request
+
 	side := api.SIDE_SELL
 	if ord.Action == order.ACTION_BUY {
 		side = api.SIDE_BUY
 	}
 
 	cashMargin := 2 // デフォルトは「新規」
-	if ord.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(ord.ClosePositions) > 0 {
+	if req.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(req.ClosePositions) > 0 {
 		cashMargin = 3 // 返済指示があれば「返済」
 	}
 
 	AccountType := 0
-	switch ord.AccountType {
+	switch req.AccountType {
 	case order.ACCOUNT_SPECIAL:
 		AccountType = 4
 	}
@@ -78,7 +81,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, ord order.Order) (order.O
 	}
 
 	securityType := 0
-	switch ord.SecurityType {
+	switch req.SecurityType {
 	case order.SECURITY_TYPE_STOCK:
 		securityType = 1
 	}
@@ -87,7 +90,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, ord order.Order) (order.O
 	}
 
 	tradeType := 0
-	switch ord.MarginTradeType {
+	switch req.MarginTradeType {
 	case order.TRADE_TYPE_SYSTEM:
 		tradeType = 1
 	case order.TRADE_TYPE_GENERAL:
@@ -96,11 +99,11 @@ func (m *MarketGateway) SendOrder(ctx context.Context, ord order.Order) (order.O
 		tradeType = 3
 	}
 	if tradeType == 0 {
-		return ord, fmt.Errorf("取引種別が不正です (MarginTradeType: %d)", ord.MarginTradeType)
+		return ord, fmt.Errorf("取引種別が不正です (MarginTradeType: %d)", req.MarginTradeType)
 	}
 
 	orderType := 0
-	switch ord.OrderType {
+	switch req.OrderType {
 	case order.ORDER_TYPE_MARKET:
 		orderType = 10
 	case order.ORDER_TYPE_LIMIT:
@@ -124,7 +127,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, ord order.Order) (order.O
 
 	// APIへリクエスト
 	var closePositions []api.ClosePosition
-	for _, cp := range ord.ClosePositions {
+	for _, cp := range req.ClosePositions {
 		closePositions = append(closePositions, api.ClosePosition{
 			HoldID: cp.HoldID,
 			Qty:    cp.Qty,
@@ -132,14 +135,14 @@ func (m *MarketGateway) SendOrder(ctx context.Context, ord order.Order) (order.O
 	}
 
 	var closePositionOrder *int32
-	if len(closePositions) == 0 && ord.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE {
-		val := int32(ord.ClosePositionOrder)
+	if len(closePositions) == 0 && req.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE {
+		val := int32(req.ClosePositionOrder)
 		closePositionOrder = &val
 	}
 
 	kabReq := api.OrderRequest{
 		Symbol:             ord.Symbol,
-		Exchange:           m.toKabuExchageType(ord.Exchange),
+		Exchange:           m.toKabuExchageType(req.Exchange),
 		SecurityType:       securityType,
 		Side:               string(side),
 		CashMargin:         cashMargin,

@@ -42,6 +42,16 @@ type Execution struct {
 	ExecutionTime time.Time // 🌟 約定日時
 }
 
+type OrderRequest struct {
+	Exchange           ExchangeMarket
+	SecurityType       SecurityType
+	MarginTradeType    MarginTradeType
+	AccountType        AccountType
+	ClosePositionOrder ClosePositionOrder
+	ClosePositions     []ClosePosition // 指定返済用
+	OrderType          OrderType
+}
+
 // Order は注文全体を管理する集約ルート（エンティティ）です
 type Order struct {
 	ID         string
@@ -62,15 +72,6 @@ type Order struct {
 	IFDOrderType OrderType // IFD注文の執行条件
 
 	CancelSentAt time.Time // 🌟 キャンセル送信時刻（ゾンビ防止用）
-
-	// 新たに追加する発注パラメータ
-	Exchange           ExchangeMarket
-	SecurityType       SecurityType
-	MarginTradeType    MarginTradeType
-	AccountType        AccountType
-	ClosePositionOrder ClosePositionOrder
-	ClosePositions     []ClosePosition // 指定返済用
-	OrderType          OrderType
 
 	// 内部ステータスと疑似約定のトラッキング
 	InternalState InternalState
@@ -109,6 +110,26 @@ func NewOrderPtr(id string, symbol string, action Action, price float64, qty flo
 		Status:        ORDER_STATUS_WAITING,
 		InternalState: STATE_PREPARING,
 		CreatedAt:     time.Now(),
+	}
+}
+
+func NewOrderRequest(
+	exchange ExchangeMarket,
+	securityType SecurityType,
+	marginTradeType MarginTradeType,
+	accountType AccountType,
+	closePositionOrder ClosePositionOrder,
+	closePositions []ClosePosition,
+	orderType OrderType,
+) OrderRequest {
+	return OrderRequest{
+		Exchange:           exchange,
+		SecurityType:       securityType,
+		MarginTradeType:    marginTradeType,
+		AccountType:        accountType,
+		ClosePositionOrder: closePositionOrder,
+		ClosePositions:     closePositions,
+		OrderType:          orderType,
 	}
 }
 
@@ -174,4 +195,10 @@ func GenerateLocalID() string {
 // Orders は最新の注文状態の一覧を通知します
 type Orders struct {
 	Orders []Order
+}
+
+// SendOrderInput は新規発注に必要なパラメータを一括してまとめた構造体です
+type SendOrderInput struct {
+	Order   Order
+	Request OrderRequest
 }

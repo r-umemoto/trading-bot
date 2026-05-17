@@ -107,14 +107,14 @@ func RunBacktest() error {
 			report := <-orderReportCh
 			for _, s := range snipers {
 				// 🌟 修正: SyncOrders から戻る IFD 発注要求を処理する
-				ifdOrderPtr, _ := s.SyncOrders(report)
-				if ifdOrderPtr != nil {
-					fmt.Printf("🚀 [%s] SyncOrders経由でIFD決済注文を送信します: %s %.2f株\n", s.Detail.Code, ifdOrderPtr.Action, ifdOrderPtr.OrderQty)
-					updatedOrder, err := gateway.SendOrder(context.Background(), *ifdOrderPtr)
+				bullet := s.SyncOrders(report)
+				if bullet.HasOrder() {
+					fmt.Printf("🚀 [%s] SyncOrders経由でIFD決済注文を送信します: %s %.2f株\n", s.Detail.Code, bullet.Order.Action, bullet.Order.OrderQty)
+					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 					if err != nil {
-						s.FailSendingOrder(ifdOrderPtr)
+						s.FailSendingOrder(bullet.Order)
 					} else {
-						*ifdOrderPtr = updatedOrder
+						*bullet.Order = updatedOrder
 					}
 				}
 			}
@@ -125,20 +125,20 @@ func RunBacktest() error {
 		dataPool.PushTick(t)
 		for _, s := range snipers {
 			if s.Detail.Code == t.Symbol {
-				orderPtr, cancelOrderID := s.Tick(dataPool)
+				bullet := s.Tick(dataPool)
 
-				if cancelOrderID != "" {
-					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", cancelOrderID)
-					_ = gateway.CancelOrder(context.Background(), cancelOrderID)
+				if bullet.HasCancel() {
+					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", bullet.CancelOrderID)
+					_ = gateway.CancelOrder(context.Background(), bullet.CancelOrderID)
 					continue
 				}
 
-				if orderPtr != nil {
-					updatedOrder, err := gateway.SendOrder(context.Background(), *orderPtr)
+				if bullet.HasOrder() {
+					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 					if err != nil {
-						s.FailSendingOrder(orderPtr)
+						s.FailSendingOrder(bullet.Order)
 					} else {
-						*orderPtr = updatedOrder
+						*bullet.Order = updatedOrder
 					}
 				}
 			}
@@ -160,13 +160,13 @@ func RunBacktest() error {
 				for len(orderReportCh) > 0 {
 					report := <-orderReportCh
 					for _, s := range snipers {
-						ifdOrderPtr, _ := s.SyncOrders(report)
-						if ifdOrderPtr != nil {
-							updatedOrder, err := gateway.SendOrder(context.Background(), *ifdOrderPtr)
+						bullet := s.SyncOrders(report)
+						if bullet.HasOrder() {
+							updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 							if err != nil {
-								s.FailSendingOrder(ifdOrderPtr)
+								s.FailSendingOrder(bullet.Order)
 							} else {
-								*ifdOrderPtr = updatedOrder
+								*bullet.Order = updatedOrder
 							}
 						}
 					}

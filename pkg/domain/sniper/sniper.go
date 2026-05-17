@@ -26,6 +26,23 @@ type KillSwitchable interface {
 	Activate() brain.Signal
 }
 
+// Bullet はスナイパーのアクションの実体（発射される弾丸）をカプセル化したものです
+type Bullet struct {
+	Order         *order.Order
+	Request       *order.OrderRequest
+	CancelOrderID string
+}
+
+// HasOrder は新規発注のアクションがあるかどうかを判定します
+func (b Bullet) HasOrder() bool {
+	return b.Order != nil && b.Request != nil
+}
+
+// HasCancel はキャンセルアクションがあるかどうかを判定します
+func (b Bullet) HasCancel() bool {
+	return b.CancelOrderID != ""
+}
+
 type Performance struct {
 	Trades        int
 	Wins          int
@@ -78,7 +95,7 @@ func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.Executio
 }
 
 // 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick(dataPool tick.DataPool) (*order.Order, string) {
+func (s *Sniper) Tick(dataPool tick.DataPool) Bullet {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
@@ -91,7 +108,7 @@ func (s *Sniper) Tick(dataPool tick.DataPool) (*order.Order, string) {
 
 	// すでにキルスイッチが作動（撤収中）なら、価格更新はすべて無視！
 	if s.isExiting {
-		return nil, ""
+		return Bullet{}
 	}
 
 	// 1. 管理対象の注文を特定する（アクションに合わせた注文を抽出）
@@ -169,13 +186,13 @@ func (s *Sniper) Tick(dataPool tick.DataPool) (*order.Order, string) {
 	if activeOrder != nil {
 		// IDがまだ確定していない（PENDING）場合は、次のアクションを起こさず待機
 		if activeOrder.IsPending() {
-			return nil, ""
+			return Bullet{}
 		}
 
 		// すでにキャンセル送信済みの場合は、その確定を待つ
 		if activeOrder.Status == order.ORDER_STATUS_CANCEL_SENT {
 			// ここに来るということは、上記のループで skip されなかった場合（二重キャンセル防止など）
-			return nil, ""
+			return Bullet{}
 		}
 
 		// 現在の注文が戦略の意図（シグナル）と一致しているかチェック
@@ -189,27 +206,27 @@ func (s *Sniper) Tick(dataPool tick.DataPool) (*order.Order, string) {
 			// 【重要】疑似約定済みの場合は、キャンセルを禁止して約定確定を待つ
 			// これにより、価格の微細な変化による「キャンセル・再発注スパムループ」を防止する
 			if activeOrder.Status == order.ORDER_STATUS_FILL_EXPECTED {
-				return nil, ""
+				return Bullet{}
 			}
 
 			fmt.Printf("🔄 [%s] 意図と異なる注文(%s: %s@%.1f)をキャンセル要求します (Signal: %s@%.1f, Qty: %.1f)\n",
 				s.Detail.Code, activeOrder.ID, activeOrder.Action, activeOrder.OrderPrice, signal.Action, signal.Price, signal.Quantity)
 			activeOrder.Status = order.ORDER_STATUS_CANCEL_SENT
 			activeOrder.CancelSentAt = time.Now()
-			return nil, activeOrder.ID
+			return Bullet{CancelOrderID: activeOrder.ID}
 		}
 
 		// 一致している場合は維持
-		return nil, ""
+		return Bullet{}
 	}
 
 	if signal.Action == brain.ACTION_HOLD {
-		return nil, ""
+		return Bullet{}
 	}
 
 	marketAction, err := signal.Action.ToMarketAction()
 	if err != nil {
-		return nil, ""
+		return Bullet{}
 	}
 
 	// --- 5. 新規発注フェーズ ---
@@ -229,9 +246,9 @@ func (s *Sniper) Tick(dataPool tick.DataPool) (*order.Order, string) {
 						continue
 					}
 					// キャンセルがAPI側で確定するのを待つ
-					return nil, ""
+					return Bullet{}
 				}
-				return nil, ""
+				return Bullet{}
 			}
 		}
 	}
@@ -281,13 +298,15 @@ func (s *Sniper) Tick(dataPool tick.DataPool) (*order.Order, string) {
 	// Order を作成する
 	ptr := order.NewOrderPtr(order.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
 	ptr.InternalState = order.STATE_PENDING // 🌟 作成後は送信待ちとなるため PENDING に設定
-	ptr.Exchange = s.Exchange
-	ptr.SecurityType = order.SECURITY_TYPE_STOCK
-	ptr.MarginTradeType = order.TRADE_TYPE_GENERAL_DAY
-	ptr.AccountType = order.ACCOUNT_SPECIAL
-	ptr.OrderType = orderType
-	ptr.ClosePositionOrder = closeOrder
-	ptr.ClosePositions = closePositions
+	orderReq := order.NewOrderRequest(
+		s.Exchange,
+		order.SECURITY_TYPE_STOCK,
+		order.TRADE_TYPE_GENERAL_DAY,
+		order.ACCOUNT_SPECIAL,
+		closeOrder,
+		closePositions,
+		orderType,
+	)
 
 	ptr.HasIFD = hasIFD
 	ptr.IFDAction = marketIFDAction
@@ -298,7 +317,7 @@ func (s *Sniper) Tick(dataPool tick.DataPool) (*order.Order, string) {
 
 	s.Orders = append(s.Orders, ptr)
 
-	return ptr, ""
+	return Bullet{Order: ptr, Request: &orderReq}
 }
 
 // ConfirmOrder は廃止されました (Gateway がポインタを直接更新するため不要)
@@ -440,7 +459,7 @@ func (s *Sniper) CalcUnrealizedPnL(currentPrice float64) float64 {
 }
 
 // SyncOrders はインフラ層から取得した最新の注文一覧と同期し、内部状態を「事実」に合わせます
-func (s *Sniper) SyncOrders(externalOrders order.Orders) (*order.Order, string) {
+func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -547,19 +566,22 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) (*order.Order, string) 
 
 		ifdPendingOrder = order.NewOrderPtr(order.GenerateLocalID(), s.Detail.Code, triggeredIFDParent.IFDAction, triggeredIFDParent.IFDPrice, newExecQty)
 		ifdPendingOrder.InternalState = order.STATE_PENDING
-		ifdPendingOrder.Exchange = s.Exchange
-		ifdPendingOrder.SecurityType = order.SECURITY_TYPE_STOCK
-		ifdPendingOrder.MarginTradeType = order.TRADE_TYPE_GENERAL_DAY
-		ifdPendingOrder.AccountType = order.ACCOUNT_SPECIAL
-		ifdPendingOrder.OrderType = triggeredIFDParent.IFDOrderType
-		ifdPendingOrder.ClosePositionOrder = closeOrder
-		ifdPendingOrder.ClosePositions = closePositions
+		orderReq := order.NewOrderRequest(
+			s.Exchange,
+			order.SECURITY_TYPE_STOCK,
+			order.TRADE_TYPE_GENERAL_DAY,
+			order.ACCOUNT_SPECIAL,
+			closeOrder,
+			closePositions,
+			triggeredIFDParent.IFDOrderType,
+		)
 		ifdPendingOrder.HasIFD = false
 
 		s.Orders = append(s.Orders, ifdPendingOrder)
+		return Bullet{Order: ifdPendingOrder, Request: &orderReq}
 	}
 
-	return ifdPendingOrder, ""
+	return Bullet{}
 }
 
 func (s *Sniper) applyExecution(exec order.Execution, action order.Action, orderCreatedAt time.Time) {

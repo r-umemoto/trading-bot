@@ -24,6 +24,7 @@ type OrderJob struct {
 	Sniper      *sniper.Sniper
 	CancelID    string
 	OrderPtr    *order.Order
+	OrderReq    *order.OrderRequest
 	Priority    int
 	UpdateCount int // 🌟 上書き（待機）回数。これが多いほど優先度が上がる
 	RequestedAt time.Time
@@ -98,10 +99,10 @@ func (u *TradeUseCase) processTickForSymbol(ctx context.Context, tick tick.Tick,
 	for _, s := range u.snipers {
 		if s.Detail.Code == symbol {
 			// 1. スナイパーに考えさせる
-			orderPtr, cancelOrderID := s.Tick(u.dataPool)
+			bullet := s.Tick(u.dataPool)
 
 			// 2. 🌟 直接発注せず、ディスパッチャに委ねる
-			u.submitJob(s, cancelOrderID, orderPtr)
+			u.submitJob(s, bullet)
 		}
 	}
 }
@@ -141,17 +142,17 @@ func (u *TradeUseCase) HandleExecution(report order.Orders) {
 func (u *TradeUseCase) processOrdersReportForSymbol(ctx context.Context, report order.Orders, symbol string) {
 	for _, s := range u.snipers {
 		if s.Detail.Code == symbol {
-			orderPtr, cancelOrderID := s.SyncOrders(report)
+			bullet := s.SyncOrders(report)
 
 			// 2. 🌟 直接発注せず、ディスパッチャに委ねる
-			u.submitJob(s, cancelOrderID, orderPtr)
+			u.submitJob(s, bullet)
 		}
 	}
 }
 
 // submitJob は新しい発注・キャンセル要求をキューに登録（または既存分を更新）します
-func (u *TradeUseCase) submitJob(s *sniper.Sniper, cancelID string, orderPtr *order.Order) {
-	if orderPtr == nil && cancelID == "" {
+func (u *TradeUseCase) submitJob(s *sniper.Sniper, bullet sniper.Bullet) {
+	if !bullet.HasOrder() && !bullet.HasCancel() {
 		// 意図が HOLD の場合、もし待機中のジョブがあれば削除する（最新の意図を優先）
 		u.jobMu.Lock()
 		delete(u.pendingJobs, s.Detail.Code)
@@ -160,9 +161,9 @@ func (u *TradeUseCase) submitJob(s *sniper.Sniper, cancelID string, orderPtr *or
 	}
 
 	priority := 1 // デフォルトは低優先（新規エントリー：ENTRY）
-	if cancelID != "" {
+	if bullet.HasCancel() {
 		priority = 10 // キャンセルは中優先（CANCEL）
-	} else if orderPtr != nil && (orderPtr.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(orderPtr.ClosePositions) > 0) {
+	} else if bullet.Request != nil && (bullet.Request.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(bullet.Request.ClosePositions) > 0) {
 		priority = 20 // 決済注文（損切り・利確：EXIT）は最優先
 	}
 
@@ -177,8 +178,9 @@ func (u *TradeUseCase) submitJob(s *sniper.Sniper, cancelID string, orderPtr *or
 	job := &OrderJob{
 		Symbol:      s.Detail.Code,
 		Sniper:      s,
-		CancelID:    cancelID,
-		OrderPtr:    orderPtr,
+		CancelID:    bullet.CancelOrderID,
+		OrderPtr:    bullet.Order,
+		OrderReq:    bullet.Request,
 		Priority:    priority,
 		UpdateCount: updateCount,
 		RequestedAt: time.Now(),
@@ -252,7 +254,7 @@ func (u *TradeUseCase) executeJob(ctx context.Context, job *OrderJob) {
 
 	if job.OrderPtr != nil {
 		fmt.Printf("🚀 [%s] 発注を実行中 (%s %.0f株 @%.1f, Priority: %d)\n", job.Symbol, job.OrderPtr.Action, job.OrderPtr.OrderQty, job.OrderPtr.OrderPrice, job.Priority)
-		updatedOrder, err := u.gateway.SendOrder(apiCtx, *job.OrderPtr)
+		updatedOrder, err := u.gateway.SendOrder(apiCtx, order.SendOrderInput{Order: *job.OrderPtr, Request: *job.OrderReq})
 		if err != nil {
 			fmt.Printf("❌ [%s] 発注失敗: %v\n", job.Symbol, err)
 			job.Sniper.FailSendingOrder(job.OrderPtr)

@@ -230,7 +230,10 @@ func (g *SyncBacktestGateway) walkTheBook(action order.Action, qty float64, limi
 	return totalValue / filledQty, filledQty
 }
 
-func (g *SyncBacktestGateway) SendOrder(ctx context.Context, ord order.Order) (order.Order, error) {
+func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (order.Order, error) {
+	ord := input.Order
+	req := input.Request
+
 	g.orderIdx++
 	orderID := fmt.Sprintf("bt_order_%d", g.orderIdx)
 
@@ -241,7 +244,7 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, ord order.Order) (o
 	storedOrder := ord // 🌟 ポインタ共有を避けるためコピーを保存
 	g.orders[orderID] = &storedOrder
 	g.orderKeys = append(g.orderKeys, orderID)
-	g.orderTypes[orderID] = ord.OrderType
+	g.orderTypes[orderID] = req.OrderType
 
 	// ボリュームベース約定用の初期情報を記録
 	if g.Model == ExecutionModelVolume {
