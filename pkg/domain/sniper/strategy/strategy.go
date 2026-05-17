@@ -3,14 +3,14 @@ package strategy
 import (
 	"log/slog"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // StrategyOrders は注文の集合に対する操作を提供します
-type StrategyOrders []*ord.Order
+type StrategyOrders []*order.Order
 
 // Position は特定の時点における銘柄の保有状態を表します
 type Position struct {
@@ -50,8 +50,8 @@ func (i StrategyInput) SimulateSignal(sig brain.Signal) StrategyInput {
 
 	marketAction, _ := sig.Action.ToMarketAction()
 	// 疑似注文を作成 (ステータスを FILL_EXPECTED にして約定済みに見せかける)
-	simOrder := ord.NewOrderPtr("sim-id", i.LatestTick.Symbol, marketAction, sig.Price, sig.Quantity)
-	simOrder.Status = ord.ORDER_STATUS_FILL_EXPECTED
+	simOrder := order.NewOrderPtr("sim-id", i.LatestTick.Symbol, marketAction, sig.Price, sig.Quantity)
+	simOrder.Status = order.ORDER_STATUS_FILL_EXPECTED
 
 	newOrders := make(StrategyOrders, len(i.Orders)+1)
 	copy(newOrders, i.Orders)
@@ -69,7 +69,7 @@ func (i StrategyInput) SimulateSignal(sig brain.Signal) StrategyInput {
 func (i *StrategyInput) ActiveOrders() StrategyOrders {
 	var active StrategyOrders
 	for _, o := range i.Orders {
-		if !o.IsCompleted() && o.Status != ord.ORDER_STATUS_CANCEL_SENT {
+		if !o.IsCompleted() && o.Status != order.ORDER_STATUS_CANCEL_SENT {
 			active = append(active, o)
 		}
 	}
@@ -94,12 +94,12 @@ func (i *StrategyInput) ensurePosition() *Position {
 
 	// 2. 疑似約定(FILL_EXPECTED)を先行計上
 	for _, o := range i.Orders {
-		if o.Status == ord.ORDER_STATUS_FILL_EXPECTED {
+		if o.Status == order.ORDER_STATUS_FILL_EXPECTED {
 			switch o.Action {
-			case ord.ACTION_BUY:
+			case order.ACTION_BUY:
 				totalQty += o.OrderQty
 				totalCost += o.OrderPrice * o.OrderQty
-			case ord.ACTION_SELL:
+			case order.ACTION_SELL:
 				totalQty -= o.OrderQty
 			}
 		}

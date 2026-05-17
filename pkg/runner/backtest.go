@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
@@ -181,15 +181,15 @@ func RunBacktest() error {
 	fmt.Printf("バックテスト完了: 総処理Tick数 %d件\n", tickCount)
 
 	// 結果の出力
-	positions, _ := gateway.GetPositions(context.Background(), ord.PRODICT_CASH)
-	orders, _ := gateway.GetOrders(context.Background())
+	positions, _ := gateway.GetPositions(context.Background(), order.PRODICT_CASH)
+	ords, _ := gateway.GetOrders(context.Background())
 	fmt.Println("\n=============================================")
 	fmt.Println("             バックテスト結果")
 	fmt.Println("=============================================")
 	for _, p := range positions {
 		fmt.Printf("最終建玉: 銘柄 %s, 数量 %.f\n", p.Symbol, p.LeavesQty)
 	}
-	fmt.Printf("総発注数: %d件\n", len(orders.Orders))
+	fmt.Printf("総発注数: %d件\n", len(ords.Orders))
 
 	// 結果の出力
 	uc := usecase.NewTradeUseCase(snipers, gateway, dataPool)

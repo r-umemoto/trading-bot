@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 )
 
@@ -44,7 +44,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 	tests := []struct {
 		name     string
 		apiOrder api.Order
-		expected ord.OrderStatus
+		expected order.OrderStatus
 	}{
 		{
 			name: "State 4: Canceling",
@@ -52,7 +52,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 				ID:    "order-1",
 				State: api.STATE_CANCELING,
 			},
-			expected: ord.ORDER_STATUS_CANCEL_SENT,
+			expected: order.ORDER_STATUS_CANCEL_SENT,
 		},
 		{
 			name: "State 5 with RecType 6: Canceled",
@@ -63,7 +63,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 					{RecType: api.RECTYPE_CANCELED},
 				},
 			},
-			expected: ord.ORDER_STATUS_CANCELED,
+			expected: order.ORDER_STATUS_CANCELED,
 		},
 		{
 			name: "State 5 with Full Fill",
@@ -73,7 +73,7 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 				OrderQty: 100,
 				CumQty:   100,
 			},
-			expected: ord.ORDER_STATUS_FILLED,
+			expected: order.ORDER_STATUS_FILLED,
 		},
 		{
 			name: "State 5 with RecType 7: Expired",
@@ -84,24 +84,24 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 					{RecType: api.RECTYPE_INVALID},
 				},
 			},
-			expected: ord.ORDER_STATUS_EXPIRED,
+			expected: order.ORDER_STATUS_EXPIRED,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockClient.Orders = []api.Order{tt.apiOrder}
-			orders, err := gateway.GetOrders(context.Background())
+			ords, err := gateway.GetOrders(context.Background())
 			if err != nil {
 				t.Fatalf("GetOrders failed: %v", err)
 			}
 
-			if len(orders.Orders) != 1 {
-				t.Fatalf("expected 1 order, got %d", len(orders.Orders))
+			if len(ords.Orders) != 1 {
+				t.Fatalf("expected 1 order, got %d", len(ords.Orders))
 			}
 
-			if orders.Orders[0].Status != tt.expected {
-				t.Errorf("expected status %d, got %d", tt.expected, orders.Orders[0].Status)
+			if ords.Orders[0].Status != tt.expected {
+				t.Errorf("expected status %d, got %d", tt.expected, ords.Orders[0].Status)
 			}
 		})
 	}

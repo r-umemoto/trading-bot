@@ -3,7 +3,7 @@ package position
 import (
 	"time"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 )
 
 // PositionMeta は建玉に付随する分析・ロギング用のメタデータです
@@ -15,10 +15,10 @@ type PositionMeta struct {
 type Position struct {
 	ExecutionID string
 	Symbol      string // 銘柄
-	Exchange    ord.ExchangeMarket
-	Action      ord.Action
-	TradeType   ord.MarginTradeType
-	AccountType ord.AccountType
+	Exchange    order.ExchangeMarket
+	Action      order.Action
+	TradeType   order.MarginTradeType
+	AccountType order.AccountType
 	LeavesQty   float64      // 保有数量
 	Price       float64      // 取得価格
 	Meta        PositionMeta // 🌟 分析用メタデータ

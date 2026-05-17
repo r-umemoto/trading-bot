@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
-	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
@@ -25,9 +25,9 @@ const (
 // 非同期goroutineによるレースコンディションを防ぎ、バックテスト結果を完全に決定論的にします
 type SyncBacktestGateway struct {
 	tickCh    chan tick.Tick
-	orderCh   chan ord.Orders
+	orderCh   chan order.Orders
 	positions map[string]float64 // 簡易的に持っている数量を管理
-	orders    map[string]*ord.Order
+	orders    map[string]*order.Order
 	orderKeys []string // 順序を保証するためのキーリスト
 	orderIdx  int
 	Model     ExecutionModel // 採用する約定モデル
@@ -37,26 +37,26 @@ type SyncBacktestGateway struct {
 	lastTicks          map[string]tick.Tick
 	initialDepths      map[string]float64 // orderID -> 並んだ時の板の厚み
 	cumulativeVolumes  map[string]float64 // orderID -> その価格での累積出来高
-	orderTypes         map[string]ord.OrderType
+	orderTypes         map[string]order.OrderType
 }
 
 func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
 	return &SyncBacktestGateway{
 		tickCh:             make(chan tick.Tick, 10000),
-		orderCh:            make(chan ord.Orders, 10000), // 大きめのバッファ
+		orderCh:            make(chan order.Orders, 10000), // 大きめのバッファ
 		positions:          make(map[string]float64),
-		orders:             make(map[string]*ord.Order),
+		orders:             make(map[string]*order.Order),
 		orderKeys:          make([]string, 0),
 		Model:              model,
 		lastTradingVolumes: make(map[string]float64),
 		lastTicks:          make(map[string]tick.Tick),
 		initialDepths:      make(map[string]float64),
 		cumulativeVolumes:  make(map[string]float64),
-		orderTypes:         make(map[string]ord.OrderType),
+		orderTypes:         make(map[string]order.OrderType),
 	}
 }
 
-func (g *SyncBacktestGateway) Start(ctx context.Context) (<-chan tick.Tick, <-chan ord.Orders, error) {
+func (g *SyncBacktestGateway) Start(ctx context.Context) (<-chan tick.Tick, <-chan order.Orders, error) {
 	return g.tickCh, g.orderCh, nil
 }
 
@@ -95,16 +95,16 @@ func (g *SyncBacktestGateway) ProcessTick(tick tick.Tick) {
 			switch g.Model {
 			case ExecutionModelTouch:
 				// Optimistic (Touch) Rule: executes if price touches or crosses the limit price
-				if (o.Action == ord.ACTION_BUY && tick.Price <= o.OrderPrice) ||
-					(o.Action == ord.ACTION_SELL && tick.Price >= o.OrderPrice) {
+				if (o.Action == order.ACTION_BUY && tick.Price <= o.OrderPrice) ||
+					(o.Action == order.ACTION_SELL && tick.Price >= o.OrderPrice) {
 					executed = true
 					execPrice = o.OrderPrice
 					execQty = o.OrderQty - o.CumQty
 				}
 			case ExecutionModelPessimistic, ExecutionModelVolume:
 				// Trade-Through (貫通約定) Rule
-				isPierced := (o.Action == ord.ACTION_BUY && tick.Price < o.OrderPrice) ||
-					(o.Action == ord.ACTION_SELL && tick.Price > o.OrderPrice)
+				isPierced := (o.Action == order.ACTION_BUY && tick.Price < o.OrderPrice) ||
+					(o.Action == order.ACTION_SELL && tick.Price > o.OrderPrice)
 
 				if isPierced {
 					// 貫通時は板を食い破る（Marketable Limitの再現）
@@ -128,7 +128,7 @@ func (g *SyncBacktestGateway) ProcessTick(tick tick.Tick) {
 
 		if executed && execQty > 0 {
 			execID := fmt.Sprintf("exec_%d_%s", time.Now().UnixNano(), o.ID)
-			exec := ord.Execution{
+			exec := order.Execution{
 				ID:            execID,
 				Price:         execPrice,
 				Qty:           execQty,
@@ -138,13 +138,13 @@ func (g *SyncBacktestGateway) ProcessTick(tick tick.Tick) {
 			o.CumQty = o.FilledQty()
 
 			if o.CumQty >= o.OrderQty {
-				o.Status = ord.ORDER_STATUS_FILLED
+				o.Status = order.ORDER_STATUS_FILLED
 			} else {
-				o.Status = ord.ORDER_STATUS_IN_PROGRESS
+				o.Status = order.ORDER_STATUS_IN_PROGRESS
 			}
 
 			// Update position
-			if o.Action == ord.ACTION_BUY {
+			if o.Action == order.ACTION_BUY {
 				g.positions[o.Symbol] += execQty
 			} else {
 				g.positions[o.Symbol] -= execQty
@@ -165,13 +165,13 @@ func (g *SyncBacktestGateway) ProcessTick(tick tick.Tick) {
 }
 
 // walkTheBook は板を順に走査し、指定数量分を約定させた場合の平均価格と数量を返します
-func (g *SyncBacktestGateway) walkTheBook(action ord.Action, qty float64, limitPrice float64, t tick.Tick) (float64, float64) {
+func (g *SyncBacktestGateway) walkTheBook(action order.Action, qty float64, limitPrice float64, t tick.Tick) (float64, float64) {
 	remainingQty := qty
 	totalValue := 0.0
 	filledQty := 0.0
 
 	var board []tick.Quote
-	if action == ord.ACTION_BUY {
+	if action == order.ACTION_BUY {
 		board = t.SellBoard
 	} else {
 		board = t.BuyBoard
@@ -180,17 +180,17 @@ func (g *SyncBacktestGateway) walkTheBook(action ord.Action, qty float64, limitP
 	// 板が空の場合は最良気配をフォールバックに
 	if len(board) == 0 {
 		var bestPrice float64
-		if action == ord.ACTION_BUY {
+		if action == order.ACTION_BUY {
 			bestPrice = t.BestAsk.Price
 		} else {
 			bestPrice = t.BestBid.Price
 		}
 		if bestPrice > 0 {
 			if limitPrice > 0 {
-				if action == ord.ACTION_BUY && bestPrice > limitPrice {
+				if action == order.ACTION_BUY && bestPrice > limitPrice {
 					return 0, 0
 				}
-				if action == ord.ACTION_SELL && bestPrice < limitPrice {
+				if action == order.ACTION_SELL && bestPrice < limitPrice {
 					return 0, 0
 				}
 			}
@@ -206,10 +206,10 @@ func (g *SyncBacktestGateway) walkTheBook(action ord.Action, qty float64, limitP
 
 		// 指値チェック
 		if limitPrice > 0 {
-			if action == ord.ACTION_BUY && quote.Price > limitPrice {
+			if action == order.ACTION_BUY && quote.Price > limitPrice {
 				break
 			}
-			if action == ord.ACTION_SELL && quote.Price < limitPrice {
+			if action == order.ACTION_SELL && quote.Price < limitPrice {
 				break
 			}
 		}
@@ -230,33 +230,33 @@ func (g *SyncBacktestGateway) walkTheBook(action ord.Action, qty float64, limitP
 	return totalValue / filledQty, filledQty
 }
 
-func (g *SyncBacktestGateway) SendOrder(ctx context.Context, order ord.Order) (ord.Order, error) {
+func (g *SyncBacktestGateway) SendOrder(ctx context.Context, ord order.Order) (order.Order, error) {
 	g.orderIdx++
 	orderID := fmt.Sprintf("bt_order_%d", g.orderIdx)
 
-	order.ID = orderID
-	order.Status = ord.ORDER_STATUS_WAITING
-	order.InternalState = ord.STATE_ACTIVE // API送信成功・受付完了としてACTIVEへ遷移
+	ord.ID = orderID
+	ord.Status = order.ORDER_STATUS_WAITING
+	ord.InternalState = order.STATE_ACTIVE // API送信成功・受付完了としてACTIVEへ遷移
 
-	storedOrder := order // 🌟 ポインタ共有を避けるためコピーを保存
+	storedOrder := ord // 🌟 ポインタ共有を避けるためコピーを保存
 	g.orders[orderID] = &storedOrder
 	g.orderKeys = append(g.orderKeys, orderID)
-	g.orderTypes[orderID] = order.OrderType
+	g.orderTypes[orderID] = ord.OrderType
 
 	// ボリュームベース約定用の初期情報を記録
 	if g.Model == ExecutionModelVolume {
 		depth := 0.0
-		if lastTick, ok := g.lastTicks[order.Symbol]; ok {
-			if order.Action == ord.ACTION_BUY {
+		if lastTick, ok := g.lastTicks[ord.Symbol]; ok {
+			if ord.Action == order.ACTION_BUY {
 				for _, q := range lastTick.BuyBoard {
-					if q.Price == order.OrderPrice {
+					if q.Price == ord.OrderPrice {
 						depth = q.Qty
 						break
 					}
 				}
 			} else {
 				for _, q := range lastTick.SellBoard {
-					if q.Price == order.OrderPrice {
+					if q.Price == ord.OrderPrice {
 						depth = q.Qty
 						break
 					}
@@ -267,12 +267,12 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, order ord.Order) (o
 		g.cumulativeVolumes[orderID] = 0
 	}
 
-	return order, nil
+	return ord, nil
 }
 
 func (g *SyncBacktestGateway) CancelOrder(ctx context.Context, orderID string) error {
 	if o, ok := g.orders[orderID]; ok {
-		o.Status = ord.ORDER_STATUS_CANCELED
+		o.Status = order.ORDER_STATUS_CANCELED
 		// キャンセルを通知
 		orders, _ := g.GetOrders(ctx)
 		g.orderCh <- orders
@@ -281,20 +281,20 @@ func (g *SyncBacktestGateway) CancelOrder(ctx context.Context, orderID string) e
 	return fmt.Errorf("order not found")
 }
 
-func (g *SyncBacktestGateway) GetPositions(ctx context.Context, product ord.ProductType) ([]position.Position, error) {
+func (g *SyncBacktestGateway) GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error) {
 	var result []position.Position
 	for sym, qty := range g.positions {
 		if qty > 0 { // Hold long side
 			result = append(result, position.Position{
 				Symbol:    sym,
-				Action:    ord.ACTION_BUY,
+				Action:    order.ACTION_BUY,
 				LeavesQty: qty,
 				Price:     0,
 			})
 		} else if qty < 0 {
 			result = append(result, position.Position{
 				Symbol:    sym,
-				Action:    ord.ACTION_SELL,
+				Action:    order.ACTION_SELL,
 				LeavesQty: -qty,
 				Price:     0,
 			})
@@ -303,15 +303,15 @@ func (g *SyncBacktestGateway) GetPositions(ctx context.Context, product ord.Prod
 	return result, nil
 }
 
-func (g *SyncBacktestGateway) GetOrders(ctx context.Context) (ord.Orders, error) {
-	var result []ord.Order
+func (g *SyncBacktestGateway) GetOrders(ctx context.Context) (order.Orders, error) {
+	var result []order.Order
 	for _, id := range g.orderKeys {
 		result = append(result, *g.orders[id])
 	}
-	return ord.Orders{Orders: result}, nil
+	return order.Orders{Orders: result}, nil
 }
 
-func (g *SyncBacktestGateway) GetSymbol(ctx context.Context, symbolCode string, exchange ord.ExchangeMarket) (symbol.Symbol, error) {
+func (g *SyncBacktestGateway) GetSymbol(ctx context.Context, symbolCode string, exchange order.ExchangeMarket) (symbol.Symbol, error) {
 	return symbol.Symbol{
 		Code:            symbolCode,
 		Name:            "Mock Symbol",

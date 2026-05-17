@@ -5,14 +5,14 @@ import (
 	"fmt"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
-	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 )
 
 // SymbolTarget defines a symbol to watch, including the multiple strategies to apply and metadata.
 type SymbolTarget struct {
 	Symbol     string                 `json:"symbol"`
-	Exchange   ord.ExchangeMarket     `json:"exchange"`
+	Exchange   order.ExchangeMarket   `json:"exchange"`
 	Strategies []string               `json:"strategies"`
 	Sector     string                 `json:"sector"`
 	Params     map[string]interface{} `json:"params"`

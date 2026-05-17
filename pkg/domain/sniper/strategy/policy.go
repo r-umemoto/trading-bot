@@ -5,7 +5,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
@@ -13,10 +13,10 @@ import (
 
 // ExecutionPolicy は疑似約定（Synthetic Fill）の判定ロジックを定義するインターフェースです
 type ExecutionPolicy interface {
-	ApplySyntheticFill(order *ord.Order, tick tick.Tick)
+	ApplySyntheticFill(ord *order.Order, tick tick.Tick)
 	// IsOrderDesired は、現在の注文が戦略の意図（sig）と実質的に一致しているか（維持すべきか）を判定します。
 	// これにより、微細な価格変化によるキャンセル・再発注のスパムを抑制します。
-	IsOrderDesired(order *ord.Order, sig brain.Signal, symbol symbol.Symbol) bool
+	IsOrderDesired(ord *order.Order, sig brain.Signal, symbol symbol.Symbol) bool
 }
 
 // TouchTTLPolicy は、価格が同値にタッチした瞬間に疑似約定と見なしますが、
@@ -25,70 +25,70 @@ type TouchTTLPolicy struct {
 	TTL time.Duration
 }
 
-func (p *TouchTTLPolicy) ApplySyntheticFill(order *ord.Order, tick tick.Tick) {
-	if order.OrderPrice > 0 && tick.Price > 0 { // 指値の場合
-		isTouching := (order.Action == ord.ACTION_BUY && tick.Price <= order.OrderPrice) ||
-			(order.Action == ord.ACTION_SELL && tick.Price >= order.OrderPrice)
+func (p *TouchTTLPolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
+	if ord.OrderPrice > 0 && tick.Price > 0 { // 指値の場合
+		isTouching := (ord.Action == order.ACTION_BUY && tick.Price <= ord.OrderPrice) ||
+			(ord.Action == order.ACTION_SELL && tick.Price >= ord.OrderPrice)
 
 		if isTouching {
-			if order.Status != ord.ORDER_STATUS_FILL_EXPECTED && !order.Synthetic.TouchTimeout {
+			if ord.Status != order.ORDER_STATUS_FILL_EXPECTED && !ord.Synthetic.TouchTimeout {
 				// 初めてタッチした瞬間（フライング推測）
-				order.Status = ord.ORDER_STATUS_FILL_EXPECTED
-				order.Synthetic.ExpectedAt = tick.CurrentPriceTime
-				if order.Synthetic.ExpectedAt.IsZero() {
-					order.Synthetic.ExpectedAt = time.Now()
+				ord.Status = order.ORDER_STATUS_FILL_EXPECTED
+				ord.Synthetic.ExpectedAt = tick.CurrentPriceTime
+				if ord.Synthetic.ExpectedAt.IsZero() {
+					ord.Synthetic.ExpectedAt = time.Now()
 				}
-				fmt.Printf("⚡ [%s] 疑似約定を検知しました (TTL計測開始): %s (Price: %f, Tick: %f)\n", order.Symbol, order.ID, order.OrderPrice, tick.Price)
-			} else if order.Status == ord.ORDER_STATUS_FILL_EXPECTED {
+				fmt.Printf("⚡ [%s] 疑似約定を検知しました (TTL計測開始): %s (Price: %f, Tick: %f)\n", ord.Symbol, ord.ID, ord.OrderPrice, tick.Price)
+			} else if ord.Status == order.ORDER_STATUS_FILL_EXPECTED {
 				// すでに推測中：TTLの超過チェック
-				elapsed := tick.CurrentPriceTime.Sub(order.Synthetic.ExpectedAt)
+				elapsed := tick.CurrentPriceTime.Sub(ord.Synthetic.ExpectedAt)
 				if elapsed > p.TTL {
-					order.Status = ord.ORDER_STATUS_WAITING
-					order.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
-					fmt.Printf("💔 [%s] 疑似約定がタイムアウトしました（キュー負け）: %s\n", order.Symbol, order.ID)
+					ord.Status = order.ORDER_STATUS_WAITING
+					ord.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
+					fmt.Printf("💔 [%s] 疑似約定がタイムアウトしました（キュー負け）: %s\n", ord.Symbol, ord.ID)
 				}
 			}
 		} else {
 			// 価格が離れた場合：すべての推測・タイムアウト状態をリセット
-			if order.Status == ord.ORDER_STATUS_FILL_EXPECTED || order.Synthetic.TouchTimeout {
-				order.Status = ord.ORDER_STATUS_WAITING
-				order.Synthetic.TouchTimeout = false
-				order.Synthetic.ExpectedAt = time.Time{}
-				fmt.Printf("🔄 [%s] 価格が離れたため疑似約定ステータスをリセットしました: %s\n", order.Symbol, order.ID)
+			if ord.Status == order.ORDER_STATUS_FILL_EXPECTED || ord.Synthetic.TouchTimeout {
+				ord.Status = order.ORDER_STATUS_WAITING
+				ord.Synthetic.TouchTimeout = false
+				ord.Synthetic.ExpectedAt = time.Time{}
+				fmt.Printf("🔄 [%s] 価格が離れたため疑似約定ステータスをリセットしました: %s\n", ord.Symbol, ord.ID)
 			}
 		}
 	}
 }
 
-func (p *TouchTTLPolicy) IsOrderDesired(order *ord.Order, sig brain.Signal, symbol symbol.Symbol) bool {
-	return isOrderDesiredDefault(order, sig, symbol)
+func (p *TouchTTLPolicy) IsOrderDesired(ord *order.Order, sig brain.Signal, symbol symbol.Symbol) bool {
+	return isOrderDesiredDefault(ord, sig, symbol)
 }
 
 // StrictPiercePolicy は、価格が完全に指値を貫通（< または >）した時のみ疑似約定と見なします。
 // タッチしただけでは疑似約定としません。
 type StrictPiercePolicy struct{}
 
-func (p *StrictPiercePolicy) ApplySyntheticFill(order *ord.Order, tick tick.Tick) {
-	if order.OrderPrice > 0 && tick.Price > 0 {
-		isPierced := (order.Action == ord.ACTION_BUY && tick.Price < order.OrderPrice) ||
-			(order.Action == ord.ACTION_SELL && tick.Price > order.OrderPrice)
+func (p *StrictPiercePolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
+	if ord.OrderPrice > 0 && tick.Price > 0 {
+		isPierced := (ord.Action == order.ACTION_BUY && tick.Price < ord.OrderPrice) ||
+			(ord.Action == order.ACTION_SELL && tick.Price > ord.OrderPrice)
 
 		if isPierced {
-			if order.Status != ord.ORDER_STATUS_FILL_EXPECTED {
-				order.Status = ord.ORDER_STATUS_FILL_EXPECTED
-				fmt.Printf("⚡ [%s] 貫通による確実な疑似約定を検知しました: %s (Price: %f, Tick: %f)\n", order.Symbol, order.ID, order.OrderPrice, tick.Price)
+			if ord.Status != order.ORDER_STATUS_FILL_EXPECTED {
+				ord.Status = order.ORDER_STATUS_FILL_EXPECTED
+				fmt.Printf("⚡ [%s] 貫通による確実な疑似約定を検知しました: %s (Price: %f, Tick: %f)\n", ord.Symbol, ord.ID, ord.OrderPrice, tick.Price)
 			}
 		} else {
-			if order.Status == ord.ORDER_STATUS_FILL_EXPECTED {
-				order.Status = ord.ORDER_STATUS_WAITING
-				fmt.Printf("🔄 [%s] 価格が戻ったため貫通約定ステータスをリセットしました: %s\n", order.Symbol, order.ID)
+			if ord.Status == order.ORDER_STATUS_FILL_EXPECTED {
+				ord.Status = order.ORDER_STATUS_WAITING
+				fmt.Printf("🔄 [%s] 価格が戻ったため貫通約定ステータスをリセットしました: %s\n", ord.Symbol, ord.ID)
 			}
 		}
 	}
 }
 
-func (p *StrictPiercePolicy) IsOrderDesired(order *ord.Order, sig brain.Signal, symbol symbol.Symbol) bool {
-	return isOrderDesiredDefault(order, sig, symbol)
+func (p *StrictPiercePolicy) IsOrderDesired(ord *order.Order, sig brain.Signal, symbol symbol.Symbol) bool {
+	return isOrderDesiredDefault(ord, sig, symbol)
 }
 
 // VolumeConsumptionPolicy は、板の厚み（待ち行列）と出来高の消化量に基づいて約定を推測します。
@@ -99,88 +99,88 @@ type VolumeConsumptionPolicy struct {
 	QueueOffsetRatio float64
 }
 
-func (p *VolumeConsumptionPolicy) ApplySyntheticFill(order *ord.Order, tick tick.Tick) {
-	if order.OrderPrice <= 0 || tick.Price <= 0 {
+func (p *VolumeConsumptionPolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
+	if ord.OrderPrice <= 0 || tick.Price <= 0 {
 		return
 	}
 
 	// 1. 貫通判定（指値価格を突き抜けた場合は即座に約定確定）
-	isPierced := (order.Action == ord.ACTION_BUY && tick.Price < order.OrderPrice) ||
-		(order.Action == ord.ACTION_SELL && tick.Price > order.OrderPrice)
+	isPierced := (ord.Action == order.ACTION_BUY && tick.Price < ord.OrderPrice) ||
+		(ord.Action == order.ACTION_SELL && tick.Price > ord.OrderPrice)
 
 	if isPierced {
-		if order.Status != ord.ORDER_STATUS_FILL_EXPECTED {
-			order.Status = ord.ORDER_STATUS_FILL_EXPECTED
-			order.Synthetic.ExpectedAt = tick.CurrentPriceTime
-			fmt.Printf("⚡ [%s] 疑似約定(貫通)を検知しました: %s\n", order.Symbol, order.ID)
+		if ord.Status != order.ORDER_STATUS_FILL_EXPECTED {
+			ord.Status = order.ORDER_STATUS_FILL_EXPECTED
+			ord.Synthetic.ExpectedAt = tick.CurrentPriceTime
+			fmt.Printf("⚡ [%s] 疑似約定(貫通)を検知しました: %s\n", ord.Symbol, ord.ID)
 		}
 		return
 	}
 
 	// 2. 同値タッチ判定
-	isTouching := tick.Price == order.OrderPrice
+	isTouching := tick.Price == ord.OrderPrice
 
 	if isTouching {
 		// 初期状態の記録（初めて同値に触れた瞬間の板の厚みを「自分の前の待ち行列」とする）
-		if order.Synthetic.InitialQueueQty == 0 {
-			if order.Action == ord.ACTION_BUY {
-				order.Synthetic.InitialQueueQty = tick.BestBid.Qty
+		if ord.Synthetic.InitialQueueQty == 0 {
+			if ord.Action == order.ACTION_BUY {
+				ord.Synthetic.InitialQueueQty = tick.BestBid.Qty
 			} else {
-				order.Synthetic.InitialQueueQty = tick.BestAsk.Qty
+				ord.Synthetic.InitialQueueQty = tick.BestAsk.Qty
 			}
-			order.Synthetic.LastVolumeUpdate = tick.TradingVolume
-			order.Synthetic.ConsumedVolume = 0
-			fmt.Printf("📝 [%s] 待ち行列の監視を開始: %s (Queue: %.0f)\n", order.Symbol, order.ID, order.Synthetic.InitialQueueQty)
+			ord.Synthetic.LastVolumeUpdate = tick.TradingVolume
+			ord.Synthetic.ConsumedVolume = 0
+			fmt.Printf("📝 [%s] 待ち行列の監視を開始: %s (Queue: %.0f)\n", ord.Symbol, ord.ID, ord.Synthetic.InitialQueueQty)
 			return
 		}
 
 		// 出来高の増分を計算して、キューの消化量に加算
-		if order.Synthetic.LastVolumeUpdate > 0 && tick.TradingVolume > order.Synthetic.LastVolumeUpdate {
-			deltaVol := tick.TradingVolume - order.Synthetic.LastVolumeUpdate
-			order.Synthetic.ConsumedVolume += deltaVol
+		if ord.Synthetic.LastVolumeUpdate > 0 && tick.TradingVolume > ord.Synthetic.LastVolumeUpdate {
+			deltaVol := tick.TradingVolume - ord.Synthetic.LastVolumeUpdate
+			ord.Synthetic.ConsumedVolume += deltaVol
 		}
-		order.Synthetic.LastVolumeUpdate = tick.TradingVolume
+		ord.Synthetic.LastVolumeUpdate = tick.TradingVolume
 
 		// 消化量が閾値（自分の順番）を超えたかチェック
-		if order.Status != ord.ORDER_STATUS_FILL_EXPECTED {
-			threshold := order.Synthetic.InitialQueueQty * p.QueueOffsetRatio
-			if order.Synthetic.ConsumedVolume >= threshold {
-				order.Status = ord.ORDER_STATUS_FILL_EXPECTED
-				order.Synthetic.ExpectedAt = tick.CurrentPriceTime
-				if order.Synthetic.ExpectedAt.IsZero() {
-					order.Synthetic.ExpectedAt = time.Now()
+		if ord.Status != order.ORDER_STATUS_FILL_EXPECTED {
+			threshold := ord.Synthetic.InitialQueueQty * p.QueueOffsetRatio
+			if ord.Synthetic.ConsumedVolume >= threshold {
+				ord.Status = order.ORDER_STATUS_FILL_EXPECTED
+				ord.Synthetic.ExpectedAt = tick.CurrentPriceTime
+				if ord.Synthetic.ExpectedAt.IsZero() {
+					ord.Synthetic.ExpectedAt = time.Now()
 				}
 				fmt.Printf("⚡ [%s] 疑似約定(出来高消化)を検知しました: %s (Consumed: %.0f / Queue: %.0f)\n",
-					order.Symbol, order.ID, order.Synthetic.ConsumedVolume, order.Synthetic.InitialQueueQty)
+					ord.Symbol, ord.ID, ord.Synthetic.ConsumedVolume, ord.Synthetic.InitialQueueQty)
 			}
 		} else {
 			// すでに疑似約定状態：安全のためのタイムアウト（2秒など）
-			elapsed := tick.CurrentPriceTime.Sub(order.Synthetic.ExpectedAt)
+			elapsed := tick.CurrentPriceTime.Sub(ord.Synthetic.ExpectedAt)
 			if elapsed > 2*time.Second {
-				order.Status = ord.ORDER_STATUS_WAITING
-				order.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
-				fmt.Printf("💔 [%s] 疑似約定(出来高)がタイムアウトしました（幻の約定）: %s\n", order.Symbol, order.ID)
+				ord.Status = order.ORDER_STATUS_WAITING
+				ord.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
+				fmt.Printf("💔 [%s] 疑似約定(出来高)がタイムアウトしました（幻の約定）: %s\n", ord.Symbol, ord.ID)
 			}
 		}
 	} else {
 		// 価格が離れている間も、総出来高の同期だけは維持する
-		order.Synthetic.LastVolumeUpdate = tick.TradingVolume
+		ord.Synthetic.LastVolumeUpdate = tick.TradingVolume
 	}
 }
 
-func (p *VolumeConsumptionPolicy) IsOrderDesired(order *ord.Order, sig brain.Signal, symbol symbol.Symbol) bool {
+func (p *VolumeConsumptionPolicy) IsOrderDesired(ord *order.Order, sig brain.Signal, symbol symbol.Symbol) bool {
 	// スキャルピング等の高頻度戦略を想定し、1ティック以内の変化なら維持する
-	return isOrderDesiredDefault(order, sig, symbol)
+	return isOrderDesiredDefault(ord, sig, symbol)
 }
 
 // NoopPolicy は疑似約定判定を一切行いません（Observer戦略など向け）。
 type NoopPolicy struct{}
 
-func (p *NoopPolicy) ApplySyntheticFill(order *ord.Order, tick tick.Tick) {
+func (p *NoopPolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
 	// 何もしない
 }
 
-func (p *NoopPolicy) IsOrderDesired(order *ord.Order, sig brain.Signal, symbol symbol.Symbol) bool {
+func (p *NoopPolicy) IsOrderDesired(ord *order.Order, sig brain.Signal, symbol symbol.Symbol) bool {
 	// 常に再判定を促す（実質的に利用されない）
 	return false
 }
@@ -188,20 +188,20 @@ func (p *NoopPolicy) IsOrderDesired(order *ord.Order, sig brain.Signal, symbol s
 // --- ヘルパー関数 ---
 
 // isOrderDesiredDefault は「方向・数量が一致」かつ「価格差が1ティック以内」なら維持とみなすデフォルト判定です。
-func isOrderDesiredDefault(order *ord.Order, sig brain.Signal, symbol symbol.Symbol) bool {
+func isOrderDesiredDefault(ord *order.Order, sig brain.Signal, symbol symbol.Symbol) bool {
 	marketAction, _ := sig.Action.ToMarketAction()
-	if order.Action != marketAction || order.OrderQty != sig.Quantity {
+	if ord.Action != marketAction || ord.OrderQty != sig.Quantity {
 		return false
 	}
 
 	// 指値価格の比較
-	if sig.Price > 0 && order.OrderPrice > 0 {
-		diff := math.Abs(order.OrderPrice - sig.Price)
-		tickSize := symbol.CalcTickSize(order.OrderPrice)
+	if sig.Price > 0 && ord.OrderPrice > 0 {
+		diff := math.Abs(ord.OrderPrice - sig.Price)
+		tickSize := symbol.CalcTickSize(ord.OrderPrice)
 		// 1ティック以内なら維持 (浮動小数点の誤差を考慮して少しマージンを持たせる)
 		return diff <= (tickSize + 0.0001)
 	}
 
 	// 成行同士（Price=0）なら一致
-	return sig.Price == 0 && order.OrderPrice == 0
+	return sig.Price == 0 && ord.OrderPrice == 0
 }

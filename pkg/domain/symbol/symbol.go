@@ -3,7 +3,7 @@ package symbol
 import (
 	"fmt"
 
-	"github.com/r-umemoto/trading-bot/pkg/domain/ord"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 )
 
 // Symbol は銘柄の基本属性を保持するエンティティです
@@ -17,7 +17,7 @@ type Symbol struct {
 type WatchTarget struct {
 	Detail       Symbol
 	StrategyName string
-	Exchange     ord.ExchangeMarket
+	Exchange     order.ExchangeMarket
 	Params       interface{}
 }
 
