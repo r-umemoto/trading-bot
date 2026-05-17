@@ -20,14 +20,19 @@ func NewUseCaseHandler(system *SystemUseCase, trade *TradeUseCase) *UseCaseHandl
 	}
 }
 
-// Initialize はシステム起動処理と発注ディスパッチャ起動をまとめて実行します
-func (h *UseCaseHandler) Initialize(ctx context.Context) error {
+// Start はシステム起動処理と発注ディスパッチャ起動をまとめて実行します
+func (h *UseCaseHandler) Start(ctx context.Context) error {
 	// 1. システム初期化（残存決済、銘柄登録）
 	if err := h.system.Initialize(ctx); err != nil {
 		return err
 	}
 
-	// 2. ディスパッチャの起動
+	// 2. 市場接続ストリーミングの開始（リスン）
+	if err := h.system.Listen(ctx, h); err != nil {
+		return err
+	}
+
+	// 3. ディスパッチャの起動
 	h.trade.StartDispatcher(ctx)
 	return nil
 }
@@ -52,7 +57,4 @@ func (h *UseCaseHandler) PrintReport(enableCSV bool) {
 	h.trade.PrintPerformanceReport(enableCSV)
 }
 
-// GetSymbols は監視対象となっている全ての銘柄コード（重複排除済み）のリストを返します
-func (h *UseCaseHandler) GetSymbols() []string {
-	return h.system.GetSymbols()
-}
+

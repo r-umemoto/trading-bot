@@ -55,6 +55,11 @@ func (s *SystemUseCase) Initialize(ctx context.Context) error {
 	return nil
 }
 
+// Listen は市場ゲートウェイのストリーミングを開始します
+func (s *SystemUseCase) Listen(ctx context.Context, handler market.MarketStreamHandler) error {
+	return s.gateway.Listen(ctx, handler)
+}
+
 // Shutdown はシステム終了時のポジション全決済と銘柄の全解除を行います
 func (s *SystemUseCase) Shutdown(ctx context.Context) error {
 	// 1. 撤収・強制終了＆全ポジションのクローズ
@@ -71,15 +76,4 @@ func (s *SystemUseCase) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// GetSymbols は監視対象となっている全ての銘柄コード（重複排除済み）のリストを返します
-func (s *SystemUseCase) GetSymbols() []string {
-	var symbols []string
-	seen := make(map[string]bool)
-	for _, sn := range s.snipers {
-		if !seen[sn.Detail.Code] {
-			symbols = append(symbols, sn.Detail.Code)
-			seen[sn.Detail.Code] = true
-		}
-	}
-	return symbols
-}
+

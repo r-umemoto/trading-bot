@@ -56,8 +56,8 @@ func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
 	}
 }
 
-func (g *SyncBacktestGateway) Start(ctx context.Context) (<-chan tick.Tick, <-chan order.Orders, error) {
-	return g.tickCh, g.orderCh, nil
+func (g *SyncBacktestGateway) Listen(ctx context.Context, handler market.MarketStreamHandler) error {
+	return nil
 }
 
 // ProcessTick feeds a tick into the gateway. The gateway evaluates existing orders.
@@ -336,3 +336,11 @@ func (g *SyncBacktestGateway) UnregisterSymbolAll(ctx context.Context) error {
 
 // Ensure SyncBacktestGateway implements market.MarketGateway
 var _ market.MarketGateway = (*SyncBacktestGateway)(nil)
+
+func (g *SyncBacktestGateway) TickCh() <-chan tick.Tick {
+	return g.tickCh
+}
+
+func (g *SyncBacktestGateway) OrderCh() <-chan order.Orders {
+	return g.orderCh
+}

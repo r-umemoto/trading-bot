@@ -16,8 +16,8 @@ type ResisterSymbolRequest struct {
 
 // MarketGateway は市場への統合アクセスポイントです
 type MarketGateway interface {
-	// Start は市場との接続を開始し、リアルタイム情報の受信を開始します
-	Start(ctx context.Context) (<-chan tick.Tick, <-chan order.Orders, error)
+	// Listen は市場との接続を開始し、リアルタイム情報の受信を開始します
+	Listen(ctx context.Context, handler MarketStreamHandler) error
 
 	SendOrder(ctx context.Context, input order.SendOrderInput) (order.Order, error) // 引数で渡されたOrderにIDとStatusを書き込んだ新しいOrderを返す
 	CancelOrder(ctx context.Context, orderID string) error
@@ -27,4 +27,10 @@ type MarketGateway interface {
 	RegisterSymbol(ctx context.Context, req ResisterSymbolRequest) error
 	RegisterSymbols(ctx context.Context, reqs []ResisterSymbolRequest) error
 	UnregisterSymbolAll(ctx context.Context) error
+}
+
+// MarketStreamHandler はリアルタイムの価格と注文情報の配信を受けるためのコールバックインターフェースです
+type MarketStreamHandler interface {
+	ExecuteTick(ctx context.Context, t tick.Tick)
+	ExecuteExecutionReport(ctx context.Context, report order.Orders, symbol string)
 }

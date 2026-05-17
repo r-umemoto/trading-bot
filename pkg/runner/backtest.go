@@ -45,7 +45,9 @@ func RunBacktest() error {
 	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
 	gateway := backtest.NewBacktestGateway(execModel)
 	dataPool := tick.NewDefaultDataPool()
-	tickCh, orderReportCh, _ := gateway.Start(context.Background())
+	_ = gateway.Listen(context.Background(), nil)
+	tickCh := gateway.TickCh()
+	orderReportCh := gateway.OrderCh()
 
 	// 4. 監視リストの構築 (Gatewayを使用して情報を埋める)
 	watchList, err := portfolio.BuildWatchList(context.Background(), gateway, targets)

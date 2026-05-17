@@ -20,8 +20,10 @@ import (
 
 func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
 	return &MarketGateway{
-		client:   client,
-		wsClient: wsClient,
+		client:        client,
+		wsClient:      wsClient,
+		tickChannels:  make(map[string]chan tick.Tick),
+		orderChannels: make(map[string]chan order.Orders),
 	}
 }
 
@@ -38,22 +40,38 @@ type KabuClientInterface interface {
 
 // MarketGateway はHTTPプロトコルを用いたREST API操作を担当します
 type MarketGateway struct {
-	client   KabuClientInterface
-	wsClient *api.WSClient
+	client        KabuClientInterface
+	wsClient      *api.WSClient
+	tickChannels  map[string]chan tick.Tick
+	orderChannels map[string]chan order.Orders
 }
 
-// Start は market.MarketGateway の実装です
-func (m *MarketGateway) Start(ctx context.Context) (<-chan tick.Tick, <-chan order.Orders, error) {
-	priceCh := make(chan tick.Tick, 100)
-	orderCh := make(chan order.Orders, 10)
+// Listen は market.MarketGateway の実装です。並行処理用のチャネルとワーカーを立ち上げて WebSocket / Polling を開始します。
+func (m *MarketGateway) Listen(ctx context.Context, handler market.MarketStreamHandler) error {
+	// 1. 各銘柄専用のゴルーチンワーカーをクロージャでインライン起動
+	for symbol, tickCh := range m.tickChannels {
+		orderCh := m.orderChannels[symbol]
+		go func(sym string, tc <-chan tick.Tick, oc <-chan order.Orders) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case t := <-tc:
+					handler.ExecuteTick(ctx, t)
+				case report := <-oc:
+					handler.ExecuteExecutionReport(ctx, report, sym)
+				}
+			}
+		}(symbol, tickCh, orderCh)
+	}
 
-	// 1. 株価のWebSocketを裏側で起動
-	go m.startWebSocketLoop(ctx, priceCh)
+	// 2. 株価のWebSocketを裏側で起動
+	go m.startWebSocketLoop(ctx)
 
-	// 2. 注文のポーリングを裏側で起動
-	go m.startPollingLoop(ctx, orderCh)
+	// 3. 注文のポーリングを裏側で起動
+	go m.startPollingLoop(ctx)
 
-	return priceCh, orderCh, nil
+	return nil
 }
 
 // SendOrder は market.MarketGateway (Orderer) の実装です
@@ -318,7 +336,7 @@ func (m *MarketGateway) toAccountType(accountType int32) order.AccountType {
 	}
 }
 
-func (m *MarketGateway) startPollingLoop(ctx context.Context, orderCh chan order.Orders) {
+func (m *MarketGateway) startPollingLoop(ctx context.Context) {
 	ticker := time.NewTicker(500 * time.Millisecond) // 500ms間隔に短縮
 	defer ticker.Stop()
 
@@ -334,13 +352,22 @@ func (m *MarketGateway) startPollingLoop(ctx context.Context, orderCh chan order
 				continue
 			}
 
-			// 注文一覧をそのまま通知。差分検知や約定の特定は Sniper 側で行う
-			orderCh <- ords
+			// 注文一覧を全銘柄のチャネルへ安全にディスパッチ
+			for symbol, ch := range m.orderChannels {
+				select {
+				case ch <- ords:
+				default:
+					fmt.Printf("⚠️ 🚨 [%s] OrdersReportチャネルがフルです。非同期でキューイングを試みます。\n", symbol)
+					go func(c chan<- order.Orders, r order.Orders) {
+						c <- r
+					}(ch, ords)
+				}
+			}
 		}
 	}
 }
 
-func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan tick.Tick) {
+func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
 	// 既存のWebSocketクライアントを起動
 	rawCh := make(chan api.PushMessage)
 	go s.wsClient.Listen(rawCh)
@@ -354,7 +381,6 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan tick
 
 	// 🔄 変換層（アダプター処理）
 	go func() {
-		defer close(tickCh)
 		// goroutine終了時（システム終了時など）にログファイルを閉じる
 		defer logger.Close()
 		for {
@@ -389,7 +415,7 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan tick
 					{Price: msg.Buy10.Price, Qty: msg.Buy10.Qty},
 				}
 
-				tick := tick.NewTick(
+				t := tick.NewTick(
 					msg.Symbol,
 					msg.CurrentPrice,
 					msg.VWAP,
@@ -418,8 +444,16 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context, tickCh chan tick
 					msg.OverSellQty,
 					msg.UnderBuyQty,
 				)
-				logger.Log(tick)
-				tickCh <- tick
+				logger.Log(t)
+
+				// 該当する銘柄のチャネルへルーティング (skip-on-full)
+				if ch, ok := s.tickChannels[t.Symbol]; ok {
+					select {
+					case ch <- t:
+					default:
+						fmt.Printf("⚠️ [%s] ワーカー過負荷: Tickチャネルがフルのため、このTickを破棄(スキップ)します\n", t.Symbol)
+					}
+				}
 			}
 		}
 	}()
@@ -432,6 +466,14 @@ func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterS
 func (m *MarketGateway) RegisterSymbols(ctx context.Context, reqs []market.ResisterSymbolRequest) error {
 	if len(reqs) == 0 {
 		return nil
+	}
+
+	// 0. チャネルマップの初期化
+	for _, req := range reqs {
+		if _, exists := m.tickChannels[req.Symbol]; !exists {
+			m.tickChannels[req.Symbol] = make(chan tick.Tick, 1000)
+			m.orderChannels[req.Symbol] = make(chan order.Orders, 1000)
+		}
 	}
 
 	// 50銘柄ずつバッチ処理

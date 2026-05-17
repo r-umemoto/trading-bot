@@ -50,7 +50,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
 	// 5. エンジンの完成
-	return NewEngine(gateway, handler), nil
+	return NewEngine(handler), nil
 }
 
 // ---------------------------------------------------------
