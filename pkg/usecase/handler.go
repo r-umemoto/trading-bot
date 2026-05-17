@@ -2,9 +2,6 @@ package usecase
 
 import (
 	"context"
-
-	"github.com/r-umemoto/trading-bot/pkg/domain/order"
-	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // UseCaseHandler はシステムライフサイクルユースケースとトレードユースケースを統合的に管理・委譲するファサード構造体です
@@ -20,7 +17,7 @@ func NewUseCaseHandler(system *SystemUseCase, trade *TradeUseCase) *UseCaseHandl
 	}
 }
 
-// Start はシステム起動処理と発注ディスパッチャ起動をまとめて実行します
+// Start はシステム起動処理と取引処理のスレッド群を起動します
 func (h *UseCaseHandler) Start(ctx context.Context) error {
 	// 1. システム初期化（残存決済、銘柄登録）
 	if err := h.system.Initialize(ctx); err != nil {
@@ -28,28 +25,19 @@ func (h *UseCaseHandler) Start(ctx context.Context) error {
 	}
 
 	// 2. 市場接続ストリーミングの開始（リスン）
-	if err := h.system.Listen(ctx, h); err != nil {
+	ticks, orders, err := h.system.Listen(ctx)
+	if err != nil {
 		return err
 	}
 
-	// 3. ディスパッチャの起動
-	h.trade.StartDispatcher(ctx)
+	// 3. 取引処理（ディスパッチャおよび各銘柄ワーカー）の起動
+	h.trade.Start(ctx, ticks, orders)
 	return nil
 }
 
 // Shutdown はシステム終了時のポジション全決済と銘柄登録解除を行います
 func (h *UseCaseHandler) Shutdown(ctx context.Context) error {
 	return h.system.Shutdown(ctx)
-}
-
-// ExecuteTick は指定された銘柄の価格更新（Tick）を受け取り、同期的にスナイパー戦略を処理・評価します
-func (h *UseCaseHandler) ExecuteTick(ctx context.Context, t tick.Tick) {
-	h.trade.ExecuteTick(ctx, t)
-}
-
-// ExecuteExecutionReport は最新の注文レポートを受け取り、同期的にスナイパーと注文状態の同期を行います
-func (h *UseCaseHandler) ExecuteExecutionReport(ctx context.Context, report order.Orders, symbol string) {
-	h.trade.ExecuteExecutionReport(ctx, report, symbol)
 }
 
 // PrintReport は全スナイパーの成績を集計し、出力およびCSV保存を行います

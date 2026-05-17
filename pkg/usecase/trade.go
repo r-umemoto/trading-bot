@@ -30,9 +30,26 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dat
 	}
 }
 
-// StartDispatcher は発注ディスパッチャ（秒間10回制限の門番）を起動します
-func (u *TradeUseCase) StartDispatcher(ctx context.Context) {
+// Start は発注ディスパッチャと市場データ受信ワーカーを起動します
+func (u *TradeUseCase) Start(ctx context.Context, ticks map[string]<-chan tick.Tick, orders map[string]<-chan order.Orders) {
 	u.dispatcher.Start(ctx)
+
+	// 各銘柄専用のゴルーチンワーカーを起動
+	for symbol, tickCh := range ticks {
+		orderCh := orders[symbol]
+		go func(sym string, tc <-chan tick.Tick, oc <-chan order.Orders) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case t := <-tc:
+					u.ExecuteTick(ctx, t)
+				case report := <-oc:
+					u.ExecuteExecutionReport(ctx, report, sym)
+				}
+			}
+		}(symbol, tickCh, orderCh)
+	}
 }
 
 // ExecuteTick は指定された銘柄の価格更新（Tick）を受け取り、同期的にスナイパー戦略を処理・評価します

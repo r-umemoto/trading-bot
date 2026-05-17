@@ -47,31 +47,24 @@ type MarketGateway struct {
 }
 
 // Listen は market.MarketGateway の実装です。並行処理用のチャネルとワーカーを立ち上げて WebSocket / Polling を開始します。
-func (m *MarketGateway) Listen(ctx context.Context, handler market.MarketStreamHandler) error {
-	// 1. 各銘柄専用のゴルーチンワーカーをクロージャでインライン起動
-	for symbol, tickCh := range m.tickChannels {
-		orderCh := m.orderChannels[symbol]
-		go func(sym string, tc <-chan tick.Tick, oc <-chan order.Orders) {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case t := <-tc:
-					handler.ExecuteTick(ctx, t)
-				case report := <-oc:
-					handler.ExecuteExecutionReport(ctx, report, sym)
-				}
-			}
-		}(symbol, tickCh, orderCh)
-	}
-
-	// 2. 株価のWebSocketを裏側で起動
+func (m *MarketGateway) Listen(ctx context.Context) (map[string]<-chan tick.Tick, map[string]<-chan order.Orders, error) {
+	// 1. 株価のWebSocketを裏側で起動
 	go m.startWebSocketLoop(ctx)
 
-	// 3. 注文のポーリングを裏側で起動
+	// 2. 注文のポーリングを裏側で起動
 	go m.startPollingLoop(ctx)
 
-	return nil
+	// 3. チャネルのマップを読み取り専用型として呼び出し元に返す
+	ticks := make(map[string]<-chan tick.Tick)
+	for sym, ch := range m.tickChannels {
+		ticks[sym] = ch
+	}
+	orders := make(map[string]<-chan order.Orders)
+	for sym, ch := range m.orderChannels {
+		orders[sym] = ch
+	}
+
+	return ticks, orders, nil
 }
 
 // SendOrder は market.MarketGateway (Orderer) の実装です

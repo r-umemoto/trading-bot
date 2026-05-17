@@ -45,7 +45,7 @@ func RunBacktest() error {
 	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
 	gateway := backtest.NewBacktestGateway(execModel)
 	dataPool := tick.NewDefaultDataPool()
-	_ = gateway.Listen(context.Background(), nil)
+	_, _, _ = gateway.Listen(context.Background())
 	tickCh := gateway.TickCh()
 	orderReportCh := gateway.OrderCh()
 

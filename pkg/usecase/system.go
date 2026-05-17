@@ -5,8 +5,10 @@ import (
 	"fmt"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // SystemUseCase はシステムの起動時・終了時のライフサイクル処理を行うユースケースです
@@ -56,8 +58,8 @@ func (s *SystemUseCase) Initialize(ctx context.Context) error {
 }
 
 // Listen は市場ゲートウェイのストリーミングを開始します
-func (s *SystemUseCase) Listen(ctx context.Context, handler market.MarketStreamHandler) error {
-	return s.gateway.Listen(ctx, handler)
+func (s *SystemUseCase) Listen(ctx context.Context) (map[string]<-chan tick.Tick, map[string]<-chan order.Orders, error) {
+	return s.gateway.Listen(ctx)
 }
 
 // Shutdown はシステム終了時のポジション全決済と銘柄の全解除を行います
