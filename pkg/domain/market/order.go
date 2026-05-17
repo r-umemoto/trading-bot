@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+// InternalState は注文のライフサイクルを管理するBot内部の状態です
+type InternalState int
+
+const (
+	STATE_PREPARING InternalState = iota // 準備中・発注前
+	STATE_PENDING                        // APIへ送信済・受付ID待ち
+	STATE_ACTIVE                         // APIでID確定・板に並んでいる状態
+	STATE_CANCELING                      // キャンセル要求送信済
+	STATE_CLOSED                         // 完了（完全約定、またはキャンセル済）
+)
+
+// IsPending は注文がまだ取引所に到達していない（API受付前）状態かどうかを返します
+func (o *Order) IsPending() bool {
+	return o.InternalState == STATE_PREPARING || o.InternalState == STATE_PENDING
+}
+
 type OrderStatus uint32
 
 const (
@@ -47,8 +63,18 @@ type Order struct {
 
 	CancelSentAt time.Time // 🌟 キャンセル送信時刻（ゾンビ防止用）
 
-	// 疑似約定関連のトラッキング
-	Synthetic SyntheticFillState
+	// 新たに追加する発注パラメータ
+	Exchange           ExchangeMarket
+	SecurityType       SecurityType
+	MarginTradeType    MarginTradeType
+	AccountType        AccountType
+	ClosePositionOrder ClosePositionOrder
+	ClosePositions     []ClosePosition // 指定返済用
+	OrderType          OrderType
+
+	// 内部ステータスと疑似約定のトラッキング
+	InternalState InternalState
+	Synthetic     SyntheticFillState
 }
 
 // SyntheticFillState は疑似約定（Synthetic Fill）の追跡状態を保持します
@@ -64,11 +90,12 @@ func NewOrder(id string, symbol string, action Action, price float64, qty float6
 	return Order{
 		ID:         id,
 		Symbol:     symbol,
-		Action:     action,
-		OrderPrice: price,
-		OrderQty:   qty,
-		Status:     ORDER_STATUS_WAITING,
-		CreatedAt:  time.Now(),
+		Action:        action,
+		OrderPrice:    price,
+		OrderQty:      qty,
+		Status:        ORDER_STATUS_WAITING,
+		InternalState: STATE_PREPARING,
+		CreatedAt:     time.Now(),
 	}
 }
 
@@ -76,11 +103,12 @@ func NewOrderPtr(id string, symbol string, action Action, price float64, qty flo
 	return &Order{
 		ID:         id,
 		Symbol:     symbol,
-		Action:     action,
-		OrderPrice: price,
-		OrderQty:   qty,
-		Status:     ORDER_STATUS_WAITING,
-		CreatedAt:  time.Now(),
+		Action:        action,
+		OrderPrice:    price,
+		OrderQty:      qty,
+		Status:        ORDER_STATUS_WAITING,
+		InternalState: STATE_PREPARING,
+		CreatedAt:     time.Now(),
 	}
 }
 
@@ -136,14 +164,9 @@ func (o *Order) AddExecution(exec Execution) {
 	o.Executions = append(o.Executions, exec)
 }
 
-const PENDING_ID_PREFIX = "PENDING_"
+const LOCAL_ID_PREFIX = "local-"
 
-// GeneratePendingID はAPIからのレスポンス待ちの間に使用する仮のIDを生成します
-func GeneratePendingID() string {
-	return fmt.Sprintf("%s%d", PENDING_ID_PREFIX, time.Now().UnixNano())
-}
-
-// IsPendingID は指定されたIDが仮のIDかどうかを判定します
-func IsPendingID(id string) bool {
-	return len(id) >= len(PENDING_ID_PREFIX) && id[:len(PENDING_ID_PREFIX)] == PENDING_ID_PREFIX
+// GenerateLocalID はAPIからのレスポンス待ちの間に使用するローカル専用の仮IDを生成します
+func GenerateLocalID() string {
+	return fmt.Sprintf("%s%d", LOCAL_ID_PREFIX, time.Now().UnixNano())
 }

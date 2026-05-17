@@ -59,21 +59,19 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 				action = market.ACTION_BUY
 			}
 
-			req := market.OrderRequest{
-				Symbol:             pos.Symbol,
-				Exchange:           pos.Exchange,
-				SecurityType:       market.SECURITY_TYPE_STOCK,
-				Action:             action,
-				MarginTradeType:    pos.TradeType,
-				AccountType:        pos.AccountType,
-				ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
-				OrderType:          market.ORDER_TYPE_MARKET,
-				Qty:                pos.LeavesQty,
-				Price:              0,
-			}
-			if _, err := c.marketGateway.SendOrder(ctx, req); err != nil {
+			order := market.NewOrderPtr(market.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
+			order.Exchange = pos.Exchange
+			order.SecurityType = market.SECURITY_TYPE_STOCK
+			order.MarginTradeType = pos.TradeType
+			order.AccountType = pos.AccountType
+			order.ClosePositionOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
+			order.OrderType = market.ORDER_TYPE_MARKET
+
+			updatedOrder, err := c.marketGateway.SendOrder(ctx, *order)
+			if err != nil {
 				return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.Symbol, err)
 			}
+			*order = updatedOrder
 			cleaned = true
 		}
 	}
@@ -146,21 +144,19 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 
 					fmt.Printf("🔥 成行で強制決済を試みます: %s (%s)\n", pos.Symbol, action)
 
-					req := market.OrderRequest{
-						Symbol:             pos.Symbol,
-						Exchange:           pos.Exchange,
-						SecurityType:       market.SECURITY_TYPE_STOCK,
-						Action:             action,
-						MarginTradeType:    pos.TradeType,
-						AccountType:        pos.AccountType,
-						ClosePositionOrder: market.CLOSE_POSITION_ASC_DAY_DEC_PL,
-						OrderType:          market.ORDER_TYPE_MARKET,
-						Qty:                pos.LeavesQty,
-						Price:              0,
-					}
-					_, err := c.marketGateway.SendOrder(ctx, req)
+					order := market.NewOrderPtr(market.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
+					order.Exchange = pos.Exchange
+					order.SecurityType = market.SECURITY_TYPE_STOCK
+					order.MarginTradeType = pos.TradeType
+					order.AccountType = pos.AccountType
+					order.ClosePositionOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
+					order.OrderType = market.ORDER_TYPE_MARKET
+
+					updatedOrder, err := c.marketGateway.SendOrder(ctx, *order)
 					if err != nil {
 						fmt.Printf("❌ [%s] 強送決済エラー: %v\n", pos.Symbol, err)
+					} else {
+						*order = updatedOrder
 					}
 					// 🌟 連射を避けるために少し待機
 					time.Sleep(200 * time.Millisecond)

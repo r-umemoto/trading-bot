@@ -106,14 +106,14 @@ func RunBacktest() error {
 			report := <-orderReportCh
 			for _, s := range snipers {
 				// 🌟 修正: SyncOrders から戻る IFD 発注要求を処理する
-				ifdOrderPtr, ifdReq, _ := s.SyncOrders(report.Orders)
-				if ifdReq != nil {
-					fmt.Printf("🚀 [%s] SyncOrders経由でIFD決済注文を送信します: %s %.2f株\n", s.Detail.Code, ifdReq.Action, ifdReq.Qty)
-					orderID, err := gateway.SendOrder(context.Background(), *ifdReq)
+				ifdOrderPtr, _ := s.SyncOrders(report.Orders)
+				if ifdOrderPtr != nil {
+					fmt.Printf("🚀 [%s] SyncOrders経由でIFD決済注文を送信します: %s %.2f株\n", s.Detail.Code, ifdOrderPtr.Action, ifdOrderPtr.OrderQty)
+					updatedOrder, err := gateway.SendOrder(context.Background(), *ifdOrderPtr)
 					if err != nil {
 						s.FailSendingOrder(ifdOrderPtr)
 					} else {
-						s.ConfirmOrder(ifdOrderPtr, orderID)
+						*ifdOrderPtr = updatedOrder
 					}
 				}
 			}
@@ -124,7 +124,7 @@ func RunBacktest() error {
 		dataPool.PushTick(t)
 		for _, s := range snipers {
 			if s.Detail.Code == t.Symbol {
-				orderPtr, req, cancelOrderID := s.Tick(dataPool)
+				orderPtr, cancelOrderID := s.Tick(dataPool)
 
 				if cancelOrderID != "" {
 					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", cancelOrderID)
@@ -132,12 +132,12 @@ func RunBacktest() error {
 					continue
 				}
 
-				if req != nil {
-					orderID, err := gateway.SendOrder(context.Background(), *req)
+				if orderPtr != nil {
+					updatedOrder, err := gateway.SendOrder(context.Background(), *orderPtr)
 					if err != nil {
 						s.FailSendingOrder(orderPtr)
 					} else {
-						s.ConfirmOrder(orderPtr, orderID)
+						*orderPtr = updatedOrder
 					}
 				}
 			}
@@ -159,13 +159,13 @@ func RunBacktest() error {
 				for len(orderReportCh) > 0 {
 					report := <-orderReportCh
 					for _, s := range snipers {
-						ifdOrderPtr, ifdReq, _ := s.SyncOrders(report.Orders)
-						if ifdReq != nil {
-							orderID, err := gateway.SendOrder(context.Background(), *ifdReq)
+						ifdOrderPtr, _ := s.SyncOrders(report.Orders)
+						if ifdOrderPtr != nil {
+							updatedOrder, err := gateway.SendOrder(context.Background(), *ifdOrderPtr)
 							if err != nil {
 								s.FailSendingOrder(ifdOrderPtr)
 							} else {
-								s.ConfirmOrder(ifdOrderPtr, orderID)
+								*ifdOrderPtr = updatedOrder
 							}
 						}
 					}

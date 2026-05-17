@@ -53,37 +53,37 @@ func (m *MarketGateway) Start(ctx context.Context) (<-chan market.Tick, <-chan m
 }
 
 // SendOrder は market.MarketGateway (Orderer) の実装です
-func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
+func (m *MarketGateway) SendOrder(ctx context.Context, order market.Order) (market.Order, error) {
 	side := api.SIDE_SELL
-	if req.Action == market.ACTION_BUY {
+	if order.Action == market.ACTION_BUY {
 		side = api.SIDE_BUY
 	}
 
 	cashMargin := 2 // デフォルトは「新規」
-	if req.ClosePositionOrder != market.CLOSE_POSITION_ORDER_NONE || len(req.ClosePositions) > 0 {
+	if order.ClosePositionOrder != market.CLOSE_POSITION_ORDER_NONE || len(order.ClosePositions) > 0 {
 		cashMargin = 3 // 返済指示があれば「返済」
 	}
 
 	AccountType := 0
-	switch req.AccountType {
+	switch order.AccountType {
 	case market.ACCOUNT_SPECIAL:
 		AccountType = 4
 	}
 	if AccountType == 0 {
-		return "", fmt.Errorf("口座種別が不正です")
+		return order, fmt.Errorf("口座種別が不正です")
 	}
 
 	securityType := 0
-	switch req.SecurityType {
+	switch order.SecurityType {
 	case market.SECURITY_TYPE_STOCK:
 		securityType = 1
 	}
 	if securityType == 0 {
-		return "", fmt.Errorf("商品が不正です")
+		return order, fmt.Errorf("商品が不正です")
 	}
 
 	tradeType := 0
-	switch req.MarginTradeType {
+	switch order.MarginTradeType {
 	case market.TRADE_TYPE_SYSTEM:
 		tradeType = 1
 	case market.TRADE_TYPE_GENERAL:
@@ -92,22 +92,22 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 		tradeType = 3
 	}
 	if tradeType == 0 {
-		return "", fmt.Errorf("取引種別が不正です (MarginTradeType: %d)", req.MarginTradeType)
+		return order, fmt.Errorf("取引種別が不正です (MarginTradeType: %d)", order.MarginTradeType)
 	}
 
 	orderType := 0
-	switch req.OrderType {
+	switch order.OrderType {
 	case market.ORDER_TYPE_MARKET:
 		orderType = 10
 	case market.ORDER_TYPE_LIMIT:
 		orderType = 20
 	}
 	if orderType == 0 {
-		return "", fmt.Errorf("注文種別が不正です")
+		return order, fmt.Errorf("注文種別が不正です")
 	}
 
 	deliverType := 0
-	switch req.Action {
+	switch order.Action {
 	case market.ACTION_BUY:
 		if cashMargin == 1 {
 			deliverType = 2
@@ -120,7 +120,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 
 	// APIへリクエスト
 	var closePositions []api.ClosePosition
-	for _, cp := range req.ClosePositions {
+	for _, cp := range order.ClosePositions {
 		closePositions = append(closePositions, api.ClosePosition{
 			HoldID: cp.HoldID,
 			Qty:    cp.Qty,
@@ -128,23 +128,23 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 	}
 
 	var closePositionOrder *int32
-	if len(closePositions) == 0 && req.ClosePositionOrder != market.CLOSE_POSITION_ORDER_NONE {
-		val := int32(req.ClosePositionOrder)
+	if len(closePositions) == 0 && order.ClosePositionOrder != market.CLOSE_POSITION_ORDER_NONE {
+		val := int32(order.ClosePositionOrder)
 		closePositionOrder = &val
 	}
 
 	kabReq := api.OrderRequest{
-		Symbol:             req.Symbol,
-		Exchange:           m.toKabuExchageType(req.Exchange),
+		Symbol:             order.Symbol,
+		Exchange:           m.toKabuExchageType(order.Exchange),
 		SecurityType:       securityType,
 		Side:               string(side),
 		CashMargin:         cashMargin,
 		MarginTradeType:    tradeType,
 		AccountType:        AccountType,
 		ExpireDay:          0,
-		Qty:                req.Qty,
+		Qty:                order.OrderQty,
 		FrontOrderType:     int32(orderType),
-		Price:              req.Price,
+		Price:              order.OrderPrice,
 		DelivType:          int32(deliverType),
 		ClosePositionOrder: closePositionOrder,
 		ClosePositions:     closePositions,
@@ -154,10 +154,14 @@ func (m *MarketGateway) SendOrder(ctx context.Context, req market.OrderRequest) 
 
 	resp, err := m.client.SendOrder(kabReq)
 	if err != nil {
-		return "", fmt.Errorf("カブコムAPI発注失敗: %w", err)
+		return order, fmt.Errorf("カブコムAPI発注失敗: %w", err)
 	}
 
-	return resp.OrderId, nil
+	order.ID = resp.OrderId
+	order.Status = market.ORDER_STATUS_WAITING
+	order.InternalState = market.STATE_ACTIVE // API送信成功・受付完了としてACTIVEへ遷移
+
+	return order, nil
 }
 
 // CancelOrder は market.MarketGateway (Orderer) の実装です

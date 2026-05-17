@@ -228,33 +228,33 @@ func (g *SyncBacktestGateway) walkTheBook(action market.Action, qty float64, lim
 	return totalValue / filledQty, filledQty
 }
 
-func (g *SyncBacktestGateway) SendOrder(ctx context.Context, req market.OrderRequest) (string, error) {
+func (g *SyncBacktestGateway) SendOrder(ctx context.Context, order market.Order) (market.Order, error) {
 	g.orderIdx++
 	orderID := fmt.Sprintf("bt_order_%d", g.orderIdx)
-	order := market.NewOrderPtr(orderID, req.Symbol, req.Action, req.Price, req.Qty)
-	order.HasIFD = req.HasIFD
-	order.IFDAction = req.IFDAction
-	order.IFDPrice = req.IFDPrice
-	order.IFDOrderType = req.IFDOrderType
+	
+	order.ID = orderID
+	order.Status = market.ORDER_STATUS_WAITING
+	order.InternalState = market.STATE_ACTIVE // API送信成功・受付完了としてACTIVEへ遷移
 
-	g.orders[orderID] = order
+	storedOrder := order // 🌟 ポインタ共有を避けるためコピーを保存
+	g.orders[orderID] = &storedOrder
 	g.orderKeys = append(g.orderKeys, orderID)
-	g.orderTypes[orderID] = req.OrderType
+	g.orderTypes[orderID] = order.OrderType
 
 	// ボリュームベース約定用の初期情報を記録
 	if g.Model == ExecutionModelVolume {
 		depth := 0.0
-		if lastTick, ok := g.lastTicks[req.Symbol]; ok {
-			if req.Action == market.ACTION_BUY {
+		if lastTick, ok := g.lastTicks[order.Symbol]; ok {
+			if order.Action == market.ACTION_BUY {
 				for _, q := range lastTick.BuyBoard {
-					if q.Price == req.Price {
+					if q.Price == order.OrderPrice {
 						depth = q.Qty
 						break
 					}
 				}
 			} else {
 				for _, q := range lastTick.SellBoard {
-					if q.Price == req.Price {
+					if q.Price == order.OrderPrice {
 						depth = q.Qty
 						break
 					}
@@ -265,7 +265,7 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, req market.OrderReq
 		g.cumulativeVolumes[orderID] = 0
 	}
 
-	return orderID, nil
+	return order, nil
 }
 
 func (g *SyncBacktestGateway) CancelOrder(ctx context.Context, orderID string) error {

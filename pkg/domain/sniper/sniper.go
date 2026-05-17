@@ -75,7 +75,7 @@ func NewSniper(detail market.Symbol, strategy Strategy, policy strategy.Executio
 }
 
 // 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderRequest, string) {
+func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, string) {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
@@ -88,7 +88,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 
 	// すでにキルスイッチが作動（撤収中）なら、価格更新はすべて無視！
 	if s.isExiting {
-		return nil, nil, ""
+		return nil, ""
 	}
 
 	// 1. 管理対象の注文を特定する（アクションに合わせた注文を抽出）
@@ -107,11 +107,12 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	}
 
 	// 1.5 疑似約定 (Synthetic Fill) の判定 (両方の注文に対して実施)
+	// PENDING（送信待ち/API受付待ち）の注文は板に並んでいないため疑似約定判定から除外する
 	if s.ExecutionPolicy != nil {
-		if activeBuyOrder != nil && !market.IsPendingID(activeBuyOrder.ID) {
+		if activeBuyOrder != nil && !activeBuyOrder.IsPending() {
 			s.ExecutionPolicy.ApplySyntheticFill(activeBuyOrder, state.LatestTick)
 		}
-		if activeSellOrder != nil && !market.IsPendingID(activeSellOrder.ID) {
+		if activeSellOrder != nil && !activeSellOrder.IsPending() {
 			s.ExecutionPolicy.ApplySyntheticFill(activeSellOrder, state.LatestTick)
 		}
 	}
@@ -164,14 +165,14 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 	// すでに注文が出ている場合
 	if activeOrder != nil {
 		// IDがまだ確定していない（PENDING）場合は、次のアクションを起こさず待機
-		if market.IsPendingID(activeOrder.ID) {
-			return nil, nil, ""
+		if activeOrder.IsPending() {
+			return nil, ""
 		}
 
 		// すでにキャンセル送信済みの場合は、その確定を待つ
 		if activeOrder.Status == market.ORDER_STATUS_CANCEL_SENT {
 			// ここに来るということは、上記のループで skip されなかった場合（二重キャンセル防止など）
-			return nil, nil, ""
+			return nil, ""
 		}
 
 		// 現在の注文が戦略の意図（シグナル）と一致しているかチェック
@@ -185,27 +186,27 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 			// 【重要】疑似約定済みの場合は、キャンセルを禁止して約定確定を待つ
 			// これにより、価格の微細な変化による「キャンセル・再発注スパムループ」を防止する
 			if activeOrder.Status == market.ORDER_STATUS_FILL_EXPECTED {
-				return nil, nil, ""
+				return nil, ""
 			}
 
 			fmt.Printf("🔄 [%s] 意図と異なる注文(%s: %s@%.1f)をキャンセル要求します (Signal: %s@%.1f, Qty: %.1f)\n",
 				s.Detail.Code, activeOrder.ID, activeOrder.Action, activeOrder.OrderPrice, signal.Action, signal.Price, signal.Quantity)
 			activeOrder.Status = market.ORDER_STATUS_CANCEL_SENT
 			activeOrder.CancelSentAt = time.Now()
-			return nil, nil, activeOrder.ID
+			return nil, activeOrder.ID
 		}
 
 		// 一致している場合は維持
-		return nil, nil, ""
+		return nil, ""
 	}
 
 	if signal.Action == brain.ACTION_HOLD {
-		return nil, nil, ""
+		return nil, ""
 	}
 
 	marketAction, err := signal.Action.ToMarketAction()
 	if err != nil {
-		return nil, nil, ""
+		return nil, ""
 	}
 
 	// --- 5. 新規発注フェーズ ---
@@ -225,9 +226,9 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 						continue
 					}
 					// キャンセルがAPI側で確定するのを待つ
-					return nil, nil, ""
+					return nil, ""
 				}
-				return nil, nil, ""
+				return nil, ""
 			}
 		}
 	}
@@ -274,43 +275,30 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		hasIFD = true
 	}
 
-	req := &market.OrderRequest{
-		Symbol:             s.Detail.Code,
-		Exchange:           s.Exchange,
-		SecurityType:       market.SECURITY_TYPE_STOCK,
-		Action:             marketAction,
-		MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
-		AccountType:        market.ACCOUNT_SPECIAL,
-		OrderType:          orderType,
-		ClosePositionOrder: closeOrder,
-		ClosePositions:     closePositions,
-		Qty:                signal.Quantity,
-		Price:              signal.Price,
-		HasIFD:             hasIFD,
-		IFDAction:          marketIFDAction,
-		IFDPrice:           ifDoneSignal.Price,
-		IFDOrderType:       ifDoneSignal.OrderType,
-	}
+	// Order を作成する
+	ptr := market.NewOrderPtr(market.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
+	ptr.InternalState = market.STATE_PENDING // 🌟 作成後は送信待ちとなるため PENDING に設定
+	ptr.Exchange = s.Exchange
+	ptr.SecurityType = market.SECURITY_TYPE_STOCK
+	ptr.MarginTradeType = market.TRADE_TYPE_GENERAL_DAY
+	ptr.AccountType = market.ACCOUNT_SPECIAL
+	ptr.OrderType = orderType
+	ptr.ClosePositionOrder = closeOrder
+	ptr.ClosePositions = closePositions
+	
+	ptr.HasIFD = hasIFD
+	ptr.IFDAction = marketIFDAction
+	ptr.IFDPrice = ifDoneSignal.Price
+	ptr.IFDOrderType = ifDoneSignal.OrderType
 
-	// 仮IDで管理リストに追加
-	ptr := market.NewOrderPtr(market.GeneratePendingID(), req.Symbol, req.Action, req.Price, req.Qty)
 	ptr.CreatedAt = state.LatestTick.CurrentPriceTime // 🌟 約定レイテンシ計算のためにTick時刻に合わせる
-	ptr.HasIFD = req.HasIFD
-	ptr.IFDAction = req.IFDAction
-	ptr.IFDPrice = req.IFDPrice
-	ptr.IFDOrderType = req.IFDOrderType
+	
 	s.Orders = append(s.Orders, ptr)
 
-	return ptr, req, ""
+	return ptr, ""
 }
 
-// ConfirmOrder は、ユースケースが発注を完了した後に呼ばれ、仮注文のIDを正式なAPIのIDで更新します
-func (s *Sniper) ConfirmOrder(order *market.Order, realID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	order.ID = realID
-}
+// ConfirmOrder は廃止されました (Gateway がポインタを直接更新するため不要)
 
 func (s *Sniper) cleanupZombiesLocked() {
 	for i := 0; i < len(s.Orders); i++ {
@@ -319,9 +307,9 @@ func (s *Sniper) cleanupZombiesLocked() {
 			continue
 		}
 
-		// 1. PENDING (仮ID) のタイムアウト (30秒)
-		// 発注要求から30秒経ってもIDが確定しない場合は、通信失敗やAPIの受付拒否とみなす
-		if market.IsPendingID(o.ID) {
+		// 1. PENDING (API受付待ち) のタイムアウト (30秒)
+		// 発注要求から30秒経っても確定しない場合は、通信失敗やAPIの受付拒否とみなす
+		if o.IsPending() {
 			if time.Since(o.CreatedAt) > 30*time.Second {
 				fmt.Printf("⚠️ [%s] PENDING注文がタイムアウト(30s)したため削除します: %s\n", s.Detail.Code, o.ID)
 				s.Orders = append(s.Orders[:i], s.Orders[i+1:]...)
@@ -449,7 +437,7 @@ func (s *Sniper) CalcUnrealizedPnL(currentPrice float64) float64 {
 }
 
 // SyncOrders はインフラ層から取得した最新の注文一覧と同期し、内部状態を「事実」に合わせます
-func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *market.OrderRequest, string) {
+func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -460,15 +448,15 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 	// 新しい管理リストを作成（事実ベースで再構築）
 	var reconciledOrders []*market.Order
 
-	// 1. IDが未確定（PENDING）または未完了の注文をまず保持する
+	// 1. InternalState が未確定（PENDING/PREPARING）または未完了の注文をまず保持する
 	// APIの一覧に反映されるまでのタイムラグによる注文消失（および再発注スパム）を防ぐため。
 	for _, o := range s.Orders {
-		if market.IsPendingID(o.ID) {
+		if o.IsPending() {
 			// 仮ID（PENDING）はAPI未達の可能性があるため、30秒間は無条件で保持する
 			if time.Since(o.CreatedAt) < 30*time.Second {
 				reconciledOrders = append(reconciledOrders, o)
 			} else {
-				fmt.Printf("🗑️ [%s] APIに30秒以上現れない仮ID(%s)をOrdersから削除します\n", s.Detail.Code, o.ID)
+				fmt.Printf("🗑️ [%s] APIに30秒以上現れない送信中注文(%s)をOrdersから削除します\n", s.Detail.Code, o.ID)
 			}
 		} else if !o.IsCompleted() {
 			// 既にIDが確定している未完了注文は、APIの瞬断に備えて一旦リストに残す
@@ -501,6 +489,9 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 		// 状態の同期
 		matchedInternal.Status = ext.Status
 		matchedInternal.CumQty = ext.CumQty
+		if matchedInternal.IsPending() {
+			matchedInternal.InternalState = market.STATE_ACTIVE // API側に存在することが確認できたらACTIVEへ遷移
+		}
 
 		// 約定の反映
 		for _, exec := range ext.Executions {
@@ -533,7 +524,6 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 
 	// 3. IFDの発火処理
 	var ifdPendingOrder *market.Order
-	var ifdRequest *market.OrderRequest
 	if newExecQty > 0 && triggeredIFDParent != nil && triggeredIFDParent.HasIFD {
 		fmt.Printf("⚡ [%s] IFD発火: %.2f株の約定に伴い、決済注文を発注します\n", s.Detail.Code, newExecQty)
 
@@ -552,26 +542,21 @@ func (s *Sniper) SyncOrders(externalOrders []market.Order) (*market.Order, *mark
 			closeOrder = market.CLOSE_POSITION_ASC_DAY_DEC_PL
 		}
 
-		ifdRequest = &market.OrderRequest{
-			Symbol:             s.Detail.Code,
-			Exchange:           s.Exchange,
-			SecurityType:       market.SECURITY_TYPE_STOCK,
-			Action:             triggeredIFDParent.IFDAction,
-			MarginTradeType:    market.TRADE_TYPE_GENERAL_DAY,
-			AccountType:        market.ACCOUNT_SPECIAL,
-			OrderType:          triggeredIFDParent.IFDOrderType,
-			ClosePositionOrder: closeOrder,
-			ClosePositions:     closePositions,
-			Qty:                newExecQty,
-			Price:              triggeredIFDParent.IFDPrice,
-			HasIFD:             false,
-		}
+		ifdPendingOrder = market.NewOrderPtr(market.GenerateLocalID(), s.Detail.Code, triggeredIFDParent.IFDAction, triggeredIFDParent.IFDPrice, newExecQty)
+		ifdPendingOrder.InternalState = market.STATE_PENDING
+		ifdPendingOrder.Exchange = s.Exchange
+		ifdPendingOrder.SecurityType = market.SECURITY_TYPE_STOCK
+		ifdPendingOrder.MarginTradeType = market.TRADE_TYPE_GENERAL_DAY
+		ifdPendingOrder.AccountType = market.ACCOUNT_SPECIAL
+		ifdPendingOrder.OrderType = triggeredIFDParent.IFDOrderType
+		ifdPendingOrder.ClosePositionOrder = closeOrder
+		ifdPendingOrder.ClosePositions = closePositions
+		ifdPendingOrder.HasIFD = false
 
-		ifdPendingOrder = market.NewOrderPtr(market.GeneratePendingID(), ifdRequest.Symbol, ifdRequest.Action, ifdRequest.Price, ifdRequest.Qty)
 		s.Orders = append(s.Orders, ifdPendingOrder)
 	}
 
-	return ifdPendingOrder, ifdRequest, ""
+	return ifdPendingOrder, ""
 }
 
 func (s *Sniper) applyExecution(exec market.Execution, action market.Action, orderCreatedAt time.Time) {

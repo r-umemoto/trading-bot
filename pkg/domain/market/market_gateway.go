@@ -38,7 +38,7 @@ type MarketGateway interface {
 	// Start は市場との接続を開始し、リアルタイム情報の受信を開始します
 	Start(ctx context.Context) (<-chan Tick, <-chan OrdersReport, error)
 
-	SendOrder(ctx context.Context, req OrderRequest) (string, error) // 戻り値は受付OrderID
+	SendOrder(ctx context.Context, order Order) (Order, error) // 引数で渡されたOrderにIDとStatusを書き込んだ新しいOrderを返す
 	CancelOrder(ctx context.Context, orderID string) error
 	GetPositions(ctx context.Context, product ProductType) ([]Position, error)
 	GetOrders(ctx context.Context) ([]Order, error)

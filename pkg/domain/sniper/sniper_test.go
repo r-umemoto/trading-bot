@@ -24,13 +24,13 @@ func TestSniper_SyncOrders(t *testing.T) {
 	s := NewSniper(detail, &MockStrategy{}, policy, market.EXCHANGE_TOSHO, nil)
 
 	// 1. 注文を発注した直後の状態（PENDING ID）
-	pendingID := market.GeneratePendingID()
+	pendingID := market.GenerateLocalID()
 	internalOrder := market.NewOrderPtr(pendingID, "9434", market.ACTION_BUY, 2000, 100)
 	s.Orders = append(s.Orders, internalOrder)
 
-	// 2. 取引所から正式なIDが割り当てられたことを反映する
+	// 2. 取引所から正式なIDが割り当てられたことを反映する (Gatewayが行う処理のモック)
 	realID := "order-123"
-	s.ConfirmOrder(internalOrder, realID)
+	internalOrder.ID = realID
 
 	// 内部の注文IDが更新されているか確認
 	if internalOrder.ID != realID {
