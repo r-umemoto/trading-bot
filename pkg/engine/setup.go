@@ -12,7 +12,6 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/config"
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
-	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
@@ -47,10 +46,11 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	}
 
 	tradeUC := usecase.NewTradeUseCase(snipers, gateway, dataPool)
-	cleaner := service.NewPositionCleaner(snipers, gateway)
+	systemUC := usecase.NewSystemUseCase(snipers, gateway)
+	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
 	// 5. エンジンの完成
-	return NewEngine(gateway, tradeUC, cleaner), nil
+	return NewEngine(gateway, handler), nil
 }
 
 // ---------------------------------------------------------
