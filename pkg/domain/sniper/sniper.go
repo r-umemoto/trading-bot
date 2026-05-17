@@ -3,7 +3,6 @@ package sniper
 import (
 	"fmt"
 	"log/slog"
-	"math"
 	"sync"
 	"time"
 
@@ -178,20 +177,7 @@ func (s *Sniper) Tick(dataPool market.DataPool) (*market.Order, *market.OrderReq
 		// 現在の注文が戦略の意図（シグナル）と一致しているかチェック
 		isStillDesired := false
 		if signal.Action != brain.ACTION_HOLD {
-			marketAction, _ := signal.Action.ToMarketAction()
-			// 方向・数量が一致しているか
-			if activeOrder.Action == marketAction && activeOrder.OrderQty == signal.Quantity {
-				// 意図が成行（Price=0）で現在の注文も成行（OrderPrice=0）の場合
-				if signal.Price == 0 && activeOrder.OrderPrice == 0 {
-					isStillDesired = true
-				} else if signal.Price > 0 && activeOrder.OrderPrice > 0 {
-					// 指値の場合は、戦略が指定した価格と【完全に一致】しているかチェック
-					// （※float64の微小な誤差を考慮して 0.0001 未満の差なら一致とみなす）
-					if math.Abs(activeOrder.OrderPrice-signal.Price) < 0.0001 {
-						isStillDesired = true
-					}
-				}
-			}
+			isStillDesired = s.ExecutionPolicy.IsOrderDesired(activeOrder, signal, s.Detail)
 		}
 
 		// 意図と異なる、または HOLD になった場合はキャンセルを要求

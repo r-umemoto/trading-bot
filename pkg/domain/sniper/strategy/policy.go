@@ -2,14 +2,19 @@ package strategy
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 )
 
 // ExecutionPolicy は疑似約定（Synthetic Fill）の判定ロジックを定義するインターフェースです
 type ExecutionPolicy interface {
 	ApplySyntheticFill(order *market.Order, tick market.Tick)
+	// IsOrderDesired は、現在の注文が戦略の意図（sig）と実質的に一致しているか（維持すべきか）を判定します。
+	// これにより、微細な価格変化によるキャンセル・再発注のスパムを抑制します。
+	IsOrderDesired(order *market.Order, sig brain.Signal, symbol market.Symbol) bool
 }
 
 // TouchTTLPolicy は、価格が同値にタッチした瞬間に疑似約定と見なしますが、
@@ -53,6 +58,10 @@ func (p *TouchTTLPolicy) ApplySyntheticFill(order *market.Order, tick market.Tic
 	}
 }
 
+func (p *TouchTTLPolicy) IsOrderDesired(order *market.Order, sig brain.Signal, symbol market.Symbol) bool {
+	return isOrderDesiredDefault(order, sig, symbol)
+}
+
 // StrictPiercePolicy は、価格が完全に指値を貫通（< または >）した時のみ疑似約定と見なします。
 // タッチしただけでは疑似約定としません。
 type StrictPiercePolicy struct{}
@@ -74,6 +83,10 @@ func (p *StrictPiercePolicy) ApplySyntheticFill(order *market.Order, tick market
 			}
 		}
 	}
+}
+
+func (p *StrictPiercePolicy) IsOrderDesired(order *market.Order, sig brain.Signal, symbol market.Symbol) bool {
+	return isOrderDesiredDefault(order, sig, symbol)
 }
 
 // VolumeConsumptionPolicy は、板の厚み（待ち行列）と出来高の消化量に基づいて約定を推測します。
@@ -126,32 +139,36 @@ func (p *VolumeConsumptionPolicy) ApplySyntheticFill(order *market.Order, tick m
 		}
 		order.Synthetic.LastVolumeUpdate = tick.TradingVolume
 
-	// 消化量が閾値（自分の順番）を超えたかチェック
-	if order.Status != market.ORDER_STATUS_FILL_EXPECTED {
-		threshold := order.Synthetic.InitialQueueQty * p.QueueOffsetRatio
-		if order.Synthetic.ConsumedVolume >= threshold {
-			order.Status = market.ORDER_STATUS_FILL_EXPECTED
-			order.Synthetic.ExpectedAt = tick.CurrentPriceTime
-			if order.Synthetic.ExpectedAt.IsZero() {
-				order.Synthetic.ExpectedAt = time.Now()
+		// 消化量が閾値（自分の順番）を超えたかチェック
+		if order.Status != market.ORDER_STATUS_FILL_EXPECTED {
+			threshold := order.Synthetic.InitialQueueQty * p.QueueOffsetRatio
+			if order.Synthetic.ConsumedVolume >= threshold {
+				order.Status = market.ORDER_STATUS_FILL_EXPECTED
+				order.Synthetic.ExpectedAt = tick.CurrentPriceTime
+				if order.Synthetic.ExpectedAt.IsZero() {
+					order.Synthetic.ExpectedAt = time.Now()
+				}
+				fmt.Printf("⚡ [%s] 疑似約定(出来高消化)を検知しました: %s (Consumed: %.0f / Queue: %.0f)\n",
+					order.Symbol, order.ID, order.Synthetic.ConsumedVolume, order.Synthetic.InitialQueueQty)
 			}
-			fmt.Printf("⚡ [%s] 疑似約定(出来高消化)を検知しました: %s (Consumed: %.0f / Queue: %.0f)\n",
-				order.Symbol, order.ID, order.Synthetic.ConsumedVolume, order.Synthetic.InitialQueueQty)
+		} else {
+			// すでに疑似約定状態：安全のためのタイムアウト（2秒など）
+			elapsed := tick.CurrentPriceTime.Sub(order.Synthetic.ExpectedAt)
+			if elapsed > 2*time.Second {
+				order.Status = market.ORDER_STATUS_WAITING
+				order.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
+				fmt.Printf("💔 [%s] 疑似約定(出来高)がタイムアウトしました（幻の約定）: %s\n", order.Symbol, order.ID)
+			}
 		}
 	} else {
-		// すでに疑似約定状態：安全のためのタイムアウト（2秒など）
-		// 出来高で確信していても、一定時間公式通知が来ない場合は「幻」とみなして解除する
-		elapsed := tick.CurrentPriceTime.Sub(order.Synthetic.ExpectedAt)
-		if elapsed > 2*time.Second {
-			order.Status = market.ORDER_STATUS_WAITING
-			order.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
-			fmt.Printf("💔 [%s] 疑似約定(出来高)がタイムアウトしました（幻の約定）: %s\n", order.Symbol, order.ID)
-		}
+		// 価格が離れている間も、総出来高の同期だけは維持する
+		order.Synthetic.LastVolumeUpdate = tick.TradingVolume
 	}
-} else {
-	// 価格が離れている間も、総出来高の同期だけは維持する
-	order.Synthetic.LastVolumeUpdate = tick.TradingVolume
 }
+
+func (p *VolumeConsumptionPolicy) IsOrderDesired(order *market.Order, sig brain.Signal, symbol market.Symbol) bool {
+	// スキャルピング等の高頻度戦略を想定し、1ティック以内の変化なら維持する
+	return isOrderDesiredDefault(order, sig, symbol)
 }
 
 // NoopPolicy は疑似約定判定を一切行いません（Observer戦略など向け）。
@@ -159,4 +176,30 @@ type NoopPolicy struct{}
 
 func (p *NoopPolicy) ApplySyntheticFill(order *market.Order, tick market.Tick) {
 	// 何もしない
+}
+
+func (p *NoopPolicy) IsOrderDesired(order *market.Order, sig brain.Signal, symbol market.Symbol) bool {
+	// 常に再判定を促す（実質的に利用されない）
+	return false
+}
+
+// --- ヘルパー関数 ---
+
+// isOrderDesiredDefault は「方向・数量が一致」かつ「価格差が1ティック以内」なら維持とみなすデフォルト判定です。
+func isOrderDesiredDefault(order *market.Order, sig brain.Signal, symbol market.Symbol) bool {
+	marketAction, _ := sig.Action.ToMarketAction()
+	if order.Action != marketAction || order.OrderQty != sig.Quantity {
+		return false
+	}
+
+	// 指値価格の比較
+	if sig.Price > 0 && order.OrderPrice > 0 {
+		diff := math.Abs(order.OrderPrice - sig.Price)
+		tickSize := symbol.CalcTickSize(order.OrderPrice)
+		// 1ティック以内なら維持 (浮動小数点の誤差を考慮して少しマージンを持たせる)
+		return diff <= (tickSize + 0.0001)
+	}
+
+	// 成行同士（Price=0）なら一致
+	return sig.Price == 0 && order.OrderPrice == 0
 }
