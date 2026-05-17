@@ -21,10 +21,13 @@ type Strategy interface {
 	AnalysisLogger() *slog.Logger // 🌟 解析用ロガーを取得
 }
 
-// ★ スナイパー内で定義する「オプショナルな機能」の規格
-type KillSwitchable interface {
-	Activate() brain.Signal
-}
+type LifecycleState int
+
+const (
+	LifecycleActive LifecycleState = iota // 平常運転：エントリー(ENTRY)・決済(EXIT)の両方を許可
+	LifecycleExiting                       // 撤収中：新規注文は禁止、保有建玉の決済(EXIT)のみ許可（強制決済誘導）
+	LifecycleStopped                      // 完全停止：すべての発注・キャンセル処理を遮断（価格更新も無視）
+)
 
 // Bullet はスナイパーのアクションの実体（発射される弾丸）をカプセル化したものです
 type Bullet struct {
@@ -62,7 +65,7 @@ type Sniper struct {
 	Orders          []*order.Order
 	Logger          *slog.Logger // 🌟 解析用ロガー
 	mu              sync.Mutex   // 👈 状態をロックするための鍵
-	isExiting       bool         // 👈 撤収作業中かどうかのフラグ
+	lifecycle       LifecycleState // 👈 ライフサイクル状態遷移
 	AccountType     order.AccountType
 	Exchange        order.ExchangeMarket
 	MarginTradeType order.MarginTradeType
@@ -91,6 +94,7 @@ func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.Executio
 		MarginTradeType:     order.TRADE_TYPE_GENERAL_DAY,
 		processedExecutions: make(map[string]bool),
 		Logger:              logger,
+		lifecycle:           LifecycleActive,
 	}
 }
 
@@ -106,8 +110,8 @@ func (s *Sniper) Tick(dataPool tick.DataPool) Bullet {
 	// 0. 呼値を最新の価格に基づいて更新
 	state := dataPool.GetState(s.Detail.Code)
 
-	// すでにキルスイッチが作動（撤収中）なら、価格更新はすべて無視！
-	if s.isExiting {
+	// 完全停止状態なら、すべて無視
+	if s.lifecycle == LifecycleStopped {
 		return Bullet{}
 	}
 
@@ -145,6 +149,29 @@ func (s *Sniper) Tick(dataPool tick.DataPool) Bullet {
 
 	// 4. 戦略の判断を仰ぐ
 	signal := s.Strategy.Evaluate(input)
+
+	// 🌟 ライフサイクルに基づくゲートキーピング（撤収モード時の新規発注抑止および強制決済誘導）
+	if s.lifecycle == LifecycleExiting {
+		holdQty := input.HoldQty()
+		if holdQty == 0 {
+			// ノーポジション時は一切の新規エントリーを禁止
+			signal.Action = brain.ACTION_HOLD
+		} else {
+			// ポジション保有時は、戦略のロジックが何であれ、安全かつ確実にポジションを決済する（成行決済）
+			if holdQty > 0 {
+				signal.Action = brain.ACTION_SELL
+				signal.Price = 0 // 成行
+				signal.Quantity = holdQty
+				signal.Reason = "LIFECYCLE_FORCE_EXIT"
+			} else {
+				signal.Action = brain.ACTION_BUY
+				signal.Price = 0 // 成行
+				signal.Quantity = -holdQty
+				signal.Reason = "LIFECYCLE_FORCE_EXIT"
+			}
+		}
+	}
+
 	if signal.Reason != "" {
 		s.lastSignalReason = signal.Reason
 	}
@@ -365,18 +392,33 @@ func (s *Sniper) FailSendingOrder(ord *order.Order) {
 	}
 }
 
+// OrderlyExit はスナイパーを撤収モードに移行させます。新規エントリーは禁止され、決済のみ許可されます。
+func (s *Sniper) OrderlyExit() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lifecycle = LifecycleExiting
+	s.Logger.Warn("LIFECYCLE_EXIT_TRIGGERED", slog.String("symbol", s.Detail.Code))
+}
+
+// ForceStop はスナイパーを完全停止モードに移行させます。これ以上の処理はすべて遮断されます。
+func (s *Sniper) ForceStop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lifecycle = LifecycleStopped
+	s.Logger.Error("LIFECYCLE_STOP_TRIGGERED", slog.String("symbol", s.Detail.Code))
+}
+
+// GetLifecycle は現在のライフサイクル状態を安全に取得します。
+func (s *Sniper) GetLifecycle() LifecycleState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lifecycle
+}
+
 // ForceExit はキルスイッチ作動時に呼ばれ、自身の未約定注文のキャンセルと成行決済を行います
 func (s *Sniper) ForceExit() {
-	s.mu.Lock()
-	s.isExiting = true // 撤収フラグを立てる！
-	s.mu.Unlock()      // フラグを立てたら、通信で詰まらないように一旦ロック解除
-
-	fmt.Printf("🚨 [%s] 撤収フラグON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Detail.Code)
-
-	// キルスイッチ機能を備えている戦略なら、発動させる
-	if ks, ok := s.Strategy.(KillSwitchable); ok {
-		_ = ks.Activate()
-	}
+	s.ForceStop()
+	fmt.Printf("🚨 [%s] 強制停止モードON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Detail.Code)
 }
 
 // reducePositions は、指定された数量分だけ古い建玉から順に削減し、損益を計算します
