@@ -15,18 +15,16 @@ import (
 type TradeUseCase struct {
 	snipers    []*sniper.Sniper
 	gateway    market.MarketGateway
-	dataPool   tick.DataPool
 	dispatcher *service.OrderDispatcher
 	reporter   *service.PerformanceReporter
 }
 
-func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway, dataPool tick.DataPool) *TradeUseCase {
+func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway) *TradeUseCase {
 	return &TradeUseCase{
 		snipers:    snipers,
 		gateway:    gateway,
-		dataPool:   dataPool,
 		dispatcher: service.NewOrderDispatcher(gateway),
-		reporter:   service.NewPerformanceReporter(snipers, dataPool),
+		reporter:   service.NewPerformanceReporter(snipers, gateway.DataPool()),
 	}
 }
 
@@ -54,12 +52,10 @@ func (u *TradeUseCase) Start(ctx context.Context, ticks map[string]<-chan tick.T
 
 // ExecuteTick は指定された銘柄の価格更新（Tick）を受け取り、同期的にスナイパー戦略を処理・評価します
 func (u *TradeUseCase) ExecuteTick(ctx context.Context, t tick.Tick) {
-	u.dataPool.PushTick(t)
-
 	for _, s := range u.snipers {
 		if s.Detail.Code == t.Symbol {
 			// 1. スナイパーに考えさせる
-			bullet := s.Tick(u.dataPool)
+			bullet := s.Tick()
 
 			// 2. 🌟 直接発注せず、ディスパッチャに委ねる
 			u.dispatcher.Submit(s, bullet)

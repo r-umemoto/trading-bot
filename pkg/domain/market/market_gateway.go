@@ -19,6 +19,9 @@ type MarketGateway interface {
 	// Listen は市場との接続（WebSocket/Polling）を開始し、各銘柄専用のチャネルマップを返します
 	Listen(ctx context.Context) (map[string]<-chan tick.Tick, map[string]<-chan order.Orders, error)
 
+	// DataPool はゲートウェイが内部で保持・更新する時価データプールを取得します
+	DataPool() tick.DataPool
+
 	SendOrder(ctx context.Context, input order.SendOrderInput) (order.Order, error) // 引数で渡されたOrderにIDとStatusを書き込んだ新しいOrderを返す
 	CancelOrder(ctx context.Context, orderID string) error
 	GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error)

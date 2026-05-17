@@ -73,10 +73,11 @@ type Sniper struct {
 	processedExecutions map[string]bool // 🌟 処理済みの約定IDを記録
 	lastSignalReason    string          // 🌟 最新のシグナル理由（分析用）
 	lastStatusLogAt     time.Time       // 🌟 最後にステータスログを出力した時刻
+	dataPool            tick.DataPool   // 👈 データプールへの参照
 }
 
 // NewSniper は新しいスナイパーを生成します
-func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange order.ExchangeMarket, logger *slog.Logger) *Sniper {
+func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange order.ExchangeMarket, logger *slog.Logger, dataPool tick.DataPool) *Sniper {
 	if logger == nil {
 		logger = strategy.AnalysisLogger()
 	}
@@ -95,11 +96,12 @@ func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.Executio
 		processedExecutions: make(map[string]bool),
 		Logger:              logger,
 		lifecycle:           LifecycleActive,
+		dataPool:            dataPool,
 	}
 }
 
 // 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick(dataPool tick.DataPool) Bullet {
+func (s *Sniper) Tick() Bullet {
 	// 処理中は他のゴルーチンが状態を触れないようにロック！
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
@@ -108,7 +110,7 @@ func (s *Sniper) Tick(dataPool tick.DataPool) Bullet {
 	s.cleanupZombiesLocked()
 
 	// 0. 呼値を最新の価格に基づいて更新
-	state := dataPool.GetState(s.Detail.Code)
+	state := s.dataPool.GetState(s.Detail.Code)
 
 	// 完全停止状態なら、すべて無視
 	if s.lifecycle == LifecycleStopped {

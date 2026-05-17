@@ -35,9 +35,10 @@ type SyncBacktestGateway struct {
 	// ボリュームベース約定用のトラッキング
 	lastTradingVolumes map[string]float64
 	lastTicks          map[string]tick.Tick
-	initialDepths      map[string]float64 // orderID -> 並んだ時の板の厚み
+	initialDepths      map[string]float64 // orderID -> 並んだ時の板 detour
 	cumulativeVolumes  map[string]float64 // orderID -> その価格での累積出来高
 	orderTypes         map[string]order.OrderType
+	dataPool           tick.DataPool
 }
 
 func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
@@ -53,7 +54,12 @@ func NewBacktestGateway(model ExecutionModel) *SyncBacktestGateway {
 		initialDepths:      make(map[string]float64),
 		cumulativeVolumes:  make(map[string]float64),
 		orderTypes:         make(map[string]order.OrderType),
+		dataPool:           tick.NewDefaultDataPool(),
 	}
+}
+
+func (g *SyncBacktestGateway) DataPool() tick.DataPool {
+	return g.dataPool
 }
 
 func (g *SyncBacktestGateway) Listen(ctx context.Context) (map[string]<-chan tick.Tick, map[string]<-chan order.Orders, error) {
@@ -62,6 +68,9 @@ func (g *SyncBacktestGateway) Listen(ctx context.Context) (map[string]<-chan tic
 
 // ProcessTick feeds a tick into the gateway. The gateway evaluates existing orders.
 func (g *SyncBacktestGateway) ProcessTick(tick tick.Tick) {
+	// 内部の DataPool を更新
+	g.dataPool.PushTick(tick)
+
 	// Delta volume calculation for volume-based logic
 	deltaVolume := 0.0
 	if lastVol, ok := g.lastTradingVolumes[tick.Symbol]; ok {

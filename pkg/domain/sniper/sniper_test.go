@@ -22,7 +22,7 @@ func (m *MockStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Sig
 func TestSniper_SyncOrders(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
 
 	// 1. 注文を発注した直後の状態（PENDING ID）
 	pendingID := order.GenerateLocalID()
@@ -77,7 +77,7 @@ func TestSniper_SyncOrders(t *testing.T) {
 func TestSniper_SyncOrders_Executions(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
 	realID := "order-456"
 	internalOrder := order.NewOrder(realID, "9434", order.ACTION_BUY, 2000, 100)
 	s.Orders = append(s.Orders, internalOrder)

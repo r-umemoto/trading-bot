@@ -24,6 +24,7 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		wsClient:      wsClient,
 		tickChannels:  make(map[string]chan tick.Tick),
 		orderChannels: make(map[string]chan order.Orders),
+		dataPool:      tick.NewDefaultDataPool(),
 	}
 }
 
@@ -44,6 +45,11 @@ type MarketGateway struct {
 	wsClient      *api.WSClient
 	tickChannels  map[string]chan tick.Tick
 	orderChannels map[string]chan order.Orders
+	dataPool      tick.DataPool
+}
+
+func (m *MarketGateway) DataPool() tick.DataPool {
+	return m.dataPool
 }
 
 // Listen は market.MarketGateway の実装です。並行処理用のチャネルとワーカーを立ち上げて WebSocket / Polling を開始します。
@@ -438,6 +444,9 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
 					msg.UnderBuyQty,
 				)
 				logger.Log(t)
+
+				// 内部の DataPool を更新
+				s.dataPool.PushTick(t)
 
 				// 該当する銘柄のチャネルへルーティング (skip-on-full)
 				if ch, ok := s.tickChannels[t.Symbol]; ok {

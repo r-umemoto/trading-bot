@@ -36,16 +36,13 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 		return nil, err
 	}
 
-	// 3. ユースケースとサービスの組み立て用のDataPool準備
-	dataPool := tick.NewDefaultDataPool()
-
-	// 4. ドメイン層（スナイパー）の配備
-	snipers, err := deploySnipers(watchList, dataPool)
+	// 3. ドメイン層（スナイパー）の配備（DataPoolはGatewayから直接もらう！）
+	snipers, err := deploySnipers(watchList, gateway.DataPool())
 	if err != nil {
 		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
 	}
 
-	tradeUC := usecase.NewTradeUseCase(snipers, gateway, dataPool)
+	tradeUC := usecase.NewTradeUseCase(snipers, gateway)
 	systemUC := usecase.NewSystemUseCase(snipers, gateway)
 	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
@@ -104,7 +101,7 @@ func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*s
 			slog.Error("ログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
 		}
 
-		s := sniper.NewSniper(t.Detail, st, policy, t.Exchange, analysisLogger)
+		s := sniper.NewSniper(t.Detail, st, policy, t.Exchange, analysisLogger, dataPool)
 		snipers = append(snipers, s)
 	}
 

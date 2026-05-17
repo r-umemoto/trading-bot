@@ -42,9 +42,9 @@ func RunBacktest() error {
 		return fmt.Errorf("ポートフォリオの読み込みに失敗しました: %w", err)
 	}
 
-	// 3. バックテスト用インフラ（Mock Gateway）と DataPool の準備
+	// 3. バックテスト用インフラ（Mock Gateway）の準備
 	gateway := backtest.NewBacktestGateway(execModel)
-	dataPool := tick.NewDefaultDataPool()
+	dataPool := gateway.DataPool()
 	_, _, _ = gateway.Listen(context.Background())
 	tickCh := gateway.TickCh()
 	orderReportCh := gateway.OrderCh()
@@ -80,7 +80,7 @@ func RunBacktest() error {
 			slog.Error("バックテストログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
 		}
 
-		s := sniper.NewSniper(sym.Detail, st, policy, sym.Exchange, analysisLogger)
+		s := sniper.NewSniper(sym.Detail, st, policy, sym.Exchange, analysisLogger, dataPool)
 		snipers = append(snipers, s)
 	}
 
@@ -124,10 +124,9 @@ func RunBacktest() error {
 
 		t := <-tickCh
 
-		dataPool.PushTick(t)
 		for _, s := range snipers {
 			if s.Detail.Code == t.Symbol {
-				bullet := s.Tick(dataPool)
+				bullet := s.Tick()
 
 				if bullet.HasCancel() {
 					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", bullet.CancelOrderID)
@@ -194,7 +193,7 @@ func RunBacktest() error {
 	fmt.Printf("総発注数: %d件\n", len(ords.Orders))
 
 	// 結果の出力
-	uc := usecase.NewTradeUseCase(snipers, gateway, dataPool)
+	uc := usecase.NewTradeUseCase(snipers, gateway)
 	uc.PrintPerformanceReport(false)
 
 	return nil
