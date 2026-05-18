@@ -14,6 +14,7 @@ import (
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
 	snipers    []*sniper.Sniper
+	nests      []*SniperNest // 🌟 銘柄（ターゲット）ごとの狙撃陣地（SniperNest）のリスト
 	gateway    market.MarketGateway
 	dispatcher *service.OrderDispatcher
 	reporter   *service.PerformanceReporter
@@ -32,21 +33,23 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway) *Tr
 func (u *TradeUseCase) Start(ctx context.Context, ticks map[string]<-chan tick.Tick, orders map[string]<-chan order.Orders) {
 	u.dispatcher.Start(ctx)
 
-	// 各銘柄専用のゴルーチンワーカーを起動
+	u.nests = make([]*SniperNest, 0, len(ticks))
+
+	// 各銘柄専用の SniperNest を起動
 	for symbol, tickCh := range ticks {
 		orderCh := orders[symbol]
-		go func(sym string, tc <-chan tick.Tick, oc <-chan order.Orders) {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case t := <-tc:
-					u.ExecuteTick(ctx, t)
-				case report := <-oc:
-					u.ExecuteExecutionReport(ctx, report, sym)
-				}
+
+		// この銘柄に紐づくスナイパーをフィルター
+		var symbolSnipers []*sniper.Sniper
+		for _, s := range u.snipers {
+			if s.Detail.Code == symbol {
+				symbolSnipers = append(symbolSnipers, s)
 			}
-		}(symbol, tickCh, orderCh)
+		}
+
+		nest := NewSniperNest(symbol, symbolSnipers, tickCh, orderCh, u.dispatcher)
+		nest.Start(ctx)
+		u.nests = append(u.nests, nest)
 	}
 }
 
