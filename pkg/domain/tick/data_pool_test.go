@@ -45,6 +45,10 @@ func (d *DummyFeeder) FetchSMA(period int) (float64, error) {
 	return 0, fmt.Errorf("unexpected period: %d", period)
 }
 
+func (d *DummyFeeder) FetchPreviousClose() (float64, error) {
+	return 3500.5, nil
+}
+
 // DummyFeederProvider はテスト用の HistoricalFeederProvider 実装です
 type DummyFeederProvider struct{}
 

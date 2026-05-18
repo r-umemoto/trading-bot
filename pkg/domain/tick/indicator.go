@@ -13,6 +13,7 @@ type Indicator interface {
 // HistoricalFeeder は、指定された期間の日足SMAなどのヒストリカル値を取得するインターフェースです。
 type HistoricalFeeder interface {
 	FetchSMA(period int) (float64, error)
+	FetchPreviousClose() (float64, error)
 }
 
 // HistoricalFeederProvider は、銘柄ごとの HistoricalFeeder を提供するインターフェースです。

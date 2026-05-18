@@ -66,6 +66,56 @@ func (f *YahooFinanceFeeder) FetchSMA(period int) (float64, error) {
 	return sum / float64(period), nil
 }
 
+// FetchPreviousClose は前営業日の確定終値を取得して返します。
+// 取引時間中に API を叩いた場合、当日の未確定足が最新（最後の足）として返ってくる可能性があるため、
+// 起動日のローカル当日日付 (00:00:00) よりタイムスタンプが古い足の中から、最も新しい Close を取得します。
+func (f *YahooFinanceFeeder) FetchPreviousClose() (float64, error) {
+	end := time.Now()
+	// 土日祝日や連休を考慮し、余裕を持って過去5日分を取得します
+	start := end.AddDate(0, 0, -5)
+
+	p := &chart.Params{
+		Symbol:   f.symbol,
+		Start:    datetime.New(&start),
+		End:      datetime.New(&end),
+		Interval: f.interval,
+	}
+
+	iter := chart.Get(p)
+	
+	// 今日のローカルタイム 00:00:00 を取得
+	todayLocal := time.Now().Truncate(24 * time.Hour)
+
+	var lastClose float64
+	var found bool
+
+	for iter.Next() {
+		bar := iter.Bar()
+		
+		// piquette/finance-go が返す Timestamp (Unix 時間)
+		barTime := time.Unix(int64(bar.Timestamp), 0)
+		
+		// タイムスタンプが今日のローカル日付 (00:00:00) より前の足の場合、
+		// それは確実に確定済みの前営業日以前の終値です
+		if barTime.Before(todayLocal) {
+			price, _ := bar.Close.Float64()
+			lastClose = price
+			found = true
+		}
+	}
+
+	if err := iter.Err(); err != nil {
+		return 0, fmt.Errorf("failed to fetch chart data for previous close: %w", err)
+	}
+
+	if !found {
+		return 0, fmt.Errorf("no historical chart data found for previous close (symbol: %s)", f.symbol)
+	}
+
+	return lastClose, nil
+}
+
+
 // YahooFinanceFeederProvider は tick.HistoricalFeederProvider インターフェースの本番用実装です
 type YahooFinanceFeederProvider struct {
 	interval datetime.Interval

@@ -449,6 +449,11 @@ func (m *MockHistoricalFeeder) FetchSMA(period int) (float64, error) {
 	return 3000.0, nil
 }
 
+func (m *MockHistoricalFeeder) FetchPreviousClose() (float64, error) {
+	// バックテスト時の前日終値として代表的なダミー値（3000.0）を返します。
+	return 3000.0, nil
+}
+
 // MockHistoricalFeederProvider はテスト用の HistoricalFeederProvider 実装です。
 type MockHistoricalFeederProvider struct {
 	Values map[string]float64
