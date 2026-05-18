@@ -10,6 +10,22 @@ type Indicator interface {
 	Dependencies() []Indicator
 }
 
+// HistoricalFeeder は、指定された期間の日足SMAなどのヒストリカル値を取得するインターフェースです。
+type HistoricalFeeder interface {
+	FetchSMA(period int) (float64, error)
+}
+
+// HistoricalFeederProvider は、銘柄ごとの HistoricalFeeder を提供するインターフェースです。
+type HistoricalFeederProvider interface {
+	GetFeeder(symbol string) HistoricalFeeder
+}
+
+// FetcherIndicator は、初期化時にヒストリカルデータのフェッチを必要とする指標が実装するインターフェースです。
+type FetcherIndicator interface {
+	Indicator
+	FetchAndInitialize(feeder HistoricalFeeder) error
+}
+
 // StaticFloatIndicator は、外部から値をセットされる静的な指標です（例: 前日からのSMAなど、Tickで更新されないもの）
 type StaticFloatIndicator struct {
 	id    string

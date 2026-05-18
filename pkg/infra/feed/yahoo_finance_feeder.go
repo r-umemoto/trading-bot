@@ -6,6 +6,7 @@ import (
 
 	"github.com/piquette/finance-go/chart"
 	"github.com/piquette/finance-go/datetime"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // YahooFinanceFeeder は Yahoo Finance からヒストリカルデータを取得し、システムに供給します
@@ -24,10 +25,14 @@ func NewYahooFinanceFeeder(symbol string, interval datetime.Interval) *YahooFina
 
 // FetchSMA は過去のデータからチャートからSMA(単純移動平均)を計算して返します
 func (f *YahooFinanceFeeder) FetchSMA(period int) (float64, error) {
-	// 指定期間のデータを確実に取得するために、過去10日分を取得します
-	// (日本の連休や祝日が重なっても10日あればSMA75程度までは確実にカバー可能)
+	// 指定期間のデータを確実に取得するために、指定された SMA 期間 period に応じて動的に日数を算出します。
+	// 土日祝日や連休を考慮し、余裕を持って period * 2 日前を指定します（最低でも過去10日間）。
 	end := time.Now()
-	start := end.AddDate(0, 0, -10)
+	daysBack := period * 2
+	if daysBack < 10 {
+		daysBack = 10
+	}
+	start := end.AddDate(0, 0, -daysBack)
 
 	p := &chart.Params{
 		Symbol:   f.symbol,
@@ -59,4 +64,22 @@ func (f *YahooFinanceFeeder) FetchSMA(period int) (float64, error) {
 	}
 
 	return sum / float64(period), nil
+}
+
+// YahooFinanceFeederProvider は tick.HistoricalFeederProvider インターフェースの本番用実装です
+type YahooFinanceFeederProvider struct {
+	interval datetime.Interval
+}
+
+var _ tick.HistoricalFeederProvider = (*YahooFinanceFeederProvider)(nil)
+
+func NewYahooFinanceFeederProvider(interval datetime.Interval) *YahooFinanceFeederProvider {
+	return &YahooFinanceFeederProvider{
+		interval: interval,
+	}
+}
+
+// GetFeeder は指定された symbol に対応する YahooFinanceFeeder を生成し、tick.HistoricalFeeder として返します
+func (p *YahooFinanceFeederProvider) GetFeeder(symbol string) tick.HistoricalFeeder {
+	return NewYahooFinanceFeeder(symbol, p.interval)
 }

@@ -1,4 +1,3 @@
-// internal/infra/kabu/broker.go
 package kabu
 
 import (
@@ -8,12 +7,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/piquette/finance-go/datetime"
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 
+	"github.com/r-umemoto/trading-bot/pkg/infra/feed"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/storage"
 )
@@ -24,7 +25,7 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		wsClient:      wsClient,
 		tickChannels:  make(map[string]chan tick.Tick),
 		orderChannels: make(map[string]chan order.Orders),
-		dataPool:      tick.NewDefaultDataPool(),
+		dataPool:      tick.NewDefaultDataPool(feed.NewYahooFinanceFeederProvider(datetime.OneDay)),
 	}
 }
 

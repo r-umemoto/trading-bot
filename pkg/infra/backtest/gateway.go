@@ -63,7 +63,7 @@ func NewBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBackte
 		initialDepths:      make(map[string]float64),
 		cumulativeVolumes:  make(map[string]float64),
 		orderTypes:         make(map[string]order.OrderType),
-		dataPool:           tick.NewDefaultDataPool(),
+		dataPool:           tick.NewDefaultDataPool(NewMockHistoricalFeederProvider()),
 	}
 }
 
@@ -436,4 +436,30 @@ func (g *SyncBacktestGateway) TickCh() <-chan tick.Tick {
 
 func (g *SyncBacktestGateway) OrderCh() <-chan order.Orders {
 	return g.orderCh
+}
+
+// MockHistoricalFeeder はバックテストやテスト環境用の HistoricalFeeder 実装です。
+type MockHistoricalFeeder struct {
+	symbol string
+}
+
+func (m *MockHistoricalFeeder) FetchSMA(period int) (float64, error) {
+	// バックテスト中のインジケーターが初期化に失敗するのを防ぐため、
+	// 代表的なダミーのSMA値（3000.0）を決定論的に返します。
+	return 3000.0, nil
+}
+
+// MockHistoricalFeederProvider はテスト用の HistoricalFeederProvider 実装です。
+type MockHistoricalFeederProvider struct {
+	Values map[string]float64
+}
+
+func NewMockHistoricalFeederProvider() *MockHistoricalFeederProvider {
+	return &MockHistoricalFeederProvider{
+		Values: make(map[string]float64),
+	}
+}
+
+func (p *MockHistoricalFeederProvider) GetFeeder(symbol string) tick.HistoricalFeeder {
+	return &MockHistoricalFeeder{symbol: symbol}
 }

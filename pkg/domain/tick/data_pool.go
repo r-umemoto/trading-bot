@@ -1,8 +1,8 @@
-// internal/domain/market/analyzer.go
 package tick
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 )
 
@@ -16,8 +16,9 @@ type DataPool interface {
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
 type DefaultDataPool struct {
-	symbols map[string]*symbolData
-	mu      sync.RWMutex // symbols マップ自体の操作（新しい銘柄の登録時）を保護
+	symbols        map[string]*symbolData
+	feederProvider HistoricalFeederProvider
+	mu             sync.RWMutex // symbols マップ自体の操作（新しい銘柄の登録時）を保護
 }
 
 // symbolData は銘柄ごとのデータを保持し、個別にロックを制御します
@@ -35,9 +36,10 @@ func newSymbolData(symbol string) *symbolData {
 	}
 }
 
-func NewDefaultDataPool() *DefaultDataPool {
+func NewDefaultDataPool(provider HistoricalFeederProvider) *DefaultDataPool {
 	return &DefaultDataPool{
-		symbols: make(map[string]*symbolData),
+		symbols:        make(map[string]*symbolData),
+		feederProvider: provider,
 	}
 }
 
@@ -100,6 +102,21 @@ func (a *DefaultDataPool) GetOrCreateIndicator(symbol, id string, factory func()
 	// デッドロックするのを防ぐため、一旦ロックを解除してからファクトリーを実行する（Double-Checked Locking）
 	data.mu.Unlock()
 	newInd := factory()
+
+	// 🌟 追加：ヒストリカルフェッチを必要とする指標の場合、自動初期化を安全にロックの外で走らせる
+	if fetcher, ok := newInd.(FetcherIndicator); ok && a.feederProvider != nil {
+		feeder := a.feederProvider.GetFeeder(symbol)
+		if feeder != nil {
+			if err := fetcher.FetchAndInitialize(feeder); err != nil {
+				slog.Error("Failed to initialize indicator with historical data",
+					slog.String("symbol", symbol),
+					slog.String("indicator", id),
+					slog.Any("error", err),
+				)
+			}
+		}
+	}
+
 	data.mu.Lock()
 	defer data.mu.Unlock()
 

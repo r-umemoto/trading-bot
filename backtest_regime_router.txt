@@ -1,0 +1,1 @@
+戦略のバックテストを開始します... (データ: /home/umemoto/trading-strategy-private/data/all_20260515.csv, 約定モデル: volume, 遅延: 100ms)
