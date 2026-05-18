@@ -310,6 +310,7 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrd
 	ord.ID = orderID
 	ord.Status = order.ORDER_STATUS_WAITING
 	ord.InternalState = order.STATE_ACTIVE // API送信成功・受付完了としてACTIVEへ遷移
+	ord.CreatedAt = g.currentTime          // 🌟 注文作成時刻をバックテストの現在仮想時刻で初期化
 
 	storedOrder := ord // 🌟 ポインタ共有を避けるためコピーを保存
 	g.orders[orderID] = &storedOrder

@@ -203,6 +203,19 @@ func RunBacktest() error {
 }
 
 func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
+	// 🌟 CSVファイル名から日付 (YYYYMMDD) を抽出。デフォルトは実行当日の日付
+	baseDate := time.Now()
+	baseName := filepath.Base(csvPath)
+	for i := 0; i <= len(baseName)-8; i++ {
+		sub := baseName[i : i+8]
+		if _, err := strconv.Atoi(sub); err == nil {
+			if d, err := time.Parse("20060102", sub); err == nil {
+				baseDate = d
+				break
+			}
+		}
+	}
+
 	file, err := os.Open(csvPath)
 	if err != nil {
 		return err
@@ -225,6 +238,12 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 		}
 
 		parsedTime, _ := time.Parse("15:04:05.000", record[0])
+		// 🌟 抽出した日付と時刻をマージして完全な time.Time を生成
+		tickTime := time.Date(
+			baseDate.Year(), baseDate.Month(), baseDate.Day(),
+			parsedTime.Hour(), parsedTime.Minute(), parsedTime.Second(), parsedTime.Nanosecond(),
+			time.Local,
+		)
 		price, _ := strconv.ParseFloat(record[2], 64)
 		volume, _ := strconv.ParseFloat(record[3], 64)
 		vwap, _ := strconv.ParseFloat(record[4], 64)
@@ -280,7 +299,7 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 			},
 			SellBoard:          sellBoard,
 			BuyBoard:           buyBoard,
-			CurrentPriceTime:   parsedTime,
+			CurrentPriceTime:   tickTime,
 			CurrentPriceStatus: tick.PriceStatus(status),
 		}
 

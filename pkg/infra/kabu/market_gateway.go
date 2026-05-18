@@ -253,8 +253,8 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 				continue
 			}
 
-			// 約定時刻をパース (Kabusapiは RFC3339 形式)
-			execTime, _ := time.Parse(time.RFC3339, execution.ExecutionTime)
+			// 約定時刻をパース
+			execTime := parseExecutionTime(execution.ExecutionTime)
 
 			o.AddExecution(
 				order.Execution{
@@ -604,3 +604,41 @@ func (m *MarketGateway) toPriceChangeStatus(kabuStatus string) tick.PriceChangeS
 		return tick.PRICE_CHANGE_NONE
 	}
 }
+
+// parseExecutionTime はカブコムAPIが返却する多様な約定日時の文字列フォーマットに対応し、
+// 正確に time.Time へ変換するための堅牢なヘルパー関数です。
+func parseExecutionTime(timeStr string) time.Time {
+	if timeStr == "" {
+		return time.Time{}
+	}
+
+	// 1. RFC3339 形式 (例: "2020-10-23T11:21:40+09:00" や "2026-05-18T09:01:33.456+09:00")
+	if t, err := time.Parse(time.RFC3339, timeStr); err == nil {
+		return t
+	}
+
+	// 2. 日本国内の金融APIやシステムで頻出する各種フォーマット
+	formats := []string{
+		"2006/01/02 15:04:05.000",
+		"2006/01/02 15:04:05",
+		"2006-01-02 15:04:05.000",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+		"20060102150405",
+	}
+
+	// タイムゾーンが明示されない場合は、カブコムAPIの仕様に従い日本時間 (Asia/Tokyo) としてパース
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.FixedZone("Asia/Tokyo", 9*60*60)
+	}
+
+	for _, fmtStr := range formats {
+		if t, err := time.ParseInLocation(fmtStr, timeStr, loc); err == nil {
+			return t
+		}
+	}
+
+	return time.Time{}
+}
+
