@@ -152,6 +152,11 @@ func (s *Sniper) Tick() Bullet {
 	// 4. 戦略の判断を仰ぐ
 	signal := s.Strategy.Evaluate(input)
 
+	// 🌟 カブステーションのトリガチェックエラー（呼び値違反）を防ぐため、計算価格を正しいTick Sizeに丸める
+	if signal.Price > 0 {
+		signal.Price = s.Detail.RoundPrice(signal.Price)
+	}
+
 	// 🌟 ライフサイクルに基づくゲートキーピング（撤収モード時の新規発注抑止および強制決済誘導）
 	if s.lifecycle == LifecycleExiting {
 		holdQty := input.HoldQty()
@@ -299,6 +304,9 @@ func (s *Sniper) Tick() Bullet {
 	// --- 6. IFD (If-Done) 注文の組み立て ---
 	// 直前のシグナルが約定したと仮定して、次の意図を問う
 	ifDoneSignal := s.Strategy.IfDone(input.SimulateSignal(signal), signal)
+	if ifDoneSignal.Price > 0 {
+		ifDoneSignal.Price = s.Detail.RoundPrice(ifDoneSignal.Price)
+	}
 	var marketIFDAction order.Action
 	var hasIFD bool
 	if ifDoneSignal.Action != brain.ACTION_HOLD {

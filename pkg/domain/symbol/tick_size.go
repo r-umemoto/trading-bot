@@ -1,6 +1,10 @@
 package symbol
 
-import "math"
+import (
+	"fmt"
+	"math"
+	"strconv"
+)
 
 // CalcTickSize は価格に応じた最小呼値（ティックサイズ）を計算します
 func (d *Symbol) CalcTickSize(price float64) float64 {
@@ -76,4 +80,19 @@ func getTSETopix100TickSize(price float64) float64 {
 	default:
 		return 1000.0
 	}
+}
+
+// RoundPrice は指定された価格を、その銘柄の現在の呼値（ティックサイズ）の倍数に最も近い値に丸めます
+func (d *Symbol) RoundPrice(price float64) float64 {
+	tick := d.CalcTickSize(price)
+	if tick <= 0 {
+		return price
+	}
+	// math.Round を使って最も近い呼び値の倍数にする
+	rounded := math.Round(price/tick) * tick
+	
+	// IEEE754浮動小数点の演算誤差（例: 418.90000000000003）を消去するため、
+	// 小数点以下1桁の文字列表現を経由してクリーンなfloat64を生成する
+	cleanPrice, _ := strconv.ParseFloat(fmt.Sprintf("%.1f", rounded), 64)
+	return cleanPrice
 }
