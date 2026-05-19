@@ -4,28 +4,28 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
-	"github.com/piquette/finance-go/datetime"
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 
-	"github.com/r-umemoto/trading-bot/pkg/infra/feed"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/storage"
 )
 
 func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
+	kabuProvider := NewKabuHistoricalFeederProvider(client)
 	return &MarketGateway{
 		client:        client,
 		wsClient:      wsClient,
 		tickChannels:  make(map[string]chan tick.Tick),
 		orderChannels: make(map[string]chan order.Orders),
-		dataPool:      tick.NewDefaultDataPool(feed.NewYahooFinanceFeederProvider(datetime.OneDay)),
+		dataPool:      tick.NewDefaultDataPool(kabuProvider),
 	}
 }
 
@@ -38,6 +38,7 @@ type KabuClientInterface interface {
 	RegisterSymbol(req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error)
 	UnregisterSymbolAll() (*api.UnregisterSymbolAllResponse, error)
 	GetSymbol(symbol string, exchange api.ExchageType) (*api.SymbolSuccess, error)
+	GetBoard(symbol string) (*api.BoardResponse, error)
 }
 
 // MarketGateway はHTTPプロトコルを用いたREST API操作を担当します
@@ -640,5 +641,54 @@ func parseExecutionTime(timeStr string) time.Time {
 	}
 
 	return time.Time{}
+}
+
+// KabuHistoricalFeederProvider は KabuClient を利用する HistoricalFeederProvider です
+type KabuHistoricalFeederProvider struct {
+	client KabuClientInterface
+}
+
+var _ tick.HistoricalFeederProvider = (*KabuHistoricalFeederProvider)(nil)
+
+func NewKabuHistoricalFeederProvider(client KabuClientInterface) *KabuHistoricalFeederProvider {
+	return &KabuHistoricalFeederProvider{
+		client: client,
+	}
+}
+
+func (p *KabuHistoricalFeederProvider) GetFeeder(symbol string) tick.HistoricalFeeder {
+	return &KabuHistoricalFeeder{
+		symbol: symbol,
+		client: p.client,
+	}
+}
+
+// KabuHistoricalFeeder は前日終値の取得にカブコムの REST API (/board) を利用します
+type KabuHistoricalFeeder struct {
+	symbol string
+	client KabuClientInterface
+}
+
+var _ tick.HistoricalFeeder = (*KabuHistoricalFeeder)(nil)
+
+func (f *KabuHistoricalFeeder) FetchSMA(period int) (float64, error) {
+	return 0, fmt.Errorf("SMA is not supported by KabuHistoricalFeeder")
+}
+
+func (f *KabuHistoricalFeeder) FetchPreviousClose() (float64, error) {
+	slog.Info("Fetching previous close from KabuStation API", slog.String("symbol", f.symbol))
+	board, err := f.client.GetBoard(f.symbol)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch previous close from KabuStation API: %w", err)
+	}
+	if board == nil {
+		return 0, fmt.Errorf("failed to fetch previous close: board response is empty")
+	}
+	if board.PreviousClose <= 0 {
+		return 0, fmt.Errorf("failed to fetch previous close: PreviousClose returned by KabuStation is invalid: %.2f", board.PreviousClose)
+	}
+
+	slog.Info("Successfully fetched previous close from KabuStation API", slog.String("symbol", f.symbol), slog.Float64("previous_close", board.PreviousClose))
+	return board.PreviousClose, nil
 }
 

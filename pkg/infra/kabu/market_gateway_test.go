@@ -33,6 +33,9 @@ func (m *MockKabuClient) UnregisterSymbolAll() (*api.UnregisterSymbolAllResponse
 func (m *MockKabuClient) GetSymbol(symbol string, exchange api.ExchageType) (*api.SymbolSuccess, error) {
 	return nil, nil
 }
+func (m *MockKabuClient) GetBoard(symbol string) (*api.BoardResponse, error) {
+	return nil, nil
+}
 
 func TestMarketGateway_GetOrders(t *testing.T) {
 	mockClient := &MockKabuClient{}
