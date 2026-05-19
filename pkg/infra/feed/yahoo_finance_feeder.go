@@ -17,8 +17,22 @@ type YahooFinanceFeeder struct {
 
 // NewYahooFinanceFeeder は新しい YahooFinanceFeeder を作成します
 func NewYahooFinanceFeeder(symbol string, interval datetime.Interval) *YahooFinanceFeeder {
+	formattedSymbol := symbol
+	if len(symbol) == 4 {
+		isNumeric := true
+		for _, r := range symbol {
+			if r < '0' || r > '9' {
+				isNumeric = false
+				break
+			}
+		}
+		if isNumeric {
+			formattedSymbol = symbol + ".T"
+		}
+	}
+
 	return &YahooFinanceFeeder{
-		symbol:   symbol,
+		symbol:   formattedSymbol,
 		interval: interval,
 	}
 }
