@@ -253,8 +253,8 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 				continue
 			}
 
-			// 約定時刻をパース
-			execTime := parseExecutionTime(execution.ExecutionTime)
+			// 約定日時のパース
+			execTime := parseExecutionTime(execution.ExecutionDay)
 
 			o.AddExecution(
 				order.Execution{

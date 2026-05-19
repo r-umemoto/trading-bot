@@ -73,7 +73,7 @@ type OrderDetail struct {
 	ID            string  `json:"ExecutionID"`   // 約定IDまたは注文詳細ID
 	Price         float64 `json:"Price"`         // 約定値段
 	Qty           float64 `json:"Qty"`           // 約定数量
-	ExecutionTime string  `json:"ExecutionTime"` // 🌟 約定日時
+	ExecutionDay  string  `json:"ExecutionDay"`  // 🌟 約定日時 (カブコムAPIキー)
 	RecType       int32   `json:"RecType"`       // 明細種別（8: 約定, 6: 取消, 3: 期限切れ, 7: 失効）
 }
 

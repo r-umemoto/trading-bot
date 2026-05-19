@@ -386,9 +386,11 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 		"OrderQty":    req.Qty,
 		"AccountType": req.AccountType,
 		"Details": []map[string]interface{}{{
-			"Price":       req.Price,
-			"Qty":         req.Qty,
-			"ExecutionID": uniqueExID,
+			"Price":        req.Price,
+			"Qty":          req.Qty,
+			"ExecutionID":  uniqueExID,
+			"ExecutionDay": time.Now().Format(time.RFC3339),
+			"RecType":      8,
 		}},
 	})
 

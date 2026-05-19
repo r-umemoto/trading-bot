@@ -665,7 +665,6 @@ func (s *Sniper) applyExecution(exec order.Execution, action order.Action, order
 		})
 		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Detail.Code, exec.Price, exec.Qty)
 
-		// 🌟 アナライザー用のログ
 		queueTimeMs := exec.ExecutionTime.Sub(orderCreatedAt).Milliseconds()
 		s.Logger.Info("FILLED",
 			slog.String("symbol", s.Detail.Code),
