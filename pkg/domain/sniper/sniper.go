@@ -416,8 +416,8 @@ func (s *Sniper) FailSendingOrder(ord *order.Order) {
 	defer s.mu.Unlock()
 
 	for i, o := range s.Orders {
-		if o == ord {
-			// 該当するポインタをリストから削除
+		if o == ord || o.ID == ord.ID {
+			// 該当する注文をリストから削除
 			s.Orders = append(s.Orders[:i], s.Orders[i+1:]...)
 			break
 		}
@@ -583,7 +583,24 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 		}
 
 		// 状態の同期
-		matchedInternal.Status = ext.Status
+		// ローカルで既にキャンセル送信中(CANCEL_SENT)または疑似約定(FILL_EXPECTED)になっている場合は、
+		// API側のステータスが完了状態（CANCELED, FILLED）に遷移するまで上書きを防止する
+		shouldUpdateStatus := true
+		switch matchedInternal.Status {
+		case order.ORDER_STATUS_CANCEL_SENT:
+			if ext.Status != order.ORDER_STATUS_CANCELED && ext.Status != order.ORDER_STATUS_FILLED {
+				shouldUpdateStatus = false
+			}
+		case order.ORDER_STATUS_FILL_EXPECTED:
+			if ext.Status != order.ORDER_STATUS_FILLED {
+				shouldUpdateStatus = false
+			}
+		}
+
+		if shouldUpdateStatus {
+			matchedInternal.Status = ext.Status
+		}
+
 		matchedInternal.CumQty = ext.CumQty
 		if matchedInternal.IsPending() {
 			matchedInternal.InternalState = order.STATE_ACTIVE // API側に存在することが確認できたらACTIVEへ遷移
