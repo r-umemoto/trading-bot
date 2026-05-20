@@ -47,6 +47,10 @@ func (d *OrderDispatcher) Submit(s *sniper.Sniper, bullet sniper.Bullet) {
 	if !bullet.HasOrder() && !bullet.HasCancel() {
 		// 意図が HOLD の場合、もし待機中のジョブがあれば削除する（最新の意図を優先）
 		d.jobMu.Lock()
+		existing, ok := d.pendingJobs[s.Detail.Code]
+		if ok && existing.OrderPtr != nil {
+			existing.Sniper.FailSendingOrder(existing.OrderPtr)
+		}
 		delete(d.pendingJobs, s.Detail.Code)
 		d.jobMu.Unlock()
 		return
@@ -65,6 +69,9 @@ func (d *OrderDispatcher) Submit(s *sniper.Sniper, bullet sniper.Bullet) {
 	if ok {
 		// すでに待機中のジョブがあれば、その更新回数（溜まっていたフラストレーション）を引き継ぐ
 		updateCount = existing.UpdateCount + 1
+		if existing.OrderPtr != nil && existing.OrderPtr != bullet.Order {
+			existing.Sniper.FailSendingOrder(existing.OrderPtr)
+		}
 	}
 
 	job := &OrderJob{
@@ -139,6 +146,9 @@ func (d *OrderDispatcher) executeJob(ctx context.Context, job *OrderJob) {
 		fmt.Printf("🛑 [%s] 注文キャンセルを実行中 (ID: %s, Priority: %d)\n", job.Symbol, job.CancelID, job.Priority)
 		if err := d.gateway.CancelOrder(apiCtx, job.CancelID); err != nil {
 			fmt.Printf("❌ [%s] キャンセル失敗: %v\n", job.Symbol, err)
+			if job.OrderPtr != nil {
+				job.Sniper.RevertOrderStatus(job.OrderPtr, order.ORDER_STATUS_IN_PROGRESS)
+			}
 		}
 		return
 	}

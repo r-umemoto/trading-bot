@@ -3,6 +3,7 @@ package sniper
 import (
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
@@ -114,5 +115,36 @@ func TestSniper_SyncOrders_Executions(t *testing.T) {
 	}
 	if holdQty != 50 {
 		t.Errorf("expected holdQty 50 (after deduplication), got %f", holdQty)
+	}
+}
+
+func TestSniper_SyncOrders_CancelSentTimeout(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	policy := &strategy.NoopPolicy{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	realID := "order-789"
+	internalOrder := order.NewOrder(realID, "9434", order.ACTION_BUY, 2000, 100)
+	internalOrder.Status = order.ORDER_STATUS_CANCEL_SENT
+	s.Orders = append(s.Orders, internalOrder)
+
+	// 1. キャンセル送信直後のため、取引所がまだ IN_PROGRESS と言っても上書きは防ぐ
+	internalOrder.CancelSentAt = time.Now()
+	extOrders := []order.Order{
+		{
+			ID:     realID,
+			Symbol: "9434",
+			Status: order.ORDER_STATUS_IN_PROGRESS,
+		},
+	}
+	s.SyncOrders(order.Orders{Orders: extOrders})
+	if internalOrder.Status != order.ORDER_STATUS_CANCEL_SENT {
+		t.Errorf("expected status to stay CANCEL_SENT, got %v", internalOrder.Status)
+	}
+
+	// 2. 5秒以上経過した後は、取引所のステータス (IN_PROGRESS) で上書きを許可する (キャンセル失敗・却下された時の復帰)
+	internalOrder.CancelSentAt = time.Now().Add(-6 * time.Second)
+	s.SyncOrders(order.Orders{Orders: extOrders})
+	if internalOrder.Status != order.ORDER_STATUS_IN_PROGRESS {
+		t.Errorf("expected status to revert to IN_PROGRESS, got %v", internalOrder.Status)
 	}
 }

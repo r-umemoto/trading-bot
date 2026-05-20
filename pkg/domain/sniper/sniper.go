@@ -247,7 +247,7 @@ func (s *Sniper) Tick() Bullet {
 				s.Detail.Code, activeOrder.ID, activeOrder.Action, activeOrder.OrderPrice, signal.Action, signal.Price, signal.Quantity)
 			activeOrder.Status = order.ORDER_STATUS_CANCEL_SENT
 			activeOrder.CancelSentAt = time.Now()
-			return Bullet{CancelOrderID: activeOrder.ID}
+			return Bullet{CancelOrderID: activeOrder.ID, Order: activeOrder}
 		}
 
 		// 一致している場合は維持
@@ -424,6 +424,20 @@ func (s *Sniper) FailSendingOrder(ord *order.Order) {
 	}
 }
 
+// RevertOrderStatus はキャンセル失敗時などに注文ステータスを安全に戻します
+func (s *Sniper) RevertOrderStatus(ord *order.Order, status order.OrderStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, o := range s.Orders {
+		if o == ord || o.ID == ord.ID {
+			o.Status = status
+			break
+		}
+	}
+}
+
+
 // OrderlyExit はスナイパーを撤収モードに移行させます。新規エントリーは禁止され、決済のみ許可されます。
 func (s *Sniper) OrderlyExit() {
 	s.mu.Lock()
@@ -589,7 +603,9 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 		switch matchedInternal.Status {
 		case order.ORDER_STATUS_CANCEL_SENT:
 			if ext.Status != order.ORDER_STATUS_CANCELED && ext.Status != order.ORDER_STATUS_FILLED {
-				shouldUpdateStatus = false
+				if matchedInternal.CancelSentAt.IsZero() || time.Since(matchedInternal.CancelSentAt) < 5*time.Second {
+					shouldUpdateStatus = false
+				}
 			}
 		case order.ORDER_STATUS_FILL_EXPECTED:
 			if ext.Status != order.ORDER_STATUS_FILLED {
