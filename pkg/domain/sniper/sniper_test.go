@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
@@ -251,6 +252,71 @@ func TestSniper_SyncOrders_OrderExecutionSync_AndCleanup(t *testing.T) {
 	// 3. Verify the completed and fully filled order is successfully cleaned up from s.Orders
 	if len(s.Orders) != 0 {
 		t.Errorf("expected s.Orders to be empty after filled order cleanup, but got %d orders", len(s.Orders))
+	}
+}
+
+func TestSniper_ReducePositions_ByID(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	policy := &strategy.NoopPolicy{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+
+	// Pre-populate with two physical positions
+	s.positions = []position.Position{
+		{
+			ExecutionID: "exec-A",
+			Symbol:      "9434",
+			LeavesQty:   100,
+			Price:       2000,
+			Meta:        position.PositionMeta{EntryTime: time.Now().Add(-10 * time.Minute)},
+		},
+		{
+			ExecutionID: "exec-B",
+			Symbol:      "9434",
+			LeavesQty:   100,
+			Price:       2010,
+			Meta:        position.PositionMeta{EntryTime: time.Now().Add(-5 * time.Minute)},
+		},
+	}
+
+	// Create a sell order targeting ONLY Position B (exec-B)
+	sellOrderID := "sell-order-B"
+	sellOrder := order.NewOrder(sellOrderID, "9434", order.ACTION_SELL, 2020, 100)
+	sellOrder.ClosePositions = []order.ClosePosition{
+		{HoldID: "exec-B", Qty: 100},
+	}
+	s.Orders = append(s.Orders, sellOrder)
+
+	// Simulate execution of 100 shares for this sell order
+	extOrders := []order.Order{
+		{
+			ID:     sellOrderID,
+			Symbol: "9434",
+			Status: order.ORDER_STATUS_FILLED,
+			CumQty: 100,
+			Executions: []order.Execution{
+				{
+					ID:            "exec-sell-B",
+					Price:         2020,
+					Qty:           100,
+					ExecutionTime: time.Now(),
+				},
+			},
+		},
+	}
+
+	s.SyncOrders(order.Orders{Orders: extOrders})
+
+	// After execution, Position B should be closed, and ONLY Position A should remain!
+	if len(s.positions) != 1 {
+		t.Fatalf("expected 1 remaining position, got %d", len(s.positions))
+	}
+
+	remainingPos := s.positions[0]
+	if remainingPos.ExecutionID != "exec-A" {
+		t.Errorf("expected remaining position to be 'exec-A', got '%s'", remainingPos.ExecutionID)
+	}
+	if remainingPos.LeavesQty != 100 || remainingPos.Price != 2000 {
+		t.Errorf("expected 'exec-A' to have 100 shares @ 2000, got %f @ %f", remainingPos.LeavesQty, remainingPos.Price)
 	}
 }
 

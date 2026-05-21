@@ -73,6 +73,8 @@ type Order struct {
 
 	CancelSentAt time.Time // 🌟 キャンセル送信時刻（ゾンビ防止用）
 
+	ClosePositions []ClosePosition // 🌟 指定返済用
+
 	// 内部ステータスと疑似約定のトラッキング
 	InternalState InternalState
 	Synthetic     SyntheticFillState

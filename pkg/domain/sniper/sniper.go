@@ -317,6 +317,7 @@ func (s *Sniper) Tick() Bullet {
 
 	// Order/Request を作成する
 	ptr, orderReq := s.buildOrderRequest(marketAction, signal.Price, signal.Quantity, orderType, closePositions, closeOrder)
+	ptr.ClosePositions = closePositions
 
 	ptr.HasIFD = hasIFD
 	ptr.IFDAction = marketIFDAction
@@ -468,52 +469,102 @@ func (s *Sniper) ForceExit() {
 	fmt.Printf("🚨 [%s] 強制停止モードON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Detail.Code)
 }
 
-// reducePositions は、指定された数量分だけ古い建玉から順に削減し、損益を計算します
-func (s *Sniper) reducePositions(sellQty float64, sellPrice float64, sellTime time.Time) {
+// reducePositions は、指定返済（ClosePositions）に基づいて建玉を指定削減し、残量をFIFOで削減して、損益を計算します
+func (s *Sniper) reducePositions(sellQty float64, sellPrice float64, sellTime time.Time, closePositions []order.ClosePosition) {
 	remainingToSell := sellQty
-	var newPositions []position.Position
 	var totalTradePnL float64       // 🌟 今回の「売り約定全体」の損益を合算する変数
 	var earliestEntryTime time.Time // 🌟 保有時間の計算用
 
-	for _, p := range s.positions {
-		if remainingToSell <= 0 {
-			// 売却分を消化しきったら、残りの建玉はそのまま保持リストへ
-			newPositions = append(newPositions, p)
-			continue
+	// 1. 指定返済用のポジションを特定して、最優先で削減する
+	if len(closePositions) > 0 {
+		// Map for quick lookup of close quantity by HoldID
+		closeMap := make(map[string]float64)
+		for _, cp := range closePositions {
+			closeMap[cp.HoldID] = cp.Qty
 		}
 
-		closeQty := p.LeavesQty
-		if closeQty > remainingToSell {
-			closeQty = remainingToSell
-		}
+		var newPositions []position.Position
+		for _, p := range s.positions {
+			qtyToClose, exists := closeMap[p.ExecutionID]
+			if exists && qtyToClose > 0 && remainingToSell > 0 {
+				closeQty := p.LeavesQty
+				if closeQty > qtyToClose {
+					closeQty = qtyToClose
+				}
+				if closeQty > remainingToSell {
+					closeQty = remainingToSell
+				}
 
-		// 最も古い建玉の時間を取得
-		if earliestEntryTime.IsZero() || (!p.Meta.EntryTime.IsZero() && p.Meta.EntryTime.Before(earliestEntryTime)) {
-			earliestEntryTime = p.Meta.EntryTime
-		}
+				if earliestEntryTime.IsZero() || (!p.Meta.EntryTime.IsZero() && p.Meta.EntryTime.Before(earliestEntryTime)) {
+					earliestEntryTime = p.Meta.EntryTime
+				}
 
-		// 🌟 損益計算
-		tradePnL := (sellPrice - p.Price) * closeQty
-		totalTradePnL += tradePnL // 全体の損益に加算
+				// 損益計算
+				tradePnL := (sellPrice - p.Price) * closeQty
+				totalTradePnL += tradePnL
 
-		s.Performance.RealizedPnL += tradePnL
-		s.Performance.Trades++
-		if tradePnL > 0 {
-			s.Performance.Wins++
-		} else if tradePnL < 0 {
-			s.Performance.Losses++
-		}
+				s.Performance.RealizedPnL += tradePnL
+				s.Performance.Trades++
+				if tradePnL > 0 {
+					s.Performance.Wins++
+				} else if tradePnL < 0 {
+					s.Performance.Losses++
+				}
 
-		if p.LeavesQty <= remainingToSell {
-			// この建玉ロットを全量売却するケース
-			remainingToSell -= p.LeavesQty
-			// 全量売却なので newPositions には追加しない（消滅）
-		} else {
-			// この建玉ロットの一部だけを売却するケース
-			p.LeavesQty -= remainingToSell
-			remainingToSell = 0
-			newPositions = append(newPositions, p)
+				p.LeavesQty -= closeQty
+				closeMap[p.ExecutionID] -= closeQty
+				remainingToSell -= closeQty
+
+				if p.LeavesQty > 0 {
+					newPositions = append(newPositions, p)
+				}
+			} else {
+				newPositions = append(newPositions, p)
+			}
 		}
+		s.positions = newPositions
+	}
+
+	// 2. 残量がある場合、または指定返済でない場合：フォールバックして従来のFIFO削減
+	if remainingToSell > 0 {
+		var newPositions []position.Position
+		for _, p := range s.positions {
+			if remainingToSell <= 0 {
+				newPositions = append(newPositions, p)
+				continue
+			}
+
+			closeQty := p.LeavesQty
+			if closeQty > remainingToSell {
+				closeQty = remainingToSell
+			}
+
+			// 最も古い建玉の時間を取得
+			if earliestEntryTime.IsZero() || (!p.Meta.EntryTime.IsZero() && p.Meta.EntryTime.Before(earliestEntryTime)) {
+				earliestEntryTime = p.Meta.EntryTime
+			}
+
+			// 損益計算
+			tradePnL := (sellPrice - p.Price) * closeQty
+			totalTradePnL += tradePnL // 全体の損益に加算
+
+			s.Performance.RealizedPnL += tradePnL
+			s.Performance.Trades++
+			if tradePnL > 0 {
+				s.Performance.Wins++
+			} else if tradePnL < 0 {
+				s.Performance.Losses++
+			}
+
+			if p.LeavesQty <= remainingToSell {
+				remainingToSell -= p.LeavesQty
+			} else {
+				p.LeavesQty -= remainingToSell
+				remainingToSell = 0
+				newPositions = append(newPositions, p)
+			}
+		}
+		s.positions = newPositions
 	}
 
 	// 🌟 アナライザー用のログ (ループの外で1回だけ出力！)
@@ -530,9 +581,6 @@ func (s *Sniper) reducePositions(sellQty float64, sellPrice float64, sellTime ti
 		slog.Float64("pnl", totalTradePnL),
 		slog.Float64("hold_time_sec", holdTimeSec),
 	)
-
-	// 更新された建玉リストで上書き
-	s.positions = newPositions
 }
 
 // CalcUnrealizedPnL は、現在の価格を基にスナイパーが保有する建玉の含み損益を計算します
@@ -670,7 +718,7 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 	var parentExecQty float64
 
 	for _, pe := range pendingExecs {
-		s.applyExecution(pe.exec, pe.action, pe.orderCreatedAt)
+		s.applyExecution(pe.exec, pe.action, pe.orderCreatedAt, pe.parentOrder)
 		pe.parentOrder.AddExecution(pe.exec)
 		if pe.parentOrder.HasIFD {
 			triggeredIFDParent = pe.parentOrder
@@ -696,6 +744,15 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 		closeOrder := order.CLOSE_POSITION_ORDER_NONE
 		if triggeredIFDParent.IFDAction == order.ACTION_SELL {
 			closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
+			// 今回の買い約定に対応する物理ポジションを返済指定する
+			for _, pe := range pendingExecs {
+				if pe.parentOrder == triggeredIFDParent {
+					closePositions = append(closePositions, order.ClosePosition{
+						HoldID: pe.exec.ID,
+						Qty:    pe.exec.Qty,
+					})
+				}
+			}
 		}
 
 		ifdPendingOrder, orderReq := s.buildOrderRequest(
@@ -706,6 +763,7 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 			closePositions,
 			closeOrder,
 		)
+		ifdPendingOrder.ClosePositions = closePositions
 		ifdPendingOrder.HasIFD = false
 		ifdPendingOrder.CreatedAt = time.Now()
 
@@ -716,7 +774,7 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 	return Bullet{}
 }
 
-func (s *Sniper) applyExecution(exec order.Execution, action order.Action, orderCreatedAt time.Time) {
+func (s *Sniper) applyExecution(exec order.Execution, action order.Action, orderCreatedAt time.Time, parentOrder *order.Order) {
 	// 🌟 重複チェック（冪等性の担保）
 	if s.processedExecutions[exec.ID] {
 		return
@@ -745,7 +803,11 @@ func (s *Sniper) applyExecution(exec order.Execution, action order.Action, order
 			slog.Int64("queue_time_ms", queueTimeMs),
 		)
 	case order.ACTION_SELL:
-		s.reducePositions(exec.Qty, exec.Price, exec.ExecutionTime)
+		var closePositions []order.ClosePosition
+		if parentOrder != nil {
+			closePositions = parentOrder.ClosePositions
+		}
+		s.reducePositions(exec.Qty, exec.Price, exec.ExecutionTime, closePositions)
 		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Detail.Code, exec.Qty)
 	}
 }
