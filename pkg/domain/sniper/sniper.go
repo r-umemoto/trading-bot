@@ -3,6 +3,7 @@ package sniper
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -551,9 +552,13 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var newExecQty float64
-	var triggeredIFDParent *order.Order
-	var newExecs []order.Execution
+	type pendingExecution struct {
+		exec           order.Execution
+		action         order.Action
+		orderCreatedAt time.Time
+		parentOrder    *order.Order
+	}
+	var pendingExecs []pendingExecution
 
 	// 新しい管理リストを作成（事実ベースで再構築）
 	var reconciledOrders []*order.Order
@@ -622,13 +627,18 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 			matchedInternal.InternalState = order.STATE_ACTIVE // API側に存在することが確認できたらACTIVEへ遷移
 		}
 
-		// 約定の反映
+		// 約定を一時的に収集（あとで時系列ソートして一括反映）
 		for _, exec := range ext.Executions {
 			if !s.processedExecutions[exec.ID] {
-				s.applyExecution(exec, matchedInternal.Action, matchedInternal.CreatedAt)
-				newExecQty += exec.Qty
-				triggeredIFDParent = matchedInternal
-				newExecs = append(newExecs, exec)
+				pendingExecs = append(pendingExecs, pendingExecution{
+					exec:           exec,
+					action:         matchedInternal.Action,
+					orderCreatedAt: matchedInternal.CreatedAt,
+					parentOrder:    matchedInternal,
+				})
+			} else {
+				// 既に処理済みの約定であれば、内部注文の約定リストに確実に入っているようにする
+				matchedInternal.AddExecution(exec)
 			}
 		}
 
@@ -651,29 +661,47 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 	// リストを更新（APIにない確定済みIDの注文はここで消える）
 	s.Orders = reconciledOrders
 
+	// 約定を時系列（古い順）にソートして、建玉管理が崩れないようにする（例：BUYがSELLより先になるように）
+	sort.Slice(pendingExecs, func(i, j int) bool {
+		return pendingExecs[i].exec.ExecutionTime.Before(pendingExecs[j].exec.ExecutionTime)
+	})
+
+	var triggeredIFDParent *order.Order
+	var parentExecQty float64
+
+	for _, pe := range pendingExecs {
+		s.applyExecution(pe.exec, pe.action, pe.orderCreatedAt)
+		pe.parentOrder.AddExecution(pe.exec)
+		if pe.parentOrder.HasIFD {
+			triggeredIFDParent = pe.parentOrder
+			parentExecQty += pe.exec.Qty
+		}
+	}
+
+	// 4. 約定反映によってデータが完了した注文があれば、Ordersリストから取り除く
+	var finalOrders []*order.Order
+	for _, o := range s.Orders {
+		isDataComplete := o.FilledQty() >= o.CumQty
+		if !o.IsCompleted() || !isDataComplete {
+			finalOrders = append(finalOrders, o)
+		}
+	}
+	s.Orders = finalOrders
+
 	// 3. IFDの発火処理
-	if newExecQty > 0 && triggeredIFDParent != nil && triggeredIFDParent.HasIFD {
-		fmt.Printf("⚡ [%s] IFD発火: %.2f株の約定に伴い、決済注文を発注します\n", s.Detail.Code, newExecQty)
+	if parentExecQty > 0 && triggeredIFDParent != nil && triggeredIFDParent.HasIFD {
+		fmt.Printf("⚡ [%s] IFD発火: %.2f株の約定に伴い、決済注文を発注します\n", s.Detail.Code, parentExecQty)
 
 		var closePositions []order.ClosePosition
-		if triggeredIFDParent.IFDAction == order.ACTION_SELL {
-			for _, exec := range newExecs {
-				closePositions = append(closePositions, order.ClosePosition{
-					HoldID: exec.ID,
-					Qty:    exec.Qty,
-				})
-			}
-		}
-
 		closeOrder := order.CLOSE_POSITION_ORDER_NONE
-		if triggeredIFDParent.IFDAction == order.ACTION_SELL && len(closePositions) == 0 {
+		if triggeredIFDParent.IFDAction == order.ACTION_SELL {
 			closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
 		}
 
 		ifdPendingOrder, orderReq := s.buildOrderRequest(
 			triggeredIFDParent.IFDAction,
 			triggeredIFDParent.IFDPrice,
-			newExecQty,
+			parentExecQty,
 			triggeredIFDParent.IFDOrderType,
 			closePositions,
 			closeOrder,

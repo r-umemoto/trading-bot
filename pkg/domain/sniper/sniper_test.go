@@ -148,3 +148,109 @@ func TestSniper_SyncOrders_CancelSentTimeout(t *testing.T) {
 		t.Errorf("expected status to revert to IN_PROGRESS, got %v", internalOrder.Status)
 	}
 }
+
+func TestSniper_SyncOrders_ChronologicalExecutions(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	policy := &strategy.NoopPolicy{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+
+	buyOrderID := "buy-order"
+	sellOrderID := "sell-order"
+
+	buyOrder := order.NewOrder(buyOrderID, "9434", order.ACTION_BUY, 2000, 100)
+	sellOrder := order.NewOrder(sellOrderID, "9434", order.ACTION_SELL, 2010, 100)
+
+	s.Orders = append(s.Orders, buyOrder, sellOrder)
+
+	// API returns newest first: SELL order first, then BUY order
+	extOrders := []order.Order{
+		{
+			ID:     sellOrderID,
+			Symbol: "9434",
+			Status: order.ORDER_STATUS_FILLED,
+			CumQty: 100,
+			Executions: []order.Execution{
+				{
+					ID:            "exec-sell",
+					Price:         2010,
+					Qty:           100,
+					ExecutionTime: time.Now().Add(-1 * time.Second), // Executed 1 second ago
+				},
+			},
+		},
+		{
+			ID:     buyOrderID,
+			Symbol: "9434",
+			Status: order.ORDER_STATUS_FILLED,
+			CumQty: 100,
+			Executions: []order.Execution{
+				{
+					ID:            "exec-buy",
+					Price:         2000,
+					Qty:           100,
+					ExecutionTime: time.Now().Add(-2 * time.Second), // Executed 2 seconds ago (older!)
+				},
+			},
+		},
+	}
+
+	s.SyncOrders(order.Orders{Orders: extOrders})
+
+	// After sync, positions should be empty (0 shares), since we bought 100 and sold 100
+	holdQty := 0.0
+	for _, p := range s.positions {
+		holdQty += p.LeavesQty
+	}
+	if holdQty != 0 {
+		t.Errorf("expected holdQty 0, got %f (positions: %+v)", holdQty, s.positions)
+	}
+}
+
+func TestSniper_SyncOrders_OrderExecutionSync_AndCleanup(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	policy := &strategy.NoopPolicy{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+
+	buyOrderID := "buy-order-xyz"
+	buyOrder := order.NewOrder(buyOrderID, "9434", order.ACTION_BUY, 2000, 100)
+	s.Orders = append(s.Orders, buyOrder)
+
+	// Simulate order is FILLED with an execution of 100 shares
+	extOrders := []order.Order{
+		{
+			ID:     buyOrderID,
+			Symbol: "9434",
+			Status: order.ORDER_STATUS_FILLED,
+			CumQty: 100,
+			Executions: []order.Execution{
+				{
+					ID:            "exec-buy-xyz",
+					Price:         2000,
+					Qty:           100,
+					ExecutionTime: time.Now(),
+				},
+			},
+		},
+	}
+
+	s.SyncOrders(order.Orders{Orders: extOrders})
+
+	// 1. Verify internal order's Executions are populated
+	if len(buyOrder.Executions) != 1 {
+		t.Fatalf("expected 1 execution in internal order, got %d", len(buyOrder.Executions))
+	}
+	if buyOrder.Executions[0].ID != "exec-buy-xyz" {
+		t.Errorf("expected execution ID 'exec-buy-xyz', got '%s'", buyOrder.Executions[0].ID)
+	}
+
+	// 2. Verify FilledQty matches CumQty
+	if buyOrder.FilledQty() != 100 {
+		t.Errorf("expected FilledQty 100, got %f", buyOrder.FilledQty())
+	}
+
+	// 3. Verify the completed and fully filled order is successfully cleaned up from s.Orders
+	if len(s.Orders) != 0 {
+		t.Errorf("expected s.Orders to be empty after filled order cleanup, but got %d orders", len(s.Orders))
+	}
+}
+
