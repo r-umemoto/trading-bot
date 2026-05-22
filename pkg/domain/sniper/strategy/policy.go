@@ -2,7 +2,6 @@ package strategy
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
@@ -196,10 +195,26 @@ func isOrderDesiredDefault(ord *order.Order, sig brain.Signal, symbol symbol.Sym
 
 	// 指値価格の比較
 	if sig.Price > 0 && ord.OrderPrice > 0 {
-		diff := math.Abs(ord.OrderPrice - sig.Price)
 		tickSize := symbol.CalcTickSize(ord.OrderPrice)
-		// 1ティック以内なら維持 (浮動小数点の誤差を考慮して少しマージンを持たせる)
-		return diff <= (tickSize + 0.0001)
+		if ord.Action == order.ACTION_BUY {
+			// 1. 既にシグナル価格以上の指値なら、より約定しやすく、
+			// かつ取引所の価格改善（指値以下での約定）も期待できるため、あえてキャンセルしない。
+			if ord.OrderPrice >= sig.Price {
+				return true
+			}
+			// 2. シグナルより低い価格の場合、1ティック以内なら許容（スパム防止）。
+			// それ以上低いと「買えない（買えなくなった）」ため、キャンセルしてシグナルに合わせる。
+			return (sig.Price - ord.OrderPrice) <= (tickSize + 0.0001)
+		} else {
+			// 1. 既にシグナル価格以下の指値なら、より約定しやすく、
+			// かつ価格改善（指値以上での約定）も期待できるため維持。
+			if ord.OrderPrice <= sig.Price {
+				return true
+			}
+			// 2. シグナルより高い価格の場合、1ティック以内なら許容。
+			// それ以上高いと「売れない（売れなくなった）」ためキャンセル。
+			return (ord.OrderPrice - sig.Price) <= (tickSize + 0.0001)
+		}
 	}
 
 	// 成行同士（Price=0）なら一致
