@@ -65,6 +65,7 @@ func RunBacktest() error {
 	}
 
 	var snipers []*sniper.Sniper
+	spotters := make(map[string]*sniper.Spotter)
 	for _, sym := range watchList {
 		factory, err := strategy.GetFactory(sym.StrategyName)
 		if err != nil {
@@ -83,8 +84,9 @@ func RunBacktest() error {
 			slog.Error("バックテストログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
 		}
 
-		s := sniper.NewSniper(sym.Detail, st, policy, sym.Exchange, analysisLogger, dataPool)
+		s := sniper.NewSniper(sym.Detail, st, policy, sym.Exchange, analysisLogger)
 		snipers = append(snipers, s)
+		spotters[sym.Detail.Code] = sniper.NewSpotter(sym.Detail, analysisLogger)
 	}
 
 	// PositionCleaner の起動 (Gatewayに依存するため)
@@ -111,10 +113,16 @@ func RunBacktest() error {
 		for len(orderReportCh) > 0 {
 			report := <-orderReportCh
 			for _, s := range snipers {
-				// 🌟 修正: SyncOrders から戻る IFD 発注要求を処理する
-				bullet := s.SyncOrders(report)
+				sp := spotters[s.Detail.Code]
+				sp.Update(report, tick.CurrentPriceTime)
+
+				obs := sp.PrepareObservation(tick)
+				bullet := s.SyncOrders(obs)
 				if bullet.HasOrder() {
-					fmt.Printf("🚀 [%s] SyncOrders経由でIFD決済注文を送信します: %s %.2f株\n", s.Detail.Code, bullet.Order.Action, bullet.Order.OrderQty)
+					if bullet.HasOrder() {
+						sp.AddOrder(bullet.Order)
+					}
+					fmt.Printf("🚀 [%s] SyncOrders経由で注文を送信します: %s %.2f株\n", s.Detail.Code, bullet.Order.Action, bullet.Order.OrderQty)
 					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 					if err != nil {
 						s.FailSendingOrder(bullet.Order)
@@ -129,7 +137,9 @@ func RunBacktest() error {
 
 		for _, s := range snipers {
 			if s.Detail.Code == t.Symbol {
-				bullet := s.Tick()
+				sp := spotters[s.Detail.Code]
+				obs := sp.PrepareObservation(t)
+				bullet := s.Tick(obs)
 
 				if bullet.HasCancel() {
 					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", bullet.CancelOrderID)
@@ -138,6 +148,7 @@ func RunBacktest() error {
 				}
 
 				if bullet.HasOrder() {
+					sp.AddOrder(bullet.Order)
 					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 					if err != nil {
 						s.FailSendingOrder(bullet.Order)
@@ -164,8 +175,12 @@ func RunBacktest() error {
 				for len(orderReportCh) > 0 {
 					report := <-orderReportCh
 					for _, s := range snipers {
-						bullet := s.SyncOrders(report)
+						sp := spotters[s.Detail.Code]
+						sp.Update(report, state.LatestTick.CurrentPriceTime)
+						obs := sp.PrepareObservation(state.LatestTick)
+						bullet := s.SyncOrders(obs)
 						if bullet.HasOrder() {
+							sp.AddOrder(bullet.Order)
 							updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 							if err != nil {
 								s.FailSendingOrder(bullet.Order)

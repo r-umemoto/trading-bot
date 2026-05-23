@@ -47,36 +47,18 @@ func (u *TradeUseCase) Start(ctx context.Context, ticks map[string]<-chan tick.T
 			}
 		}
 
-		nest := NewSniperNest(symbol, symbolSnipers, tickCh, orderCh, u.dispatcher)
+		// 🌟 スナイパーが1つ以上ある場合、共有の Spotter を作成
+		var spotter *sniper.Spotter
+		if len(symbolSnipers) > 0 {
+			spotter = sniper.NewSpotter(symbolSnipers[0].Detail, symbolSnipers[0].Logger)
+		}
+
+		nest := NewSniperNest(symbol, spotter, symbolSnipers, tickCh, orderCh, u.dispatcher)
 		nest.Start(ctx)
 		u.nests = append(u.nests, nest)
 	}
 }
 
-// ExecuteTick は指定された銘柄の価格更新（Tick）を受け取り、同期的にスナイパー戦略を処理・評価します
-func (u *TradeUseCase) ExecuteTick(ctx context.Context, t tick.Tick) {
-	for _, s := range u.snipers {
-		if s.Detail.Code == t.Symbol {
-			// 1. スナイパーに考えさせる
-			bullet := s.Tick()
-
-			// 2. 🌟 直接発注せず、ディスパッチャに委ねる
-			u.dispatcher.Submit(s, bullet)
-		}
-	}
-}
-
-// ExecuteExecutionReport は最新の注文レポートを受け取り、同期的にスナイパーと注文状態の同期を行います
-func (u *TradeUseCase) ExecuteExecutionReport(ctx context.Context, report order.Orders, symbol string) {
-	for _, s := range u.snipers {
-		if s.Detail.Code == symbol {
-			bullet := s.SyncOrders(report)
-
-			// 2. 🌟 直接発注せず、ディスパッチャに委ねる
-			u.dispatcher.Submit(s, bullet)
-		}
-	}
-}
 
 // PrintPerformanceReport summarizes and prints the performance of all snipers.
 func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {

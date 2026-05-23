@@ -101,7 +101,7 @@ func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*s
 			slog.Error("ログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
 		}
 
-		s := sniper.NewSniper(t.Detail, st, policy, t.Exchange, analysisLogger, dataPool)
+		s := sniper.NewSniper(t.Detail, st, policy, t.Exchange, analysisLogger)
 		snipers = append(snipers, s)
 	}
 

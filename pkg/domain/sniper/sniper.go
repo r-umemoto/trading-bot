@@ -3,7 +3,6 @@ package sniper
 import (
 	"fmt"
 	"log/slog"
-	"sort"
 	"sync"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
-	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 type Strategy interface {
@@ -55,30 +53,29 @@ type Performance struct {
 	UnrealizedPnL float64
 }
 
-// Sniper は戦略とAPIクライアントを持ち、執行を担います
+// Sniper は戦略と執行ロジックを持ち、判断とアクション（Bullet）の生成を担います。
 type Sniper struct {
-	Detail          symbol.Symbol // 🌟 銘柄詳細（Symbol, PriceRangeGroup等を含む）
-	positions       []position.Position
-	Performance     Performance // 🌟 追加
-	Strategy        Strategy
-	State           strategy.StrategyState   // 👈 銘柄ごとの戦略ステート
-	ExecutionPolicy strategy.ExecutionPolicy // 👈 執行ポリシー（疑似約定判定）
-	Orders          []*order.Order
-	Logger          *slog.Logger // 🌟 解析用ロガー
-	mu              sync.Mutex   // 👈 状態をロックするための鍵
-	lifecycle       LifecycleState // 👈 ライフサイクル状態遷移
-	AccountType     order.AccountType
-	Exchange        order.ExchangeMarket
-	MarginTradeType order.MarginTradeType
+	Detail            symbol.Symbol
+	Strategy          Strategy
+	Performance       Performance // 🌟 取引成績
+	LatestObservation Observation // 🌟 最新の観測事実（レポート用）
+	State             strategy.StrategyState
+	ExecutionPolicy   strategy.ExecutionPolicy
+	Orders            []*order.Order // 自身が管理する注文（FILL_EXPECTED等のローカル状態を含む）
+	Logger            *slog.Logger
+	mu                sync.Mutex
+	lifecycle         LifecycleState
+	AccountType       order.AccountType
+	Exchange          order.ExchangeMarket
+	MarginTradeType   order.MarginTradeType
+	processedExecutions map[string]bool // 🌟 処理済みの約定ID（IFD二重発火防止用）
 
-	processedExecutions map[string]bool // 🌟 処理済みの約定IDを記録
-	lastSignalReason    string          // 🌟 最新のシグナル理由（分析用）
-	lastStatusLogAt     time.Time       // 🌟 最後にステータスログを出力した時刻
-	dataPool            tick.DataPool   // 👈 データプールへの参照
+	lastSignalReason string
+	lastStatusLogAt  time.Time
 }
 
-// NewSniper は新しいスナイパーを生成します
-func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange order.ExchangeMarket, logger *slog.Logger, dataPool tick.DataPool) *Sniper {
+// NewSniper は新しいスナイパーを生成します。
+func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange order.ExchangeMarket, logger *slog.Logger) *Sniper {
 	if logger == nil {
 		logger = strategy.AnalysisLogger()
 	}
@@ -86,31 +83,27 @@ func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.Executio
 		logger = slog.Default()
 	}
 	return &Sniper{
-		Detail:              detail,
-		Strategy:            strategy,
-		ExecutionPolicy:     policy,
-		Orders:              make([]*order.Order, 0),
-		positions:           []position.Position{}, // 初期状態は空
-		AccountType:         order.ACCOUNT_SPECIAL,
-		Exchange:            exchange,
-		MarginTradeType:     order.TRADE_TYPE_GENERAL_DAY,
+		Detail:          detail,
+		Strategy:        strategy,
+		ExecutionPolicy: policy,
+		Orders:          make([]*order.Order, 0),
+		AccountType:     order.ACCOUNT_SPECIAL,
+		Exchange:        exchange,
+		MarginTradeType: order.TRADE_TYPE_GENERAL_DAY,
+		Logger:          logger,
+		lifecycle:       LifecycleActive,
 		processedExecutions: make(map[string]bool),
-		Logger:              logger,
-		lifecycle:           LifecycleActive,
-		dataPool:            dataPool,
 	}
 }
 
-// 価格の更新がされたと時に実行される監視ロジック
-func (s *Sniper) Tick() Bullet {
-	// 処理中は他のゴルーチンが状態を触れないようにロック！
+// Tick は整理された事実（Observation）を受け取り、次に行うべきアクション（Bullet）を決定します。
+func (s *Sniper) Tick(obs Observation) Bullet {
 	s.mu.Lock()
-	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
+	defer s.mu.Unlock()
 
+	s.LatestObservation = obs // レポート用に保存
 
-	// 0. 呼値を最新の価格に基づいて更新
-	state := s.dataPool.GetState(s.Detail.Code)
-	now := state.LatestTick.CurrentPriceTime
+	now := obs.Tick.CurrentPriceTime
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -120,7 +113,7 @@ func (s *Sniper) Tick() Bullet {
 		return Bullet{}
 	}
 
-	// 1. 管理対象の注文を特定する（アクションに合わせた注文を抽出）
+	// 1. 管理対象の注文を特定
 	var activeBuyOrder *order.Order
 	var activeSellOrder *order.Order
 	for _, o := range s.Orders {
@@ -135,21 +128,20 @@ func (s *Sniper) Tick() Bullet {
 		}
 	}
 
-	// 1.5 疑似約定 (Synthetic Fill) の判定 (両方の注文に対して実施)
-	// PENDING（送信待ち/API受付待ち）の注文は板に並んでいないため疑似約定判定から除外する
+	// 1.5 疑似約定 (Synthetic Fill) の判定
 	if s.ExecutionPolicy != nil {
 		if activeBuyOrder != nil && !activeBuyOrder.IsPending() {
-			s.ExecutionPolicy.ApplySyntheticFill(activeBuyOrder, state.LatestTick)
+			s.ExecutionPolicy.ApplySyntheticFill(activeBuyOrder, obs.Tick)
 		}
 		if activeSellOrder != nil && !activeSellOrder.IsPending() {
-			s.ExecutionPolicy.ApplySyntheticFill(activeSellOrder, state.LatestTick)
+			s.ExecutionPolicy.ApplySyntheticFill(activeSellOrder, obs.Tick)
 		}
 	}
 
-	currentPos := s.calculatePosition(s.Orders, s.positions)
+	currentPos := s.calculatePosition(obs.Positions)
 	input := strategy.StrategyInput{
 		Position:   currentPos,
-		LatestTick: state.LatestTick,
+		LatestTick: obs.Tick,
 	}
 
 	// 4. 戦略の判断を仰ぐ
@@ -199,10 +191,9 @@ func (s *Sniper) Tick() Bullet {
 			slog.String("symbol", s.Detail.Code),
 			slog.String("strategy_name", s.Strategy.Name()),
 			slog.String("event", "STRATEGY_STATUS"),
-			slog.Float64("price", state.LatestTick.Price),
+			slog.Float64("price", obs.Tick.Price),
 			slog.Float64("hold_qty", input.HoldQty()),
 			slog.Any("orders", orderDetails),
-			slog.Float64("realized_pnl", s.Performance.RealizedPnL),
 		)
 		s.lastStatusLogAt = time.Now()
 	}
@@ -301,14 +292,13 @@ func (s *Sniper) Tick() Bullet {
 	var closePositions []order.ClosePosition
 	closeOrder := order.CLOSE_POSITION_ORDER_NONE
 	if marketAction == order.ACTION_SELL {
-		closePositions, closeOrder = s.matchPositionsToClose(signal.Quantity)
+		closePositions, closeOrder = s.matchPositionsToClose(obs, signal.Quantity)
 	}
 
 	// --- 6. IFD (If-Done) 注文の組み立て ---
-	// 直前のシグナルが約定したと仮定して、次の意図を問う
 	simulatedInput := strategy.StrategyInput{
 		Position:   s.simulateSignal(currentPos, signal),
-		LatestTick: state.LatestTick,
+		LatestTick: obs.Tick,
 	}
 	ifDoneSignal := s.Strategy.IfDone(simulatedInput, signal)
 	if ifDoneSignal.Price > 0 {
@@ -330,18 +320,18 @@ func (s *Sniper) Tick() Bullet {
 	ptr.IFDPrice = ifDoneSignal.Price
 	ptr.IFDOrderType = ifDoneSignal.OrderType
 
-	ptr.CreatedAt = state.LatestTick.CurrentPriceTime // 🌟 約定レイテンシ計算のためにTick時刻に合わせる
+	ptr.CreatedAt = obs.Tick.CurrentPriceTime // 🌟 約定レイテンシ計算のためにTick時刻に合わせる
 
 	s.Orders = append(s.Orders, ptr)
 
 	return Bullet{Order: ptr, Request: &orderReq}
 }
 
-// matchPositionsToClose は指定した数量分だけ、保有している建玉を FIFO（先入先出）で返済用に対象指定します
-func (s *Sniper) matchPositionsToClose(qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
+// matchPositionsToClose は指定した数量分だけ、保有している建玉を FIFO（先入先出）で返済用に対対象指定します
+func (s *Sniper) matchPositionsToClose(obs Observation, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
 	var closePositions []order.ClosePosition
 	remainingSellQty := qty
-	for _, p := range s.positions {
+	for _, p := range obs.Positions {
 		if remainingSellQty <= 0 {
 			break
 		}
@@ -389,18 +379,18 @@ func (s *Sniper) buildOrderRequest(action order.Action, price float64, qty float
 }
 
 // calculatePosition は現在の注文状態と確定ポジションから、戦略に渡すための要約ポジションを計算します
-func (s *Sniper) calculatePosition(orders []*order.Order, basePositions []position.Position) strategy.Position {
+func (s *Sniper) calculatePosition(groundPositions []position.Position) strategy.Position {
 	var totalQty float64
 	var totalCost float64
 
 	// 1. API確定ポジションをベースにする
-	for _, p := range basePositions {
+	for _, p := range groundPositions {
 		totalQty += p.LeavesQty
 		totalCost += p.Price * p.LeavesQty
 	}
 
-	// 2. 疑似約定(FILL_EXPECTED)を先行計上
-	for _, o := range orders {
+	// 2. 自身の管理注文のうち、疑似約定(FILL_EXPECTED)を先行計上
+	for _, o := range s.Orders {
 		if o.Status == order.ORDER_STATUS_FILL_EXPECTED {
 			switch o.Action {
 			case order.ACTION_BUY:
@@ -452,7 +442,6 @@ func (s *Sniper) simulateSignal(currentPos strategy.Position, sig brain.Signal) 
 	}
 }
 
-
 // FailSendingOrder は発注失敗時に呼ばれ、Ordersリストから仮注文をクリアします
 func (s *Sniper) FailSendingOrder(ord *order.Order) {
 	s.mu.Lock()
@@ -460,7 +449,6 @@ func (s *Sniper) FailSendingOrder(ord *order.Order) {
 
 	for i, o := range s.Orders {
 		if o == ord || o.ID == ord.ID {
-			// 該当する注文をリストから削除
 			s.Orders = append(s.Orders[:i], s.Orders[i+1:]...)
 			break
 		}
@@ -480,8 +468,7 @@ func (s *Sniper) RevertOrderStatus(ord *order.Order, status order.OrderStatus) {
 	}
 }
 
-
-// OrderlyExit はスナイパーを撤収モードに移行させます。新規エントリーは禁止され、決済のみ許可されます。
+// OrderlyExit はスナイパーを撤収モードに移行させます。
 func (s *Sniper) OrderlyExit() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -489,7 +476,7 @@ func (s *Sniper) OrderlyExit() {
 	s.Logger.Warn("LIFECYCLE_EXIT_TRIGGERED", slog.String("symbol", s.Detail.Code))
 }
 
-// ForceStop はスナイパーを完全停止モードに移行させます。これ以上の処理はすべて遮断されます。
+// ForceStop はスナイパーを完全停止モードに移行させます。
 func (s *Sniper) ForceStop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -504,369 +491,118 @@ func (s *Sniper) GetLifecycle() LifecycleState {
 	return s.lifecycle
 }
 
-// ForceExit はキルスイッチ作動時に呼ばれ、自身の未約定注文のキャンセルと成行決済を行います
+// ForceExit は強制停止時に呼ばれます。
 func (s *Sniper) ForceExit() {
 	s.ForceStop()
-	fmt.Printf("🚨 [%s] 強制停止モードON。これ以降の価格更新は無視し、強制決済プロセスを開始します。\n", s.Detail.Code)
+	fmt.Printf("🚨 [%s] 強制停止モードON。\n", s.Detail.Code)
 }
 
-// reducePositions は、指定返済（ClosePositions）に基づいて建玉を指定削減し、残量をFIFOで削減して、損益を計算します
-func (s *Sniper) reducePositions(sellQty float64, sellPrice float64, sellTime time.Time, closePositions []order.ClosePosition) {
-	remainingToSell := sellQty
-	var totalTradePnL float64       // 🌟 今回の「売り約定全体」の損益を合算する変数
-	var earliestEntryTime time.Time // 🌟 保有時間の計算用
-
-	// 1. 指定返済用のポジションを特定して、最優先で削減する
-	if len(closePositions) > 0 {
-		// Map for quick lookup of close quantity by HoldID
-		closeMap := make(map[string]float64)
-		for _, cp := range closePositions {
-			closeMap[cp.HoldID] = cp.Qty
-		}
-
-		var newPositions []position.Position
-		for _, p := range s.positions {
-			qtyToClose, exists := closeMap[p.ExecutionID]
-			if exists && qtyToClose > 0 && remainingToSell > 0 {
-				closeQty := p.LeavesQty
-				if closeQty > qtyToClose {
-					closeQty = qtyToClose
-				}
-				if closeQty > remainingToSell {
-					closeQty = remainingToSell
-				}
-
-				if earliestEntryTime.IsZero() || (!p.Meta.EntryTime.IsZero() && p.Meta.EntryTime.Before(earliestEntryTime)) {
-					earliestEntryTime = p.Meta.EntryTime
-				}
-
-				// 損益計算
-				tradePnL := (sellPrice - p.Price) * closeQty
-				totalTradePnL += tradePnL
-
-				s.Performance.RealizedPnL += tradePnL
-				s.Performance.Trades++
-				if tradePnL > 0 {
-					s.Performance.Wins++
-				} else if tradePnL < 0 {
-					s.Performance.Losses++
-				}
-
-				p.LeavesQty -= closeQty
-				closeMap[p.ExecutionID] -= closeQty
-				remainingToSell -= closeQty
-
-				if p.LeavesQty > 0 {
-					newPositions = append(newPositions, p)
-				}
-			} else {
-				newPositions = append(newPositions, p)
-			}
-		}
-		s.positions = newPositions
-	}
-
-	// 2. 残量がある場合、または指定返済でない場合：フォールバックして従来のFIFO削減
-	if remainingToSell > 0 {
-		var newPositions []position.Position
-		for _, p := range s.positions {
-			if remainingToSell <= 0 {
-				newPositions = append(newPositions, p)
-				continue
-			}
-
-			closeQty := p.LeavesQty
-			if closeQty > remainingToSell {
-				closeQty = remainingToSell
-			}
-
-			// 最も古い建玉の時間を取得
-			if earliestEntryTime.IsZero() || (!p.Meta.EntryTime.IsZero() && p.Meta.EntryTime.Before(earliestEntryTime)) {
-				earliestEntryTime = p.Meta.EntryTime
-			}
-
-			// 損益計算
-			tradePnL := (sellPrice - p.Price) * closeQty
-			totalTradePnL += tradePnL // 全体の損益に加算
-
-			s.Performance.RealizedPnL += tradePnL
-			s.Performance.Trades++
-			if tradePnL > 0 {
-				s.Performance.Wins++
-			} else if tradePnL < 0 {
-				s.Performance.Losses++
-			}
-
-			if p.LeavesQty <= remainingToSell {
-				remainingToSell -= p.LeavesQty
-			} else {
-				p.LeavesQty -= remainingToSell
-				remainingToSell = 0
-				newPositions = append(newPositions, p)
-			}
-		}
-		s.positions = newPositions
-	}
-
-	// 🌟 アナライザー用のログ (ループの外で1回だけ出力！)
-	holdTimeSec := 0.0
-	if !earliestEntryTime.IsZero() && !sellTime.IsZero() {
-		// 売り約定時刻から、最も古い建玉の取得時刻を引いて保有時間を算出
-		holdTimeSec = sellTime.Sub(earliestEntryTime).Seconds()
-	}
-	s.Logger.Info("POSITION_CLOSED",
-		slog.String("symbol", s.Detail.Code),
-		slog.String("strategy_name", s.Strategy.Name()),
-		slog.String("event", "POSITION_CLOSED"),
-		slog.String("exit_reason", s.lastSignalReason), // 🌟 決済理由を記録
-		slog.Float64("pnl", totalTradePnL),
-		slog.Float64("hold_time_sec", holdTimeSec),
-	)
-}
-
-// CalcUnrealizedPnL は、現在の価格を基にスナイパーが保有する建玉の含み損益を計算します
-func (s *Sniper) CalcUnrealizedPnL(currentPrice float64) float64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+// CalcUnrealizedPnL は含み損益を計算します。
+func (s *Sniper) CalcUnrealizedPnL(obs Observation) float64 {
 	var unrealized float64
-	for _, p := range s.positions {
-		unrealized += (currentPrice - p.Price) * p.LeavesQty
+	for _, p := range obs.Positions {
+		unrealized += (obs.Tick.Price - p.Price) * p.LeavesQty
 	}
 	return unrealized
 }
 
-// SyncOrders はインフラ層から取得した最新の注文一覧と同期し、内部状態を「事実」に合わせます
-func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
+// SyncOrders は事実（Observation）を自身の管理注文に反映し、必要ならIFD注文を発火させます。
+func (s *Sniper) SyncOrders(obs Observation) Bullet {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	type pendingExecution struct {
-		exec           order.Execution
-		action         order.Action
-		orderCreatedAt time.Time
-		parentOrder    *order.Order
-	}
-	var pendingExecs []pendingExecution
-
-	// 新しい管理リストを作成（事実ベースで再構築）
-	var reconciledOrders []*order.Order
-
-	// 1. InternalState が未確定（PENDING/PREPARING）または未完了の注文をまず保持する
-	// APIの一覧に反映されるまでのタイムラグによる注文消失（および再発注スパム）を防ぐため。
-	state := s.dataPool.GetState(s.Detail.Code)
-	now := state.LatestTick.CurrentPriceTime
+	now := obs.Tick.CurrentPriceTime
 	if now.IsZero() {
 		now = time.Now()
 	}
 
+	var reconciledOrders []*order.Order
+	var triggeredBullet Bullet
+
 	for _, o := range s.Orders {
-		if o.IsPending() {
-			// 仮ID（PENDING）はAPI未達の可能性があるため、30秒間は無条件で保持する
-			// 🌟 バックテスト対応：実時間(time.Since)ではなく、データの時刻(now)を使用
-			if now.Sub(o.CreatedAt) < 30*time.Second {
-				reconciledOrders = append(reconciledOrders, o)
-			} else {
-				fmt.Printf("🗑️ [%s] APIに30秒以上現れない送信中注文(%s)をOrdersから削除します\n", s.Detail.Code, o.ID)
-			}
-		} else if !o.IsCompleted() {
-			// 🌟 FILL_EXPECTED (疑似約定) のタイムアウト (20秒) を統合
-			// 本物の約定通知が来ない場合は、板の動きを見誤ったか貫通しなかったとみなして元に戻す
-			if o.Status == order.ORDER_STATUS_FILL_EXPECTED {
-				if !o.Synthetic.ExpectedAt.IsZero() && now.Sub(o.Synthetic.ExpectedAt) > 20*time.Second {
-					fmt.Printf("⚠️ [%s] 疑似約定から20秒経過しても通知がないため、待機状態に戻します: %s\n", s.Detail.Code, o.ID)
-					o.Status = order.ORDER_STATUS_IN_PROGRESS
-				}
-			}
+		// API側の状態（事実）を特定
+		var hasMatch bool
+		var extStatus order.OrderStatus
+		var extCumQty float64
+		var extExecs []order.Execution
 
-			// 既にIDが確定している未完了注文は、APIの瞬断に備えて一旦リストに残す
-			// （確定済み注文は30秒制限の対象外。指値でずっと待機している場合があるため）
-			reconciledOrders = append(reconciledOrders, o)
-		}
-	}
-
-	// 2. APIから取得した注文をすべて反映・採用する
-	for _, ext := range externalOrders.Orders {
-		if ext.Symbol != s.Detail.Code {
-			continue
-		}
-
-		// 内部で管理している注文を探す
-		var matchedInternal *order.Order
-		for _, o := range s.Orders {
+		for _, ext := range obs.Orders {
 			if o.ID == ext.ID {
-				matchedInternal = o
+				hasMatch = true
+				extStatus = ext.Status
+				extCumQty = ext.CumQty
+				extExecs = ext.Executions
 				break
 			}
 		}
 
-		if matchedInternal == nil {
-			// 【重要】自分が出した注文ではない（他の戦略の注文など）可能性があるため、一切関知しない。
-			// 起動時の残存建玉は PositionCleaner が掃除するため、ここでは「自分がこのセッションで出した注文」のみを管理する。
-			continue
-		}
+		// 1. 状態の同期と約定のチェック
+		var newExecs []order.Execution
+		if hasMatch {
+			o.Status = extStatus
+			o.CumQty = extCumQty
 
-		// 状態の同期
-		// ローカルで既にキャンセル送信中(CANCEL_SENT)または疑似約定(FILL_EXPECTED)になっている場合は、
-		// API側のステータスが完了状態（CANCELED, FILLED）に遷移するまで上書きを防止する
-		shouldUpdateStatus := true
-		switch matchedInternal.Status {
-		case order.ORDER_STATUS_CANCEL_SENT:
-			if ext.Status != order.ORDER_STATUS_CANCELED && ext.Status != order.ORDER_STATUS_FILLED {
-				if matchedInternal.CancelSentAt.IsZero() || now.Sub(matchedInternal.CancelSentAt) < 5*time.Second {
-					shouldUpdateStatus = false
+			// 新しい約定があるかチェック
+			for _, exec := range extExecs {
+				if !s.processedExecutions[exec.ID] {
+					newExecs = append(newExecs, exec)
 				}
 			}
-		case order.ORDER_STATUS_FILL_EXPECTED:
-			if ext.Status != order.ORDER_STATUS_FILLED {
-				shouldUpdateStatus = false
+		}
+
+		// 2. 疑似約定(FILL_EXPECTED)のタイムアウト判定
+		if o.Status == order.ORDER_STATUS_FILL_EXPECTED {
+			if !o.Synthetic.ExpectedAt.IsZero() && now.Sub(o.Synthetic.ExpectedAt) > 20*time.Second {
+				fmt.Printf("⚠️ [%s] 疑似約定タイムアウト: %s\n", s.Detail.Code, o.ID)
+				o.Status = order.ORDER_STATUS_IN_PROGRESS
 			}
 		}
 
-		if shouldUpdateStatus {
-			matchedInternal.Status = ext.Status
-		}
-
-		matchedInternal.CumQty = ext.CumQty
-		if matchedInternal.IsPending() {
-			matchedInternal.InternalState = order.STATE_ACTIVE // API側に存在することが確認できたらACTIVEへ遷移
-		}
-
-		// 約定を一時的に収集（あとで時系列ソートして一括反映）
-		for _, exec := range ext.Executions {
-			if !s.processedExecutions[exec.ID] {
-				pendingExecs = append(pendingExecs, pendingExecution{
-					exec:           exec,
-					action:         matchedInternal.Action,
-					orderCreatedAt: matchedInternal.CreatedAt,
-					parentOrder:    matchedInternal,
-				})
-			} else {
-				// 既に処理済みの約定であれば、内部注文の約定リストに確実に入っているようにする
-				matchedInternal.AddExecution(exec)
+		// 3. IFD の発火判定
+		if len(newExecs) > 0 {
+			// 約定を「処理済み」としてマーク
+			for _, exec := range newExecs {
+				s.processedExecutions[exec.ID] = true
+				o.AddExecution(exec) // 内部オブジェクトにも反映
 			}
-		}
 
-		// 完了していない注文を管理リストに残す
-		isDataComplete := matchedInternal.FilledQty() >= matchedInternal.CumQty
-		if !matchedInternal.IsCompleted() || !isDataComplete {
-			exists := false
-			for _, ro := range reconciledOrders {
-				if ro.ID == matchedInternal.ID {
-					exists = true
-					break
-				}
-			}
-			if !exists {
-				reconciledOrders = append(reconciledOrders, matchedInternal)
-			}
-		}
-	}
-
-	// リストを更新（APIにない確定済みIDの注文はここで消える）
-	s.Orders = reconciledOrders
-
-	// 約定を時系列（古い順）にソートして、建玉管理が崩れないようにする（例：BUYがSELLより先になるように）
-	sort.Slice(pendingExecs, func(i, j int) bool {
-		return pendingExecs[i].exec.ExecutionTime.Before(pendingExecs[j].exec.ExecutionTime)
-	})
-
-	var triggeredIFDParent *order.Order
-	var parentExecQty float64
-
-	for _, pe := range pendingExecs {
-		s.applyExecution(pe.exec, pe.action, pe.orderCreatedAt, pe.parentOrder)
-		pe.parentOrder.AddExecution(pe.exec)
-		if pe.parentOrder.HasIFD {
-			triggeredIFDParent = pe.parentOrder
-			parentExecQty += pe.exec.Qty
-		}
-	}
-
-	// 4. 約定反映によってデータが完了した注文があれば、Ordersリストから取り除く
-	var finalOrders []*order.Order
-	for _, o := range s.Orders {
-		isDataComplete := o.FilledQty() >= o.CumQty
-		if !o.IsCompleted() || !isDataComplete {
-			finalOrders = append(finalOrders, o)
-		}
-	}
-	s.Orders = finalOrders
-
-	// 3. IFDの発火処理
-	if parentExecQty > 0 && triggeredIFDParent != nil && triggeredIFDParent.HasIFD {
-		fmt.Printf("⚡ [%s] IFD発火: %.2f株の約定に伴い、決済注文を発注します\n", s.Detail.Code, parentExecQty)
-
-		var closePositions []order.ClosePosition
-		closeOrder := order.CLOSE_POSITION_ORDER_NONE
-		if triggeredIFDParent.IFDAction == order.ACTION_SELL {
-			closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
-			// 今回の買い約定に対応する物理ポジションを返済指定する
-			for _, pe := range pendingExecs {
-				if pe.parentOrder == triggeredIFDParent {
+			// IFD 設定があれば決済注文を組み立てる
+			if o.HasIFD && !triggeredBullet.HasOrder() {
+				totalNewQty := 0.0
+				var closePositions []order.ClosePosition
+				for _, exec := range newExecs {
+					totalNewQty += exec.Qty
 					closePositions = append(closePositions, order.ClosePosition{
-						HoldID: pe.exec.ID,
-						Qty:    pe.exec.Qty,
+						HoldID: exec.ID,
+						Qty:    exec.Qty,
 					})
 				}
+
+				fmt.Printf("⚡ [%s] IFD発火: %.0f株の約定に対し、決済注文(%s)を準備します\n", s.Detail.Code, totalNewQty, o.IFDAction)
+				ifdOrder, ifdReq := s.buildOrderRequest(
+					o.IFDAction,
+					o.IFDPrice,
+					totalNewQty,
+					o.IFDOrderType,
+					closePositions,
+					order.CLOSE_POSITION_ORDER_NONE,
+				)
+				ifdOrder.CreatedAt = now
+				triggeredBullet = Bullet{Order: ifdOrder, Request: &ifdReq}
 			}
 		}
 
-		ifdPendingOrder, orderReq := s.buildOrderRequest(
-			triggeredIFDParent.IFDAction,
-			triggeredIFDParent.IFDPrice,
-			parentExecQty,
-			triggeredIFDParent.IFDOrderType,
-			closePositions,
-			closeOrder,
-		)
-		ifdPendingOrder.ClosePositions = closePositions
-		ifdPendingOrder.HasIFD = false
-		ifdPendingOrder.CreatedAt = time.Now()
-
-		s.Orders = append(s.Orders, ifdPendingOrder)
-		return Bullet{Order: ifdPendingOrder, Request: &orderReq}
-	}
-
-	return Bullet{}
-}
-
-func (s *Sniper) applyExecution(exec order.Execution, action order.Action, orderCreatedAt time.Time, parentOrder *order.Order) {
-	// 🌟 重複チェック（冪等性の担保）
-	if s.processedExecutions[exec.ID] {
-		return
-	}
-	s.processedExecutions[exec.ID] = true
-
-	switch action {
-	case order.ACTION_BUY:
-		s.positions = append(s.positions, position.Position{
-			ExecutionID: exec.ID,
-			Symbol:      s.Detail.Code,
-			LeavesQty:   exec.Qty,
-			Price:       exec.Price,
-			Meta:        position.PositionMeta{EntryTime: exec.ExecutionTime}, // 🌟 メタデータとして記録
-		})
-		fmt.Printf("✅ [%s] 買付約定を反映: 単価%.2f 数量%f\n", s.Detail.Code, exec.Price, exec.Qty)
-
-		queueTimeMs := exec.ExecutionTime.Sub(orderCreatedAt).Milliseconds()
-		s.Logger.Info("FILLED",
-			slog.String("symbol", s.Detail.Code),
-			slog.String("strategy_name", s.Strategy.Name()),
-			slog.String("event", "FILLED"),
-			slog.String("entry_reason", s.lastSignalReason), // 🌟 エントリー理由を記録
-			slog.Float64("qty", exec.Qty),
-			slog.Float64("price", exec.Price),
-			slog.Int64("queue_time_ms", queueTimeMs),
-		)
-	case order.ACTION_SELL:
-		var closePositions []order.ClosePosition
-		if parentOrder != nil {
-			closePositions = parentOrder.ClosePositions
+		// 4. 管理リストの整理（未完了、またはAPIにまだ存在する注文を保持）
+		if !o.IsCompleted() || (hasMatch && o.FilledQty() < o.CumQty) {
+			reconciledOrders = append(reconciledOrders, o)
 		}
-		s.reducePositions(exec.Qty, exec.Price, exec.ExecutionTime, closePositions)
-		fmt.Printf("✅ [%s] 売付約定を反映: 数量%f\n", s.Detail.Code, exec.Qty)
 	}
-}
 
-// OnExecution は廃止されました (SyncOrders に統合)
+	// 5. IFD注文があればリストに追加
+	if triggeredBullet.HasOrder() {
+		reconciledOrders = append(reconciledOrders, triggeredBullet.Order)
+	}
+
+	s.Orders = reconciledOrders
+	return triggeredBullet
+}

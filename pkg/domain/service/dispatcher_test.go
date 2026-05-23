@@ -49,7 +49,7 @@ func TestOrderDispatcher_Submit_OverrideAndHoldCleanup(t *testing.T) {
 
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := sniper.NewSniper(detail, &mockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	s := sniper.NewSniper(detail, &mockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
 
 	// 1. Create a pending order and submit it
 	order1 := order.NewOrder(order.GenerateLocalID(), "9434", order.ACTION_BUY, 2000, 100)
@@ -116,7 +116,7 @@ func TestOrderDispatcher_CancelFailureRevert(t *testing.T) {
 
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := sniper.NewSniper(detail, &mockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	s := sniper.NewSniper(detail, &mockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
 
 	// Create an order in CANCEL_SENT status
 	ord := order.NewOrder("order-789", "9434", order.ACTION_BUY, 2000, 100)
