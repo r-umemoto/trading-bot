@@ -37,13 +37,14 @@ func TestSniper_Tick_WithObservation(t *testing.T) {
 	}
 
 	// 2. 疑似約定(FILL_EXPECTED)がある場合のポジション計算テスト
-	s.Orders = append(s.Orders, &order.Order{
+	ord := &order.Order{
 		ID:         "test-order",
 		Action:     order.ACTION_BUY,
 		OrderPrice: 2000,
 		OrderQty:   100,
 		Status:     order.ORDER_STATUS_FILL_EXPECTED,
-	})
+	}
+	s.ManagedOrders = append(s.ManagedOrders, NewManagedOrder("test-order", ord, nil))
 
 	pos := s.calculatePosition(nil) // 確定ポジションはゼロ
 	if pos.Qty != 100 {
@@ -85,25 +86,25 @@ func TestSpotter_UpdateAndObserve(t *testing.T) {
 	}
 }
 
-func TestSniper_SyncOrders_Observation(t *testing.T) {
+func TestSniper_Tick_Timeout(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
 	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
 
-	o := &order.Order{
+	ord := &order.Order{
 		Status: order.ORDER_STATUS_FILL_EXPECTED,
 		Synthetic: order.SyntheticFillState{
 			ExpectedAt: time.Now().Add(-30 * time.Second), // タイムアウト済み
 		},
 	}
-	s.Orders = append(s.Orders, o)
+	s.ManagedOrders = append(s.ManagedOrders, NewManagedOrder("test-order", ord, nil))
 
 	obs := Observation{
 		Tick: tick.Tick{CurrentPriceTime: time.Now()},
 	}
-	s.SyncOrders(obs)
+	s.Tick(obs) // タイムアウト判定は Tick で行われる
 
-	if o.Status != order.ORDER_STATUS_IN_PROGRESS {
-		t.Errorf("expected status to revert to IN_PROGRESS due to timeout, got %v", o.Status)
+	if ord.Status != order.ORDER_STATUS_IN_PROGRESS {
+		t.Errorf("expected status to revert to IN_PROGRESS due to timeout, got %v", ord.Status)
 	}
 }
