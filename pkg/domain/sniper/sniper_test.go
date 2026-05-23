@@ -10,6 +10,7 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 type MockStrategy struct{}
@@ -21,10 +22,23 @@ func (m *MockStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Sig
 	return brain.Signal{Action: brain.ACTION_HOLD}
 }
 
+type MockDataPool struct {
+	tick.DataPool
+	Tick tick.Tick
+}
+
+func (m *MockDataPool) GetState(symbol string) tick.MarketState {
+	return tick.MarketState{
+		Symbol:     symbol,
+		LatestTick: m.Tick,
+	}
+}
+
 func TestSniper_SyncOrders(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	dataPool := &MockDataPool{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, dataPool)
 
 	// 1. 注文を発注した直後の状態（PENDING ID）
 	pendingID := order.GenerateLocalID()
@@ -79,7 +93,8 @@ func TestSniper_SyncOrders(t *testing.T) {
 func TestSniper_SyncOrders_Executions(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	dataPool := &MockDataPool{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, dataPool)
 	realID := "order-456"
 	internalOrder := order.NewOrder(realID, "9434", order.ACTION_BUY, 2000, 100)
 	s.Orders = append(s.Orders, internalOrder)
@@ -122,7 +137,8 @@ func TestSniper_SyncOrders_Executions(t *testing.T) {
 func TestSniper_SyncOrders_CancelSentTimeout(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	dataPool := &MockDataPool{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, dataPool)
 	realID := "order-789"
 	internalOrder := order.NewOrder(realID, "9434", order.ACTION_BUY, 2000, 100)
 	internalOrder.Status = order.ORDER_STATUS_CANCEL_SENT
@@ -153,7 +169,8 @@ func TestSniper_SyncOrders_CancelSentTimeout(t *testing.T) {
 func TestSniper_SyncOrders_ChronologicalExecutions(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	dataPool := &MockDataPool{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, dataPool)
 
 	buyOrderID := "buy-order"
 	sellOrderID := "sell-order"
@@ -210,7 +227,8 @@ func TestSniper_SyncOrders_ChronologicalExecutions(t *testing.T) {
 func TestSniper_SyncOrders_OrderExecutionSync_AndCleanup(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	dataPool := &MockDataPool{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, dataPool)
 
 	buyOrderID := "buy-order-xyz"
 	buyOrder := order.NewOrder(buyOrderID, "9434", order.ACTION_BUY, 2000, 100)
@@ -258,7 +276,8 @@ func TestSniper_SyncOrders_OrderExecutionSync_AndCleanup(t *testing.T) {
 func TestSniper_ReducePositions_ByID(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, nil)
+	dataPool := &MockDataPool{}
+	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil, dataPool)
 
 	// Pre-populate with two physical positions
 	s.positions = []position.Position{

@@ -107,11 +107,13 @@ func (s *Sniper) Tick() Bullet {
 	s.mu.Lock()
 	defer s.mu.Unlock() // 関数が終わったら必ずロック解除
 
-	// --- 0. クリーンアップフェーズ ---
-	s.cleanupZombiesLocked()
 
 	// 0. 呼値を最新の価格に基づいて更新
 	state := s.dataPool.GetState(s.Detail.Code)
+	now := state.LatestTick.CurrentPriceTime
+	if now.IsZero() {
+		now = time.Now()
+	}
 
 	// 完全停止状態なら、すべて無視
 	if s.lifecycle == LifecycleStopped {
@@ -144,10 +146,10 @@ func (s *Sniper) Tick() Bullet {
 		}
 	}
 
+	currentPos := s.calculatePosition(s.Orders, s.positions)
 	input := strategy.StrategyInput{
-		Orders:        strategy.StrategyOrders(s.Orders),
-		LatestTick:    state.LatestTick,
-		BasePositions: s.positions,
+		Position:   currentPos,
+		LatestTick: state.LatestTick,
 	}
 
 	// 4. 戦略の判断を仰ぐ
@@ -276,7 +278,7 @@ func (s *Sniper) Tick() Bullet {
 				if o.Status == order.ORDER_STATUS_CANCEL_SENT {
 					// キャンセル送信から一定時間（例：30秒）経過しても応答がない場合はゾンビとみなし、
 					// ブロックを解除して新規発注フローへの進行を許可する。
-					if !o.CancelSentAt.IsZero() && time.Since(o.CancelSentAt) > 30*time.Second {
+					if !o.CancelSentAt.IsZero() && now.Sub(o.CancelSentAt) > 30*time.Second {
 						fmt.Printf("⚠️ [%s] キャンセル送信から30秒以上経過しても応答がありません(ID:%s)。ゾンビとみなしてブロックを解除します。\n", s.Detail.Code, o.ID)
 						continue
 					}
@@ -304,7 +306,11 @@ func (s *Sniper) Tick() Bullet {
 
 	// --- 6. IFD (If-Done) 注文の組み立て ---
 	// 直前のシグナルが約定したと仮定して、次の意図を問う
-	ifDoneSignal := s.Strategy.IfDone(input.SimulateSignal(signal), signal)
+	simulatedInput := strategy.StrategyInput{
+		Position:   s.simulateSignal(currentPos, signal),
+		LatestTick: state.LatestTick,
+	}
+	ifDoneSignal := s.Strategy.IfDone(simulatedInput, signal)
 	if ifDoneSignal.Price > 0 {
 		ifDoneSignal.Price = s.Detail.RoundPrice(ifDoneSignal.Price)
 	}
@@ -382,35 +388,70 @@ func (s *Sniper) buildOrderRequest(action order.Action, price float64, qty float
 	return ptr, orderReq
 }
 
-func (s *Sniper) cleanupZombiesLocked() {
-	active := make([]*order.Order, 0, len(s.Orders))
-	for _, o := range s.Orders {
-		if o.IsCompleted() {
-			continue
-		}
+// calculatePosition は現在の注文状態と確定ポジションから、戦略に渡すための要約ポジションを計算します
+func (s *Sniper) calculatePosition(orders []*order.Order, basePositions []position.Position) strategy.Position {
+	var totalQty float64
+	var totalCost float64
 
-		// 1. PENDING (API受付待ち) のタイムアウト (30秒)
-		// 発注要求から30秒経っても確定しない場合は、通信失敗やAPIの受付拒否とみなす
-		if o.IsPending() {
-			if time.Since(o.CreatedAt) > 30*time.Second {
-				fmt.Printf("⚠️ [%s] PENDING注文がタイムアウト(30s)したため削除します: %s\n", s.Detail.Code, o.ID)
-				continue
-			}
-		}
-
-		// 2. FILL_EXPECTED (疑似約定) のタイムアウト (20秒)
-		// 本物の約定通知が来ない場合は、板の動きを見誤ったか貫通しなかったとみなして元に戻す
-		if o.Status == order.ORDER_STATUS_FILL_EXPECTED {
-			if !o.Synthetic.ExpectedAt.IsZero() && time.Since(o.Synthetic.ExpectedAt) > 20*time.Second {
-				fmt.Printf("⚠️ [%s] 疑似約定から20秒経過しても通知がないため、待機状態に戻します: %s\n", s.Detail.Code, o.ID)
-				o.Status = order.ORDER_STATUS_IN_PROGRESS
-			}
-		}
-
-		active = append(active, o)
+	// 1. API確定ポジションをベースにする
+	for _, p := range basePositions {
+		totalQty += p.LeavesQty
+		totalCost += p.Price * p.LeavesQty
 	}
-	s.Orders = active
+
+	// 2. 疑似約定(FILL_EXPECTED)を先行計上
+	for _, o := range orders {
+		if o.Status == order.ORDER_STATUS_FILL_EXPECTED {
+			switch o.Action {
+			case order.ACTION_BUY:
+				totalQty += o.OrderQty
+				totalCost += o.OrderPrice * o.OrderQty
+			case order.ACTION_SELL:
+				totalQty -= o.OrderQty
+			}
+		}
+	}
+
+	avgPrice := 0.0
+	if totalQty > 0 {
+		avgPrice = totalCost / totalQty
+	}
+
+	return strategy.Position{
+		Qty:          totalQty,
+		AveragePrice: avgPrice,
+	}
 }
+
+// simulateSignal は特定のシグナルが約定したと仮定した場合のポジション状態をシミュレートします
+func (s *Sniper) simulateSignal(currentPos strategy.Position, sig brain.Signal) strategy.Position {
+	if sig.Action == brain.ACTION_HOLD {
+		return currentPos
+	}
+
+	newQty := currentPos.Qty
+	newTotalCost := currentPos.AveragePrice * currentPos.Qty
+
+	switch sig.Action {
+	case brain.ACTION_BUY:
+		newQty += sig.Quantity
+		newTotalCost += sig.Price * sig.Quantity
+	case brain.ACTION_SELL:
+		newQty -= sig.Quantity
+		// 売りでコスト（平均単価）は変わらない（FIFO/移動平均の単純化）
+	}
+
+	newAvgPrice := 0.0
+	if newQty > 0 {
+		newAvgPrice = newTotalCost / newQty
+	}
+
+	return strategy.Position{
+		Qty:          newQty,
+		AveragePrice: newAvgPrice,
+	}
+}
+
 
 // FailSendingOrder は発注失敗時に呼ばれ、Ordersリストから仮注文をクリアします
 func (s *Sniper) FailSendingOrder(ord *order.Order) {
@@ -613,15 +654,31 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 
 	// 1. InternalState が未確定（PENDING/PREPARING）または未完了の注文をまず保持する
 	// APIの一覧に反映されるまでのタイムラグによる注文消失（および再発注スパム）を防ぐため。
+	state := s.dataPool.GetState(s.Detail.Code)
+	now := state.LatestTick.CurrentPriceTime
+	if now.IsZero() {
+		now = time.Now()
+	}
+
 	for _, o := range s.Orders {
 		if o.IsPending() {
 			// 仮ID（PENDING）はAPI未達の可能性があるため、30秒間は無条件で保持する
-			if time.Since(o.CreatedAt) < 30*time.Second {
+			// 🌟 バックテスト対応：実時間(time.Since)ではなく、データの時刻(now)を使用
+			if now.Sub(o.CreatedAt) < 30*time.Second {
 				reconciledOrders = append(reconciledOrders, o)
 			} else {
 				fmt.Printf("🗑️ [%s] APIに30秒以上現れない送信中注文(%s)をOrdersから削除します\n", s.Detail.Code, o.ID)
 			}
 		} else if !o.IsCompleted() {
+			// 🌟 FILL_EXPECTED (疑似約定) のタイムアウト (20秒) を統合
+			// 本物の約定通知が来ない場合は、板の動きを見誤ったか貫通しなかったとみなして元に戻す
+			if o.Status == order.ORDER_STATUS_FILL_EXPECTED {
+				if !o.Synthetic.ExpectedAt.IsZero() && now.Sub(o.Synthetic.ExpectedAt) > 20*time.Second {
+					fmt.Printf("⚠️ [%s] 疑似約定から20秒経過しても通知がないため、待機状態に戻します: %s\n", s.Detail.Code, o.ID)
+					o.Status = order.ORDER_STATUS_IN_PROGRESS
+				}
+			}
+
 			// 既にIDが確定している未完了注文は、APIの瞬断に備えて一旦リストに残す
 			// （確定済み注文は30秒制限の対象外。指値でずっと待機している場合があるため）
 			reconciledOrders = append(reconciledOrders, o)
@@ -656,7 +713,7 @@ func (s *Sniper) SyncOrders(externalOrders order.Orders) Bullet {
 		switch matchedInternal.Status {
 		case order.ORDER_STATUS_CANCEL_SENT:
 			if ext.Status != order.ORDER_STATUS_CANCELED && ext.Status != order.ORDER_STATUS_FILLED {
-				if matchedInternal.CancelSentAt.IsZero() || time.Since(matchedInternal.CancelSentAt) < 5*time.Second {
+				if matchedInternal.CancelSentAt.IsZero() || now.Sub(matchedInternal.CancelSentAt) < 5*time.Second {
 					shouldUpdateStatus = false
 				}
 			}
