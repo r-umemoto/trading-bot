@@ -119,9 +119,7 @@ func RunBacktest() error {
 				obs := sp.PrepareObservation(tick)
 				bullet := s.SyncOrders(obs)
 				if bullet.HasOrder() {
-					if bullet.HasOrder() {
-						sp.AddOrder(bullet.Order)
-					}
+					sp.AddOrder(bullet.Order)
 					fmt.Printf("🚀 [%s] SyncOrders経由で注文を送信します: %s %.2f株\n", s.Detail.Code, bullet.Order.Action, bullet.Order.OrderQty)
 					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 					if err != nil {

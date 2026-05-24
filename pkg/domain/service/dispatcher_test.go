@@ -53,7 +53,7 @@ func TestOrderDispatcher_Submit_OverrideAndHoldCleanup(t *testing.T) {
 
 	// 1. Create a pending order and submit it
 	order1 := order.NewOrder(order.GenerateLocalID(), "9434", order.ACTION_BUY, 2000, 100)
-	s.Orders = append(s.Orders, order1)
+	s.ManagedOrders = append(s.ManagedOrders, sniper.NewManagedOrder(order1.ID, order1, nil))
 
 	bullet1 := sniper.Bullet{
 		Order:   order1,
@@ -67,7 +67,7 @@ func TestOrderDispatcher_Submit_OverrideAndHoldCleanup(t *testing.T) {
 
 	// 2. Submit a new order for the same symbol (override)
 	order2 := order.NewOrder(order.GenerateLocalID(), "9434", order.ACTION_BUY, 2010, 100)
-	s.Orders = append(s.Orders, order2)
+	s.ManagedOrders = append(s.ManagedOrders, sniper.NewManagedOrder(order2.ID, order2, nil))
 
 	bullet2 := sniper.Bullet{
 		Order:   order2,
@@ -75,30 +75,30 @@ func TestOrderDispatcher_Submit_OverrideAndHoldCleanup(t *testing.T) {
 	}
 	dispatcher.Submit(s, bullet2)
 
-	// Verify order1 is removed from s.Orders (FailSendingOrder should be called on it)
+	// Verify order1 is removed from s.ManagedOrders (FailSendingOrder should be called on it)
 	foundOrder1 := false
-	for _, o := range s.Orders {
-		if o == order1 {
+	for _, m := range s.ManagedOrders {
+		if m.Entry == order1 || m.Exit == order1 {
 			foundOrder1 = true
 		}
 	}
 	if foundOrder1 {
-		t.Error("expected order1 to be removed from s.Orders after override")
+		t.Error("expected order1 to be removed from s.ManagedOrders after override")
 	}
 
 	// 3. Submit a HOLD bullet (no order and no cancel)
 	bullet3 := sniper.Bullet{}
 	dispatcher.Submit(s, bullet3)
 
-	// Verify order2 is also removed from s.Orders on HOLD cleanup
+	// Verify order2 is also removed from s.ManagedOrders on HOLD cleanup
 	foundOrder2 := false
-	for _, o := range s.Orders {
-		if o == order2 {
+	for _, m := range s.ManagedOrders {
+		if m.Entry == order2 || m.Exit == order2 {
 			foundOrder2 = true
 		}
 	}
 	if foundOrder2 {
-		t.Error("expected order2 to be removed from s.Orders after HOLD cleanup")
+		t.Error("expected order2 to be removed from s.ManagedOrders after HOLD cleanup")
 	}
 
 	if len(dispatcher.pendingJobs) != 0 {
@@ -121,7 +121,7 @@ func TestOrderDispatcher_CancelFailureRevert(t *testing.T) {
 	// Create an order in CANCEL_SENT status
 	ord := order.NewOrder("order-789", "9434", order.ACTION_BUY, 2000, 100)
 	ord.Status = order.ORDER_STATUS_CANCEL_SENT
-	s.Orders = append(s.Orders, ord)
+	s.ManagedOrders = append(s.ManagedOrders, sniper.NewManagedOrder(ord.ID, ord, nil))
 
 	job := &OrderJob{
 		Symbol:   "9434",

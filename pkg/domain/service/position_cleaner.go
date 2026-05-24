@@ -108,17 +108,20 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 
 	for _, s := range c.snipers {
 		s.ForceExit()
-		for _, cancel := range s.Orders {
-			if !cancel.IsCompleted() {
-				fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Detail.Code, cancel.ID)
-				err := c.marketGateway.CancelOrder(ctx, cancel.ID)
-				if err != nil {
-					fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Detail.Code, err)
-				} else {
-					cancel.Status = order.ORDER_STATUS_CANCELED // キャンセル完了として扱う
+		for _, m := range s.ManagedOrders {
+			// エントリーと決済の両方の注文をチェックしてキャンセル
+			ordersToCancel := []*order.Order{m.Entry, m.Exit}
+			for _, o := range ordersToCancel {
+				if o != nil && !o.IsCompleted() {
+					fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Detail.Code, o.ID)
+					err := c.marketGateway.CancelOrder(ctx, o.ID)
+					if err != nil {
+						fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Detail.Code, err)
+					} else {
+						o.Status = order.ORDER_STATUS_CANCELED
+					}
+					time.Sleep(200 * time.Millisecond)
 				}
-				// 🌟 連射を避けるために少し待機
-				time.Sleep(200 * time.Millisecond)
 			}
 		}
 	}
