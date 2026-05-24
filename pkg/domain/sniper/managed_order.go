@@ -1,6 +1,7 @@
 package sniper
 
 import (
+	"time"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 )
 
@@ -8,21 +9,18 @@ import (
 type ManagedStatus int
 
 const (
-	StatusEntryPreparing ManagedStatus = iota // エントリー準備中（未発注）
-	StatusEntryActive                         // エントリー発注済み（取引所で稼働中）
-	StatusExitPreparing                       // エントリー約定・決済注文発射準備（または発射直後）
-	StatusExitActive                          // 決済注文発注済み（取引所で稼働中）
-	StatusCompleted                           // すべて完了（全約定）
-	StatusCanceled                            // キャンセル終了
+	StatusEntryActive   ManagedStatus = iota // エントリー中
+	StatusExitPreparing                      // エントリー約定・決済注文発射準備（SyncOrdersが担当）
+	StatusExitActive                         // 決済中
+	StatusCompleted                          // すべて完了
+	StatusCanceled                           // キャンセル終了
 )
 
 // ManagedOrder は一つのトレード（エントリーから決済まで）を管理する論理的な単位です。
-// シンプルな注文の場合は Exit が nil になります。IFDの場合は両方がセットされます。
 type ManagedOrder struct {
 	ID    string
-	Type  order.OrderType // 論理的な種類 (通常指値、IFD等)
-	Entry *order.Order    // エントリー注文（買いなど）
-	Exit  *order.Order    // 決済注文（売りなど。IFDの場合に使用）
+	Entry *order.Order    // エントリー注文
+	Exit  *order.Order    // 決済注文（IFDの場合に使用）
 
 	Status ManagedStatus
 }
@@ -33,7 +31,7 @@ func NewManagedOrder(id string, entry *order.Order, exit *order.Order) *ManagedO
 		ID:    id,
 		Entry: entry,
 		Exit:  exit,
-		Status: StatusEntryPreparing,
+		Status: StatusEntryActive,
 	}
 }
 
@@ -44,11 +42,23 @@ func (m *ManagedOrder) IsCompleted() bool {
 
 // CurrentOrder は現在アクティブな（APIと同期すべき）生の注文オブジェクトを返します。
 func (m *ManagedOrder) CurrentOrder() *order.Order {
-	if m.Status <= StatusEntryActive {
+	if m.Status == StatusEntryActive {
 		return m.Entry
 	}
 	if m.Exit != nil {
 		return m.Exit
 	}
 	return m.Entry
+}
+
+// CheckTimeout は現在の注文が疑似約定タイムアウトしていないか確認し、必要なら状態を戻します。
+func (m *ManagedOrder) CheckTimeout(now time.Time) bool {
+	curr := m.CurrentOrder()
+	if curr != nil && curr.Status == order.ORDER_STATUS_FILL_EXPECTED {
+		if !curr.Synthetic.ExpectedAt.IsZero() && now.Sub(curr.Synthetic.ExpectedAt) > 20*time.Second {
+			curr.Status = order.ORDER_STATUS_IN_PROGRESS
+			return true
+		}
+	}
+	return false
 }

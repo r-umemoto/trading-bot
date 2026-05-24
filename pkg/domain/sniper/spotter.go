@@ -86,7 +86,7 @@ func (s *Spotter) Update(report order.Orders, now time.Time) {
 		}
 
 		var matchedInternal *order.Order
-		for _, o := range s.orders {
+		for _, o := range reconciledOrders { // reconciledOrders から探す（すでに入っている可能性があるため）
 			if o.ID == ext.ID {
 				matchedInternal = o
 				break
@@ -94,16 +94,27 @@ func (s *Spotter) Update(report order.Orders, now time.Time) {
 		}
 
 		if matchedInternal == nil {
+			// まだ reconciledOrders にない場合、s.orders から探す
+			for _, o := range s.orders {
+				if o.ID == ext.ID {
+					matchedInternal = o
+					break
+				}
+			}
+		}
+
+		if matchedInternal == nil {
 			continue // 知らない注文は無視（他の戦略等）
 		}
 
-		// 状態同期（Sniper側での特殊状態 FILL_EXPECTED 等はここでは関知しない）
+		// 状態同期
 		matchedInternal.Status = ext.Status
 		matchedInternal.CumQty = ext.CumQty
 		if matchedInternal.IsPending() {
 			matchedInternal.InternalState = order.STATE_ACTIVE
 		}
 
+		// 約定の抽出
 		for _, exec := range ext.Executions {
 			if !s.processedExecutions[exec.ID] {
 				pendingExecs = append(pendingExecs, struct {
@@ -120,22 +131,50 @@ func (s *Spotter) Update(report order.Orders, now time.Time) {
 			}
 		}
 
-		// 完了していない、または約定データが不足している注文を残す
-		if !matchedInternal.IsCompleted() || matchedInternal.FilledQty() < matchedInternal.CumQty {
-			exists := false
-			for _, ro := range reconciledOrders {
-				if ro.ID == matchedInternal.ID {
-					exists = true
-					break
-				}
+		// 完了した注文も、レポートにある限りは保持する
+		exists := false
+		for _, ro := range reconciledOrders {
+			if ro.ID == matchedInternal.ID {
+				exists = true
+				break
 			}
-			if !exists {
-				reconciledOrders = append(reconciledOrders, matchedInternal)
-			}
+		}
+		if !exists {
+			reconciledOrders = append(reconciledOrders, matchedInternal)
 		}
 	}
 
-	s.orders = reconciledOrders
+	// 完了済み注文の整理
+	var activeOrders []*order.Order
+	var completedButNotInReport []*order.Order
+
+	for _, o := range reconciledOrders {
+		// レポートに含まれているかチェック
+		inReport := false
+		for _, ext := range report.Orders {
+			if ext.ID == o.ID {
+				inReport = true
+				break
+			}
+		}
+
+		if !o.IsCompleted() || inReport {
+			activeOrders = append(activeOrders, o)
+		} else {
+			completedButNotInReport = append(completedButNotInReport, o)
+		}
+	}
+
+	// レポートから消えた完了済み注文（ゾンビ）を最新10件に絞る
+	sort.Slice(completedButNotInReport, func(i, j int) bool {
+		return completedButNotInReport[i].CreatedAt.After(completedButNotInReport[j].CreatedAt)
+	})
+	if len(completedButNotInReport) > 10 {
+		completedButNotInReport = completedButNotInReport[:10]
+	}
+
+	// 合体させて保存
+	s.orders = append(activeOrders, completedButNotInReport...)
 
 	// 3. 約定の反映（時系列順）
 	sort.Slice(pendingExecs, func(i, j int) bool {
