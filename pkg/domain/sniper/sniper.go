@@ -425,6 +425,18 @@ func (s *Sniper) FailSendingOrder(ord *order.Order) {
 	}
 }
 
+func (s *Sniper) UpdateOrderID(ord *order.Order, newID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.ManagedOrders {
+		curr := m.CurrentOrder()
+		if curr == ord || curr.ID == ord.ID {
+			curr.ID = newID
+			break
+		}
+	}
+}
+
 func (s *Sniper) RevertOrderStatus(ord *order.Order, status order.OrderStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

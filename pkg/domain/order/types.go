@@ -124,3 +124,11 @@ func (e *ExchangeMarket) UnmarshalJSON(data []byte) error {
 	}
 	return nil
 }
+
+// OrderResult はインフラ層での発注・キャンセル結果をドメイン層へ通知するための構造体です
+type OrderResult struct {
+	Symbol  string
+	OrderID string // APIから返されたOrderID（成功時）
+	Order   *Order // 元の注文情報
+	Error   error  // 失敗時のエラー内容
+}

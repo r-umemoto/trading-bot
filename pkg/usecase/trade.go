@@ -5,41 +5,36 @@ import (
 	"context"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
-	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
-	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
 	snipers    []*sniper.Sniper
-	nests      []*SniperNest // 🌟 銘柄（ターゲット）ごとの狙撃陣地（SniperNest）のリスト
+	nests      []*SniperNest
 	gateway    market.MarketGateway
-	dispatcher *service.OrderDispatcher
 	reporter   *service.PerformanceReporter
 }
 
 func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway) *TradeUseCase {
 	return &TradeUseCase{
-		snipers:    snipers,
-		gateway:    gateway,
-		dispatcher: service.NewOrderDispatcher(gateway),
-		reporter:   service.NewPerformanceReporter(snipers, gateway.DataPool()),
+		snipers:  snipers,
+		gateway:  gateway,
+		reporter: service.NewPerformanceReporter(snipers, gateway.DataPool()),
 	}
 }
 
-// Start は発注ディスパッチャと市場データ受信ワーカーを起動します
-func (u *TradeUseCase) Start(ctx context.Context, ticks map[string]<-chan tick.Tick, orders map[string]<-chan order.Orders) {
-	u.dispatcher.Start(ctx)
+// Start は市場データ受信を開始し、各銘柄ごとの SniperNest を起動します
+func (u *TradeUseCase) Start(ctx context.Context, chs *market.MarketChannels) {
+	u.nests = make([]*SniperNest, 0, len(chs.Ticks))
 
-	u.nests = make([]*SniperNest, 0, len(ticks))
+	for symbol, tickCh := range chs.Ticks {
+		symChs := market.SymbolChannels{
+			Tick:  tickCh,
+			Order: chs.Orders[symbol],
+		}
 
-	// 各銘柄専用の SniperNest を起動
-	for symbol, tickCh := range ticks {
-		orderCh := orders[symbol]
-
-		// この銘柄に紐づくスナイパーをフィルター
 		var symbolSnipers []*sniper.Sniper
 		for _, s := range u.snipers {
 			if s.Detail.Code == symbol {
@@ -47,20 +42,17 @@ func (u *TradeUseCase) Start(ctx context.Context, ticks map[string]<-chan tick.T
 			}
 		}
 
-		// 🌟 スナイパーが1つ以上ある場合、共有の Spotter を作成
 		var spotter *sniper.Spotter
 		if len(symbolSnipers) > 0 {
 			spotter = sniper.NewSpotter(symbolSnipers[0].Detail, symbolSnipers[0].Logger)
 		}
 
-		nest := NewSniperNest(symbol, spotter, symbolSnipers, tickCh, orderCh, u.dispatcher)
+		nest := NewSniperNest(symbol, spotter, symbolSnipers, symChs, u.gateway)
 		nest.Start(ctx)
 		u.nests = append(u.nests, nest)
 	}
 }
 
-
-// PrintPerformanceReport summarizes and prints the performance of all snipers.
 func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 	u.reporter.PrintPerformanceReport(enableCSV)
 }

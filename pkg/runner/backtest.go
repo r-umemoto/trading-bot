@@ -46,9 +46,9 @@ func RunBacktest() error {
 	}
 
 	// 3. バックテスト用インフラ（Mock Gateway）の準備
-	gateway := backtest.NewBacktestGateway(execModel, latency)
+	gateway := backtest.NewSyncBacktestGateway(execModel, latency)
 	dataPool := gateway.DataPool()
-	_, _, _ = gateway.Listen(context.Background())
+	_, _ = gateway.Listen(context.Background())
 	tickCh := gateway.TickCh()
 	orderReportCh := gateway.OrderCh()
 

@@ -25,13 +25,13 @@ func (h *UseCaseHandler) Start(ctx context.Context) error {
 	}
 
 	// 2. 市場接続ストリーミングの開始（リスン）
-	ticks, orders, err := h.system.Listen(ctx)
+	chs, err := h.system.Listen(ctx)
 	if err != nil {
 		return err
 	}
 
-	// 3. 取引処理（ディスパッチャおよび各銘柄ワーカー）の起動
-	h.trade.Start(ctx, ticks, orders)
+	// 3. 取引処理の起動
+	h.trade.Start(ctx, chs)
 	return nil
 }
 

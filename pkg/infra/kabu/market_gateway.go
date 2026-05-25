@@ -19,17 +19,19 @@ import (
 )
 
 func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
-	kabuProvider := NewKabuHistoricalFeederProvider(client)
-	return &MarketGateway{
+	m := &MarketGateway{
 		client:        client,
 		wsClient:      wsClient,
 		tickChannels:  make(map[string]chan tick.Tick),
 		orderChannels: make(map[string]chan order.Orders),
-		dataPool:      tick.NewDefaultDataPool(kabuProvider),
+		wsPushCh:      make(chan api.PushMessage, 1000),
 	}
+	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
+	m.dataPool = tick.NewDefaultDataPool(kabuProvider)
+	m.dispatcher = NewOrderDispatcher(m)
+	return m
 }
 
-// KabuClientInterface はカブコムAPIクライアントのインターフェースです（テスト用）
 type KabuClientInterface interface {
 	GetOrders() ([]api.Order, error)
 	SendOrder(req api.OrderRequest) (*api.OrderResponse, error)
@@ -41,28 +43,27 @@ type KabuClientInterface interface {
 	GetBoard(symbol string) (*api.BoardResponse, error)
 }
 
-// MarketGateway はHTTPプロトコルを用いたREST API操作を担当します
 type MarketGateway struct {
 	client        KabuClientInterface
 	wsClient      *api.WSClient
+	wsPushCh      chan api.PushMessage
 	tickChannels  map[string]chan tick.Tick
 	orderChannels map[string]chan order.Orders
 	dataPool      tick.DataPool
+	dispatcher    *OrderDispatcher
 }
 
-func (m *MarketGateway) DataPool() tick.DataPool {
-	return m.dataPool
-}
+var _ market.MarketGateway = (*MarketGateway)(nil)
+var _ Sender = (*MarketGateway)(nil)
 
-// Listen は market.MarketGateway の実装です。並行処理用のチャネルとワーカーを立ち上げて WebSocket / Polling を開始します。
-func (m *MarketGateway) Listen(ctx context.Context) (map[string]<-chan tick.Tick, map[string]<-chan order.Orders, error) {
-	// 1. 株価のWebSocketを裏側で起動
+func (m *MarketGateway) Listen(ctx context.Context) (*market.MarketChannels, error) {
+	// 1. 各種ワーカーを起動
+	go m.wsClient.Listen(m.wsPushCh)
 	go m.startWebSocketLoop(ctx)
-
-	// 2. 注文のポーリングを裏側で起動
 	go m.startPollingLoop(ctx)
+	m.dispatcher.Start(ctx)
 
-	// 3. チャネルのマップを読み取り専用型として呼び出し元に返す
+	// 2. チャネルを整理して返す
 	ticks := make(map[string]<-chan tick.Tick)
 	for sym, ch := range m.tickChannels {
 		ticks[sym] = ch
@@ -72,11 +73,36 @@ func (m *MarketGateway) Listen(ctx context.Context) (map[string]<-chan tick.Tick
 		orders[sym] = ch
 	}
 
-	return ticks, orders, nil
+	return &market.MarketChannels{
+		Ticks:  ticks,
+		Orders: orders,
+	}, nil
 }
 
-// SendOrder は market.MarketGateway (Orderer) の実装です
+func (m *MarketGateway) DataPool() tick.DataPool {
+	return m.dataPool
+}
+
+// SendOrder は market.MarketGateway (Orderer) の実装です。
+// 結果が出るまで内部的にブロックします（SniperNest等から非同期で呼ばれる想定）。
 func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (order.Order, error) {
+	resCh := m.dispatcher.Submit(input.Order.Symbol, &input.Order, &input.Request, "")
+	select {
+	case <-ctx.Done():
+		return input.Order, ctx.Err()
+	case res := <-resCh:
+		if res.Error != nil {
+			return input.Order, res.Error
+		}
+		if res.Order != nil {
+			return *res.Order, nil
+		}
+		return input.Order, nil
+	}
+}
+
+// SendOrderRaw は実際にAPIを叩く低レベルメソッドです
+func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderInput) (order.Order, error) {
 	ord := input.Order
 	req := input.Request
 
@@ -192,6 +218,17 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 
 // CancelOrder は market.MarketGateway (Orderer) の実装です
 func (m *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
+	resCh := m.dispatcher.Submit("", nil, nil, orderID)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case res := <-resCh:
+		return res.Error
+	}
+}
+
+// CancelOrderRaw は実際にAPIを叩く低レベルメソッドです
+func (m *MarketGateway) CancelOrderRaw(ctx context.Context, orderID string) error {
 	req := api.CancelRequest{OrderID: orderID}
 	_, err := m.client.CancelOrder(req)
 	if err != nil {
@@ -691,4 +728,3 @@ func (f *KabuHistoricalFeeder) FetchPreviousClose() (float64, error) {
 	slog.Info("Successfully fetched previous close from KabuStation API", slog.String("symbol", f.symbol), slog.Float64("previous_close", board.PreviousClose))
 	return board.PreviousClose, nil
 }
-
