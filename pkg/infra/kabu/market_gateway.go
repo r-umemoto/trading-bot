@@ -111,10 +111,11 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 		side = api.SIDE_BUY
 	}
 
-	cashMargin := 2 // デフォルトは「新規」
+	cashMargin := order.CASH_MARGIN_MARGIN_ENTRY // デフォルトは「新規」
 	if req.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(req.ClosePositions) > 0 {
-		cashMargin = 3 // 返済指示があれば「返済」
+		cashMargin = order.CASH_MARGIN_MARGIN_EXIT // 返済指示があれば「返済」
 	}
+	ord.CashMargin = cashMargin
 
 	AccountType := 0
 	switch req.AccountType {
@@ -159,15 +160,18 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 	}
 
 	deliverType := 0
-	switch ord.Action {
-	case order.ACTION_BUY:
-		if cashMargin == 1 {
-			deliverType = 2
+	switch cashMargin {
+	case order.CASH_MARGIN_CASH:
+		switch ord.Action {
+		case order.ACTION_BUY:
+			// 指定なし
+		case order.ACTION_SELL:
+			deliverType = 0
 		}
-	case order.ACTION_SELL:
-		if cashMargin == 3 {
-			deliverType = 2
-		}
+	case order.CASH_MARGIN_MARGIN_ENTRY:
+		deliverType = 2
+	case order.CASH_MARGIN_MARGIN_EXIT:
+		deliverType = 2
 	}
 
 	// APIへリクエスト
@@ -190,7 +194,7 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 		Exchange:           m.toKabuExchageType(req.Exchange),
 		SecurityType:       securityType,
 		Side:               string(side),
-		CashMargin:         cashMargin,
+		CashMargin:         int(ord.CashMargin),
 		MarginTradeType:    tradeType,
 		AccountType:        AccountType,
 		ExpireDay:          0,
@@ -284,6 +288,7 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 		o := order.NewOrder(ord.ID, ord.Symbol, action, ord.Price, ord.OrderQty)
 		o.Status = status
 		o.CumQty = ord.CumQty
+		o.CashMargin = order.CashMarginType(ord.CashMargin)
 
 		for _, execution := range ord.Details {
 			// RecType が RECTYPE_EXECUTION (8: 約定) の場合のみ Execution として追加

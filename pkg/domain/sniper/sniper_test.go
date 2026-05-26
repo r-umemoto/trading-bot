@@ -108,3 +108,28 @@ func TestSniper_Tick_Timeout(t *testing.T) {
 		t.Errorf("expected status to revert to IN_PROGRESS due to timeout, got %v", ord.Status)
 	}
 }
+
+func TestSniper_FailSendingOrder(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	s := NewSniper(detail, &MockStrategy{}, nil, order.EXCHANGE_TOSHO, nil)
+
+	entry := &order.Order{ID: "entry"}
+	exit := &order.Order{ID: "exit"}
+	mo := NewManagedOrder("mo-1", entry, exit)
+	s.ManagedOrders = append(s.ManagedOrders, mo)
+
+	// 1. 決済注文(Exit)の失敗テスト
+	s.FailSendingOrder(exit)
+	if len(s.ManagedOrders) != 1 {
+		t.Errorf("expected ManagedOrder to be retained after exit failure, but got length %d", len(s.ManagedOrders))
+	}
+	if s.ManagedOrders[0].Status != StatusEntryActive {
+		t.Errorf("expected ManagedOrder status to be StatusEntryActive after exit failure, but got %v", s.ManagedOrders[0].Status)
+	}
+
+	// 2. エントリー注文(Entry)の失敗テスト
+	s.FailSendingOrder(entry)
+	if len(s.ManagedOrders) != 0 {
+		t.Errorf("expected ManagedOrder to be removed after entry failure, but got length %d", len(s.ManagedOrders))
+	}
+}

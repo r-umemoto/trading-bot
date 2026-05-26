@@ -418,8 +418,14 @@ func (s *Sniper) FailSendingOrder(ord *order.Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, m := range s.ManagedOrders {
-		if m.Entry == ord || (m.Exit != nil && m.Exit == ord) {
+		if m.Entry == ord {
 			s.ManagedOrders = append(s.ManagedOrders[:i], s.ManagedOrders[i+1:]...)
+			break
+		}
+		if m.Exit != nil && m.Exit == ord {
+			// 決済失敗時は削除せず、ステータスを戻して再試行を待つ
+			fmt.Printf("⚠️ [%s] 決済注文の送信に失敗しました。再試行を待機します (ID: %s)\n", s.Detail.Code, ord.ID)
+			m.Status = StatusEntryActive
 			break
 		}
 	}

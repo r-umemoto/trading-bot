@@ -59,6 +59,7 @@ type Order struct {
 	Action     Action
 	OrderPrice float64 // 発注時の指値（成行の場合は0など）
 	OrderQty   float64 // 発注した総数量
+	CashMargin CashMarginType
 
 	CreatedAt  time.Time   // 🌟 発注（オブジェクト作成）時刻
 	Executions []Execution // 🌟 約定のコレクション

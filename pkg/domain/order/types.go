@@ -29,6 +29,15 @@ const (
 	PRODUCT_MARGIN             // 信用
 )
 
+type CashMarginType int
+
+const (
+	CASH_MARGIN_NONE CashMarginType = iota
+	CASH_MARGIN_CASH
+	CASH_MARGIN_MARGIN_ENTRY CashMarginType = 2 // 信用新規 (2)
+	CASH_MARGIN_MARGIN_EXIT  CashMarginType = 3 // 信用返済 (3)
+)
+
 type OrderType uint32
 
 const (
