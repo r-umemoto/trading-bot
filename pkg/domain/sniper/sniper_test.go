@@ -134,3 +134,30 @@ func TestSniper_FailSendingOrder(t *testing.T) {
 		t.Errorf("expected ManagedOrder to be removed after entry failure, but got length %d", len(s.ManagedOrders))
 	}
 }
+func TestSniper_Tick_NoSyntheticFillOnCancelSent(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	// 貫通ポリシーを使用
+	policy := &strategy.StrictPiercePolicy{}
+	s := NewSniper("test-sniper", detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
+
+	// 1. すでにキャンセル送信済みの注文を用意
+	ord := &order.Order{
+		ID:         "test-order",
+		Action:     order.ACTION_BUY,
+		OrderPrice: 2000,
+		OrderQty:   100,
+		Status:     order.ORDER_STATUS_CANCEL_SENT, // ← これを維持したい
+	}
+	s.ManagedOrders = append(s.ManagedOrders, NewManagedOrder("test-order", ord, nil))
+
+	// 2. 貫通する Tick を渡す（本来なら FILL_EXPECTED に上書きされる条件）
+	obs := Observation{
+		Tick: tick.Tick{Price: 1990, CurrentPriceTime: time.Now()},
+	}
+	s.Tick(obs)
+
+	// 3. ステータスが上書きされていないことを確認
+	if ord.Status != order.ORDER_STATUS_CANCEL_SENT {
+		t.Errorf("expected status to remain CANCEL_SENT, but got %v", ord.Status)
+	}
+}

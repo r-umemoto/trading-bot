@@ -25,6 +25,9 @@ type TouchTTLPolicy struct {
 }
 
 func (p *TouchTTLPolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
+	if ord.Status == order.ORDER_STATUS_CANCEL_SENT || ord.IsCompleted() {
+		return
+	}
 	if ord.OrderPrice > 0 && tick.Price > 0 { // 指値の場合
 		isTouching := (ord.Action == order.ACTION_BUY && tick.Price <= ord.OrderPrice) ||
 			(ord.Action == order.ACTION_SELL && tick.Price >= ord.OrderPrice)
@@ -68,6 +71,9 @@ func (p *TouchTTLPolicy) IsOrderDesired(ord *order.Order, sig brain.Signal, symb
 type StrictPiercePolicy struct{}
 
 func (p *StrictPiercePolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
+	if ord.Status == order.ORDER_STATUS_CANCEL_SENT || ord.IsCompleted() {
+		return
+	}
 	if ord.OrderPrice > 0 && tick.Price > 0 {
 		isPierced := (ord.Action == order.ACTION_BUY && tick.Price < ord.OrderPrice) ||
 			(ord.Action == order.ACTION_SELL && tick.Price > ord.OrderPrice)
@@ -99,6 +105,9 @@ type VolumeConsumptionPolicy struct {
 }
 
 func (p *VolumeConsumptionPolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
+	if ord.Status == order.ORDER_STATUS_CANCEL_SENT || ord.IsCompleted() {
+		return
+	}
 	if ord.OrderPrice <= 0 || tick.Price <= 0 {
 		return
 	}

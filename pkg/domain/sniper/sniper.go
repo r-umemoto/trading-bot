@@ -125,7 +125,7 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 		}
 
 		curr := m.CurrentOrder()
-		if s.ExecutionPolicy != nil && curr != nil && !curr.IsPending() {
+		if s.ExecutionPolicy != nil && curr != nil && !curr.IsPending() && curr.Status != order.ORDER_STATUS_CANCEL_SENT && !curr.IsCompleted() {
 			s.ExecutionPolicy.ApplySyntheticFill(curr, obs.Tick)
 		}
 
