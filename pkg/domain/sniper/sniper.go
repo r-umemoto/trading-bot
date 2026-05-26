@@ -51,6 +51,7 @@ type Performance struct {
 }
 
 type Sniper struct {
+	ID                string
 	Detail            symbol.Symbol
 	Strategy          Strategy
 	Performance       Performance
@@ -65,12 +66,11 @@ type Sniper struct {
 	Exchange          order.ExchangeMarket
 	MarginTradeType   order.MarginTradeType
 
-	processedExecutions map[string]bool
-	lastSignalReason    string
-	lastStatusLogAt     time.Time
+	lastSignalReason string
+	lastStatusLogAt  time.Time
 }
 
-func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange order.ExchangeMarket, logger *slog.Logger) *Sniper {
+func NewSniper(id string, detail symbol.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange order.ExchangeMarket, logger *slog.Logger) *Sniper {
 	if logger == nil {
 		logger = strategy.AnalysisLogger()
 	}
@@ -78,6 +78,7 @@ func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.Executio
 		logger = slog.Default()
 	}
 	return &Sniper{
+		ID:                  id,
 		Detail:              detail,
 		Strategy:            strategy,
 		ExecutionPolicy:     policy,
@@ -87,7 +88,6 @@ func NewSniper(detail symbol.Symbol, strategy Strategy, policy strategy.Executio
 		MarginTradeType:     order.TRADE_TYPE_GENERAL_DAY,
 		Logger:              logger,
 		lifecycle:           LifecycleActive,
-		processedExecutions: make(map[string]bool),
 	}
 }
 
@@ -96,6 +96,7 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	defer s.mu.Unlock()
 
 	s.LatestObservation = obs
+	s.Performance = obs.Performance
 
 	now := obs.Tick.CurrentPriceTime
 	if now.IsZero() {
@@ -239,9 +240,12 @@ func (s *Sniper) buildManagedOrder(obs Observation, signal brain.Signal) *Manage
 	return NewManagedOrder(entry.ID, entry, exit)
 }
 
-func (s *Sniper) SyncOrders(obs Observation) Bullet {
+func (s *Sniper) HandleIFD(obs Observation) Bullet {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	s.LatestObservation = obs
+	s.Performance = obs.Performance
 
 	now := obs.Tick.CurrentPriceTime
 	if now.IsZero() {
@@ -255,28 +259,12 @@ func (s *Sniper) SyncOrders(obs Observation) Bullet {
 			continue
 		}
 
-		curr := m.CurrentOrder()
-		// API状態の同期
-		for _, ext := range obs.Orders {
-			if curr.ID == ext.ID {
-				curr.Status = ext.Status
-				curr.CumQty = ext.CumQty
-				for _, exec := range ext.Executions {
-					if !s.processedExecutions[exec.ID] {
-						s.processedExecutions[exec.ID] = true
-						curr.AddExecution(exec)
-					}
-				}
-				break
-			}
-		}
-
-		// 状態遷移管理（決済発火）
+		// 状態遷移管理（IFD: 決済発火）
 		switch m.Status {
 		case StatusEntryActive:
 			if m.Entry.Status == order.ORDER_STATUS_FILLED {
 				if m.Exit != nil {
-					fmt.Printf("⚡ [%s] エントリー約定(%s) -> 決済注文(%s)を即時発射します\n", s.Detail.Code, m.Entry.ID, m.Exit.Action)
+					fmt.Printf("⚡ [%s] IFD発動: エントリー約定(%s) -> 決済注文(%s)を即時発射します\n", s.Detail.Code, m.Entry.ID, m.Exit.Action)
 					m.Status = StatusExitPreparing
 					m.Exit.CreatedAt = now
 					m.Exit.InternalState = order.STATE_PENDING

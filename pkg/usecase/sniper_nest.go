@@ -45,8 +45,8 @@ func (n *SniperNest) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case t := <-n.Channels.Tick:
-				obs := n.Spotter.PrepareObservation(t)
 				for _, s := range n.Snipers {
+					obs := n.Spotter.PrepareObservation(s.ID, t)
 					bullet := s.Tick(obs)
 					if bullet.HasOrder() || bullet.HasCancel() {
 						go n.fire(ctx, s, bullet)
@@ -54,9 +54,9 @@ func (n *SniperNest) Start(ctx context.Context) {
 				}
 			case ords := <-n.Channels.Order:
 				n.Spotter.Update(ords, time.Now())
-				obs := n.Spotter.PrepareObservation(tick.Tick{})
 				for _, s := range n.Snipers {
-					bullet := s.SyncOrders(obs)
+					obs := n.Spotter.PrepareObservation(s.ID, tick.Tick{})
+					bullet := s.HandleIFD(obs)
 					if bullet.HasOrder() || bullet.HasCancel() {
 						go n.fire(ctx, s, bullet)
 					}
@@ -77,7 +77,7 @@ func (n *SniperNest) fire(ctx context.Context, s *sniper.Sniper, b sniper.Bullet
 	}
 
 	if b.HasOrder() {
-		n.Spotter.AddOrder(b.Order)
+		n.Spotter.RecordBullet(s.ID, b)
 		updatedOrder, err := n.Gateway.SendOrder(ctx, order.SendOrderInput{Order: *b.Order, Request: *b.Request})
 		if err != nil {
 			fmt.Printf("発注失敗 (Symbol: %s): %v\n", n.SymbolCode, err)

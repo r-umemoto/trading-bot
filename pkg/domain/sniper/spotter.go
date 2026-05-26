@@ -15,9 +15,10 @@ import (
 // Observation は Spotter が観測し、整理した「現在の事実」です。
 // Sniper はこれを受け取って判断を下します。
 type Observation struct {
-	Tick      tick.Tick
-	Positions []position.Position
-	Orders    []*order.Order
+	Tick        tick.Tick
+	Positions   []position.Position
+	Orders      []*order.Order
+	Performance Performance
 }
 
 // HoldQty は現在の事実上の保有数量を返します
@@ -32,10 +33,10 @@ func (o Observation) HoldQty() float64 {
 // Spotter は特定の銘柄の「現実の状態（事実）」を監視・維持する役割を担います。
 type Spotter struct {
 	Detail              symbol.Symbol
-	positions           []position.Position
-	orders              []*order.Order
+	sniperPositions     map[string][]position.Position
+	sniperOrders        map[string][]*order.Order
+	sniperPerformance   map[string]Performance
 	processedExecutions map[string]bool
-	Performance         Performance
 	Logger              *slog.Logger
 	mu                  sync.Mutex
 }
@@ -46,11 +47,23 @@ func NewSpotter(detail symbol.Symbol, logger *slog.Logger) *Spotter {
 	}
 	return &Spotter{
 		Detail:              detail,
-		positions:           make([]position.Position, 0),
-		orders:              make([]*order.Order, 0),
+		sniperPositions:     make(map[string][]position.Position),
+		sniperOrders:        make(map[string][]*order.Order),
+		sniperPerformance:   make(map[string]Performance),
 		processedExecutions: make(map[string]bool),
 		Logger:              logger,
 	}
+}
+
+// RecordBullet は Sniper が発行した判断（Bullet）を記録し、注文とスナイパーを紐付けます。
+func (s *Spotter) RecordBullet(sniperID string, bullet Bullet) {
+	if bullet.Order == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.sniperOrders[sniperID] = append(s.sniperOrders[sniperID], bullet.Order)
 }
 
 // Update は API からの注文レポートを受け取り、内部の「事実」を更新します。
@@ -58,156 +71,157 @@ func (s *Spotter) Update(report order.Orders, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var pendingExecs []struct {
-		exec           order.Execution
-		action         order.Action
-		orderCreatedAt time.Time
-		parentOrder    *order.Order
-	}
-
-	var reconciledOrders []*order.Order
-
-	// 1. 未完了注文の保持（APIへの反映待ち含む）
-	for _, o := range s.orders {
-		if o.IsPending() {
-			// 送信中注文は30秒間保持
-			if now.Sub(o.CreatedAt) < 30*time.Second {
+	// 1. 各スナイパーごとに注文状態の整理（Reconciliation）
+	for sniperID, orders := range s.sniperOrders {
+		var reconciledOrders []*order.Order
+		// 未完了注文の保持（APIへの反映待ち含む）
+		for _, o := range orders {
+			if o.IsPending() {
+				if now.Sub(o.CreatedAt) < 30*time.Second {
+					reconciledOrders = append(reconciledOrders, o)
+				}
+			} else if !o.IsCompleted() {
 				reconciledOrders = append(reconciledOrders, o)
 			}
-		} else if !o.IsCompleted() {
-			reconciledOrders = append(reconciledOrders, o)
-		}
-	}
-
-	// 2. APIレポートの反映
-	for _, ext := range report.Orders {
-		if ext.Symbol != s.Detail.Code {
-			continue
 		}
 
-		var matchedInternal *order.Order
-		for _, o := range reconciledOrders { // reconciledOrders から探す（すでに入っている可能性があるため）
-			if o.ID == ext.ID {
-				matchedInternal = o
-				break
+		// APIレポートの反映
+		var pendingExecs []struct {
+			exec           order.Execution
+			action         order.Action
+			orderCreatedAt time.Time
+			parentOrder    *order.Order
+			sniperID       string
+		}
+
+		for _, ext := range report.Orders {
+			if ext.Symbol != s.Detail.Code {
+				continue
 			}
-		}
 
-		if matchedInternal == nil {
-			// まだ reconciledOrders にない場合、s.orders から探す
-			for _, o := range s.orders {
+			var matchedInternal *order.Order
+			// このスナイパーの注文リストから探す
+			for _, o := range reconciledOrders {
 				if o.ID == ext.ID {
 					matchedInternal = o
 					break
 				}
 			}
-		}
+			if matchedInternal == nil {
+				for _, o := range orders {
+					if o.ID == ext.ID {
+						matchedInternal = o
+						break
+					}
+				}
+			}
 
-		if matchedInternal == nil {
-			continue // 知らない注文は無視（他の戦略等）
-		}
+			if matchedInternal == nil {
+				continue
+			}
 
-		// 状態同期
-		matchedInternal.Status = ext.Status
-		matchedInternal.CumQty = ext.CumQty
-		if matchedInternal.IsPending() {
-			matchedInternal.InternalState = order.STATE_ACTIVE
-		}
+			// 状態同期
+			matchedInternal.Status = ext.Status
+			matchedInternal.CumQty = ext.CumQty
+			if matchedInternal.IsPending() {
+				matchedInternal.InternalState = order.STATE_ACTIVE
+			}
 
-		// 約定の抽出
-		for _, exec := range ext.Executions {
-			if !s.processedExecutions[exec.ID] {
-				pendingExecs = append(pendingExecs, struct {
-					exec           order.Execution
-					action         order.Action
-					orderCreatedAt time.Time
-					parentOrder    *order.Order
-				}{
-					exec:           exec,
-					action:         matchedInternal.Action,
-					orderCreatedAt: matchedInternal.CreatedAt,
-					parentOrder:    matchedInternal,
-				})
+			// 約定の抽出
+			for _, exec := range ext.Executions {
+				if !s.processedExecutions[exec.ID] {
+					pendingExecs = append(pendingExecs, struct {
+						exec           order.Execution
+						action         order.Action
+						orderCreatedAt time.Time
+						parentOrder    *order.Order
+						sniperID       string
+					}{
+						exec:           exec,
+						action:         matchedInternal.Action,
+						orderCreatedAt: matchedInternal.CreatedAt,
+						parentOrder:    matchedInternal,
+						sniperID:       sniperID,
+					})
+				}
+			}
+
+			// 完了した注文も、レポートにある限りは保持する
+			exists := false
+			for _, ro := range reconciledOrders {
+				if ro.ID == matchedInternal.ID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				reconciledOrders = append(reconciledOrders, matchedInternal)
 			}
 		}
 
-		// 完了した注文も、レポートにある限りは保持する
-		exists := false
-		for _, ro := range reconciledOrders {
-			if ro.ID == matchedInternal.ID {
-				exists = true
-				break
+		// 完了済み注文の整理（ゾンビ管理）
+		var activeOrders []*order.Order
+		var completedButNotInReport []*order.Order
+
+		for _, o := range reconciledOrders {
+			inReport := false
+			for _, ext := range report.Orders {
+				if ext.ID == o.ID {
+					inReport = true
+					break
+				}
 			}
-		}
-		if !exists {
-			reconciledOrders = append(reconciledOrders, matchedInternal)
-		}
-	}
 
-	// 完了済み注文の整理
-	var activeOrders []*order.Order
-	var completedButNotInReport []*order.Order
-
-	for _, o := range reconciledOrders {
-		// レポートに含まれているかチェック
-		inReport := false
-		for _, ext := range report.Orders {
-			if ext.ID == o.ID {
-				inReport = true
-				break
+			if !o.IsCompleted() || inReport {
+				activeOrders = append(activeOrders, o)
+			} else {
+				completedButNotInReport = append(completedButNotInReport, o)
 			}
 		}
 
-		if !o.IsCompleted() || inReport {
-			activeOrders = append(activeOrders, o)
-		} else {
-			completedButNotInReport = append(completedButNotInReport, o)
+		sort.Slice(completedButNotInReport, func(i, j int) bool {
+			return completedButNotInReport[i].CreatedAt.After(completedButNotInReport[j].CreatedAt)
+		})
+		if len(completedButNotInReport) > 10 {
+			completedButNotInReport = completedButNotInReport[:10]
 		}
-	}
 
-	// レポートから消えた完了済み注文（ゾンビ）を最新10件に絞る
-	sort.Slice(completedButNotInReport, func(i, j int) bool {
-		return completedButNotInReport[i].CreatedAt.After(completedButNotInReport[j].CreatedAt)
-	})
-	if len(completedButNotInReport) > 10 {
-		completedButNotInReport = completedButNotInReport[:10]
-	}
+		s.sniperOrders[sniperID] = append(activeOrders, completedButNotInReport...)
 
-	// 合体させて保存
-	s.orders = append(activeOrders, completedButNotInReport...)
+		// 2. 約定の反映（時系列順）
+		sort.Slice(pendingExecs, func(i, j int) bool {
+			return pendingExecs[i].exec.ExecutionTime.Before(pendingExecs[j].exec.ExecutionTime)
+		})
 
-	// 3. 約定の反映（時系列順）
-	sort.Slice(pendingExecs, func(i, j int) bool {
-		return pendingExecs[i].exec.ExecutionTime.Before(pendingExecs[j].exec.ExecutionTime)
-	})
-
-	for _, pe := range pendingExecs {
-		s.applyExecution(pe.exec, pe.action, pe.orderCreatedAt, pe.parentOrder)
-		pe.parentOrder.AddExecution(pe.exec)
+		for _, pe := range pendingExecs {
+			s.applyExecution(pe.sniperID, pe.exec, pe.action, pe.orderCreatedAt, pe.parentOrder)
+			pe.parentOrder.AddExecution(pe.exec)
+		}
 	}
 }
 
-// PrepareObservation は最新の Tick をもとに、Sniper に渡すためのスナップショットを作成します。
-func (s *Spotter) PrepareObservation(t tick.Tick) Observation {
+// PrepareObservation は最新の Tick をもとに、指定した Sniper に渡すためのスナップショットを作成します。
+func (s *Spotter) PrepareObservation(sniperID string, t tick.Tick) Observation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// スライスは参照渡しなので、内容が変わらないようコピーを作成して渡す
-	posCopy := make([]position.Position, len(s.positions))
-	copy(posCopy, s.positions)
+	pos := s.sniperPositions[sniperID]
+	posCopy := make([]position.Position, len(pos))
+	copy(posCopy, pos)
 
-	orderCopy := make([]*order.Order, len(s.orders))
-	copy(orderCopy, s.orders)
+	ords := s.sniperOrders[sniperID]
+	orderCopy := make([]*order.Order, len(ords))
+	copy(orderCopy, ords)
 
 	return Observation{
-		Tick:      t,
-		Positions: posCopy,
-		Orders:    orderCopy,
+		Tick:        t,
+		Positions:   posCopy,
+		Orders:      orderCopy,
+		Performance: s.sniperPerformance[sniperID],
 	}
 }
 
-// applyExecution は個別の約定をポジションに反映します。
-func (s *Spotter) applyExecution(exec order.Execution, action order.Action, orderCreatedAt time.Time, parentOrder *order.Order) {
+func (s *Spotter) applyExecution(sniperID string, exec order.Execution, action order.Action, orderCreatedAt time.Time, parentOrder *order.Order) {
 	if s.processedExecutions[exec.ID] {
 		return
 	}
@@ -215,7 +229,7 @@ func (s *Spotter) applyExecution(exec order.Execution, action order.Action, orde
 
 	switch action {
 	case order.ACTION_BUY:
-		s.positions = append(s.positions, position.Position{
+		s.sniperPositions[sniperID] = append(s.sniperPositions[sniperID], position.Position{
 			ExecutionID: exec.ID,
 			Symbol:      s.Detail.Code,
 			LeavesQty:   exec.Qty,
@@ -223,8 +237,8 @@ func (s *Spotter) applyExecution(exec order.Execution, action order.Action, orde
 			Meta:        position.PositionMeta{EntryTime: exec.ExecutionTime},
 		})
 		s.Logger.Info("FILLED",
+			slog.String("sniper", sniperID),
 			slog.String("symbol", s.Detail.Code),
-			slog.String("event", "FILLED"),
 			slog.Float64("qty", exec.Qty),
 			slog.Float64("price", exec.Price),
 		)
@@ -233,15 +247,16 @@ func (s *Spotter) applyExecution(exec order.Execution, action order.Action, orde
 		if parentOrder != nil {
 			closePositions = parentOrder.ClosePositions
 		}
-		s.reducePositions(exec.Qty, exec.Price, exec.ExecutionTime, closePositions)
+		s.reducePositions(sniperID, exec.Qty, exec.Price, exec.ExecutionTime, closePositions)
 	}
 }
 
-// reducePositions は売り約定に伴い、保有ポジションを削減し損益を計算します。
-func (s *Spotter) reducePositions(sellQty float64, sellPrice float64, sellTime time.Time, closePositions []order.ClosePosition) {
+func (s *Spotter) reducePositions(sniperID string, sellQty float64, sellPrice float64, sellTime time.Time, closePositions []order.ClosePosition) {
 	remainingToSell := sellQty
 	var totalTradePnL float64
 	var earliestEntryTime time.Time
+
+	positions := s.sniperPositions[sniperID]
 
 	// 1. 指定返済優先
 	if len(closePositions) > 0 {
@@ -251,7 +266,7 @@ func (s *Spotter) reducePositions(sellQty float64, sellPrice float64, sellTime t
 		}
 
 		var newPositions []position.Position
-		for _, p := range s.positions {
+		for _, p := range positions {
 			qtyToClose, exists := closeMap[p.ExecutionID]
 			if exists && qtyToClose > 0 && remainingToSell > 0 {
 				closeQty := p.LeavesQty
@@ -264,7 +279,7 @@ func (s *Spotter) reducePositions(sellQty float64, sellPrice float64, sellTime t
 
 				tradePnL := (sellPrice - p.Price) * closeQty
 				totalTradePnL += tradePnL
-				s.updatePerformance(tradePnL)
+				s.updatePerformance(sniperID, tradePnL)
 
 				p.LeavesQty -= closeQty
 				closeMap[p.ExecutionID] -= closeQty
@@ -275,13 +290,13 @@ func (s *Spotter) reducePositions(sellQty float64, sellPrice float64, sellTime t
 				newPositions = append(newPositions, p)
 			}
 		}
-		s.positions = newPositions
+		positions = newPositions
 	}
 
 	// 2. FIFO削減
 	if remainingToSell > 0 {
 		var newPositions []position.Position
-		for _, p := range s.positions {
+		for _, p := range positions {
 			if remainingToSell <= 0 {
 				newPositions = append(newPositions, p)
 				continue
@@ -296,7 +311,7 @@ func (s *Spotter) reducePositions(sellQty float64, sellPrice float64, sellTime t
 
 			tradePnL := (sellPrice - p.Price) * closeQty
 			totalTradePnL += tradePnL
-			s.updatePerformance(tradePnL)
+			s.updatePerformance(sniperID, tradePnL)
 
 			if p.LeavesQty <= remainingToSell {
 				remainingToSell -= p.LeavesQty
@@ -306,34 +321,36 @@ func (s *Spotter) reducePositions(sellQty float64, sellPrice float64, sellTime t
 				newPositions = append(newPositions, p)
 			}
 		}
-		s.positions = newPositions
+		positions = newPositions
 	}
+	s.sniperPositions[sniperID] = positions
 
 	holdTimeSec := 0.0
 	if !earliestEntryTime.IsZero() && !sellTime.IsZero() {
 		holdTimeSec = sellTime.Sub(earliestEntryTime).Seconds()
 	}
 	s.Logger.Info("POSITION_CLOSED",
+		slog.String("sniper", sniperID),
 		slog.String("symbol", s.Detail.Code),
-		slog.String("event", "POSITION_CLOSED"),
 		slog.Float64("pnl", totalTradePnL),
 		slog.Float64("hold_time_sec", holdTimeSec),
 	)
 }
 
-func (s *Spotter) updatePerformance(pnl float64) {
-	s.Performance.RealizedPnL += pnl
-	s.Performance.Trades++
+func (s *Spotter) updatePerformance(sniperID string, pnl float64) {
+	perf := s.sniperPerformance[sniperID]
+	perf.RealizedPnL += pnl
+	perf.Trades++
 	if pnl > 0 {
-		s.Performance.Wins++
+		perf.Wins++
 	} else if pnl < 0 {
-		s.Performance.Losses++
+		perf.Losses++
 	}
+	s.sniperPerformance[sniperID] = perf
 }
 
-// AddOrder は Sniper が新規に発行した注文を、Spotter の管理対象（未反映リスト）に加えます。
+// AddOrder は後方互換性のために残していますが、基本的には RecordBullet を使用してください。
 func (s *Spotter) AddOrder(o *order.Order) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.orders = append(s.orders, o)
+	// SniperIDが不明なため、"default" グループに記録
+	s.RecordBullet("default", Bullet{Order: o})
 }

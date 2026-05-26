@@ -84,7 +84,8 @@ func RunBacktest() error {
 			slog.Error("バックテストログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
 		}
 
-		s := sniper.NewSniper(sym.Detail, st, policy, sym.Exchange, analysisLogger)
+		sniperID := fmt.Sprintf("%s_%s", sym.StrategyName, sym.Detail.Code)
+		s := sniper.NewSniper(sniperID, sym.Detail, st, policy, sym.Exchange, analysisLogger)
 		snipers = append(snipers, s)
 		spotters[sym.Detail.Code] = sniper.NewSpotter(sym.Detail, analysisLogger)
 	}
@@ -116,11 +117,11 @@ func RunBacktest() error {
 				sp := spotters[s.Detail.Code]
 				sp.Update(report, tick.CurrentPriceTime)
 
-				obs := sp.PrepareObservation(tick)
-				bullet := s.SyncOrders(obs)
+				obs := sp.PrepareObservation(s.ID, tick)
+				bullet := s.HandleIFD(obs)
 				if bullet.HasOrder() {
-					sp.AddOrder(bullet.Order)
-					fmt.Printf("🚀 [%s] SyncOrders経由で注文を送信します: %s %.2f株\n", s.Detail.Code, bullet.Order.Action, bullet.Order.OrderQty)
+					sp.RecordBullet(s.ID, bullet)
+					fmt.Printf("🚀 [%s] HandleIFD経由で注文を送信します: %s %.2f株\n", s.Detail.Code, bullet.Order.Action, bullet.Order.OrderQty)
 					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 					if err != nil {
 						s.FailSendingOrder(bullet.Order)
@@ -136,7 +137,7 @@ func RunBacktest() error {
 		for _, s := range snipers {
 			if s.Detail.Code == t.Symbol {
 				sp := spotters[s.Detail.Code]
-				obs := sp.PrepareObservation(t)
+				obs := sp.PrepareObservation(s.ID, t)
 				bullet := s.Tick(obs)
 
 				if bullet.HasCancel() {
@@ -146,7 +147,7 @@ func RunBacktest() error {
 				}
 
 				if bullet.HasOrder() {
-					sp.AddOrder(bullet.Order)
+					sp.RecordBullet(s.ID, bullet)
 					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 					if err != nil {
 						s.FailSendingOrder(bullet.Order)
@@ -175,10 +176,10 @@ func RunBacktest() error {
 					for _, s := range snipers {
 						sp := spotters[s.Detail.Code]
 						sp.Update(report, state.LatestTick.CurrentPriceTime)
-						obs := sp.PrepareObservation(state.LatestTick)
-						bullet := s.SyncOrders(obs)
+						obs := sp.PrepareObservation(s.ID, state.LatestTick)
+						bullet := s.HandleIFD(obs)
 						if bullet.HasOrder() {
-							sp.AddOrder(bullet.Order)
+							sp.RecordBullet(s.ID, bullet)
 							updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
 							if err != nil {
 								s.FailSendingOrder(bullet.Order)

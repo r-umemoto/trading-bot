@@ -24,7 +24,7 @@ func (m *MockStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Sig
 func TestSniper_Tick_WithObservation(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
+	s := NewSniper("test-sniper", detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
 
 	// 1. 空の Observation で Tick を実行
 	obs := Observation{
@@ -55,10 +55,11 @@ func TestSniper_Tick_WithObservation(t *testing.T) {
 func TestSpotter_UpdateAndObserve(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	sp := NewSpotter(detail, nil)
+	sniperID := "test-sniper"
 
 	// 1. 注文の追加
 	ord := order.NewOrder("order-1", "9434", order.ACTION_BUY, 2000, 100)
-	sp.AddOrder(ord)
+	sp.RecordBullet(sniperID, Bullet{Order: ord})
 
 	// 2. 約定レポートの反映
 	report := order.Orders{
@@ -77,7 +78,7 @@ func TestSpotter_UpdateAndObserve(t *testing.T) {
 	sp.Update(report, time.Now())
 
 	// 3. Observation の確認
-	obs := sp.PrepareObservation(tick.Tick{Price: 2005})
+	obs := sp.PrepareObservation(sniperID, tick.Tick{Price: 2005})
 	if len(obs.Positions) != 1 {
 		t.Fatalf("expected 1 position, got %d", len(obs.Positions))
 	}
@@ -89,7 +90,7 @@ func TestSpotter_UpdateAndObserve(t *testing.T) {
 func TestSniper_Tick_Timeout(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
 	policy := &strategy.NoopPolicy{}
-	s := NewSniper(detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
+	s := NewSniper("test-sniper", detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
 
 	ord := &order.Order{
 		Status: order.ORDER_STATUS_FILL_EXPECTED,
@@ -111,7 +112,7 @@ func TestSniper_Tick_Timeout(t *testing.T) {
 
 func TestSniper_FailSendingOrder(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
-	s := NewSniper(detail, &MockStrategy{}, nil, order.EXCHANGE_TOSHO, nil)
+	s := NewSniper("test-sniper", detail, &MockStrategy{}, nil, order.EXCHANGE_TOSHO, nil)
 
 	entry := &order.Order{ID: "entry"}
 	exit := &order.Order{ID: "exit"}
