@@ -24,12 +24,14 @@ type AggregatedPerformance struct {
 
 // PerformanceReporter は全スナイパーの成績を集計し、出力およびCSV保存を行うレポート作成サービスです
 type PerformanceReporter struct {
+	provider sniper.PerformanceProvider
 	snipers  []*sniper.Sniper
 	dataPool tick.DataPool
 }
 
-func NewPerformanceReporter(snipers []*sniper.Sniper, dataPool tick.DataPool) *PerformanceReporter {
+func NewPerformanceReporter(provider sniper.PerformanceProvider, snipers []*sniper.Sniper, dataPool tick.DataPool) *PerformanceReporter {
 	return &PerformanceReporter{
+		provider: provider,
 		snipers:  snipers,
 		dataPool: dataPool,
 	}
@@ -64,11 +66,12 @@ func (r *PerformanceReporter) PrintPerformanceReport(enableCSV bool) {
 		}
 
 		// 成績を集計
+		perf := r.provider.GetPerformance(s.ID)
 		updatePerf := func(p *AggregatedPerformance) {
-			p.Trades += s.Performance.Trades
-			p.Wins += s.Performance.Wins
-			p.Losses += s.Performance.Losses
-			p.RealizedPnL += s.Performance.RealizedPnL
+			p.Trades += perf.Trades
+			p.Wins += perf.Wins
+			p.Losses += perf.Losses
+			p.RealizedPnL += perf.RealizedPnL
 			p.UnrealizedPnL += unrealized // 最新の含み損益を使用
 		}
 

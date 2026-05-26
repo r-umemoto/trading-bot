@@ -19,7 +19,6 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/backtest"
 	"github.com/r-umemoto/trading-bot/pkg/portfolio"
-	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
 
 // RunBacktest はバックテストの初期化と実行をカプセル化した関数です。
@@ -210,10 +209,25 @@ func RunBacktest() error {
 	fmt.Printf("総発注数: %d件\n", len(ords.Orders))
 
 	// 結果の出力
-	uc := usecase.NewTradeUseCase(snipers, gateway)
-	uc.PrintPerformanceReport(false)
+	provider := &backtestPerformanceProvider{spotters: spotters}
+	reporter := service.NewPerformanceReporter(provider, snipers, gateway.DataPool())
+	reporter.PrintPerformanceReport(false)
 
 	return nil
+}
+
+type backtestPerformanceProvider struct {
+	spotters map[string]*sniper.Spotter
+}
+
+func (p *backtestPerformanceProvider) GetPerformance(sniperID string) sniper.Performance {
+	for _, sp := range p.spotters {
+		perf := sp.GetPerformance(sniperID)
+		if perf.Trades > 0 || perf.RealizedPnL != 0 {
+			return perf
+		}
+	}
+	return sniper.Performance{}
 }
 
 func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {

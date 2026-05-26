@@ -20,6 +20,10 @@ type Strategy interface {
 	AnalysisLogger() *slog.Logger
 }
 
+type PerformanceProvider interface {
+	GetPerformance(sniperID string) Performance
+}
+
 type LifecycleState int
 
 const (
@@ -54,7 +58,6 @@ type Sniper struct {
 	ID                string
 	Detail            symbol.Symbol
 	Strategy          Strategy
-	Performance       Performance
 	LatestObservation Observation
 	State             strategy.StrategyState
 	ExecutionPolicy   strategy.ExecutionPolicy
@@ -96,7 +99,6 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	defer s.mu.Unlock()
 
 	s.LatestObservation = obs
-	s.Performance = obs.Performance
 
 	now := obs.Tick.CurrentPriceTime
 	if now.IsZero() {
@@ -245,7 +247,6 @@ func (s *Sniper) HandleIFD(obs Observation) Bullet {
 	defer s.mu.Unlock()
 
 	s.LatestObservation = obs
-	s.Performance = obs.Performance
 
 	now := obs.Tick.CurrentPriceTime
 	if now.IsZero() {

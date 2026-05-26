@@ -200,6 +200,12 @@ func (s *Spotter) Update(report order.Orders, now time.Time) {
 	}
 }
 
+func (s *Spotter) GetPerformance(sniperID string) Performance {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sniperPerformance[sniperID]
+}
+
 // PrepareObservation は最新の Tick をもとに、指定した Sniper に渡すためのスナップショットを作成します。
 func (s *Spotter) PrepareObservation(sniperID string, t tick.Tick) Observation {
 	s.mu.Lock()
