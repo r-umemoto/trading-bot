@@ -218,6 +218,7 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 	entry := order.NewOrder(order.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
 	entry.InternalState = order.STATE_PENDING
 	entry.ClosePositions = closePositions
+	entry.Reason = signal.Reason // 🌟 理由を記録
 
 	currentPos := s.calculatePosition(obs.Positions)
 	simulatedInput := strategy.StrategyInput{
@@ -235,6 +236,7 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 		}
 		exit = order.NewOrder(order.GenerateLocalID(), s.Detail.Code, exitAction, exitPrice, signal.Quantity)
 		exit.InternalState = order.STATE_PREPARING
+		exit.Reason = ifDoneSignal.Reason // 🌟 IFD注文の理由も記録
 	}
 
 	return entry, exit

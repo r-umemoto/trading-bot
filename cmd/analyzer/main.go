@@ -12,9 +12,9 @@ import (
 )
 
 type LogEntry struct {
-	Event       string  `json:"event"`
+	Msg         string  `json:"msg"`
 	Symbol      string  `json:"symbol"`
-	Strategy    string  `json:"strategy_name"`
+	Sniper      string  `json:"sniper"`
 	ExitReason  string  `json:"exit_reason"`
 	Pnl         float64 `json:"pnl"`
 	HoldTimeSec float64 `json:"hold_time_sec"`
@@ -37,7 +37,7 @@ type QueueStat struct {
 
 func main() {
 	logFile := flag.String("file", "", "解析する単一のログファイルパス")
-	logDir := flag.String("dir", "", "解析するログファイルが含まれるディレクトリパス") // 🌟 追加
+	logDir := flag.String("dir", "", "解析するログファイルが含まれるディレクトリパス")
 	flag.Parse()
 
 	if *logFile == "" && *logDir == "" {
@@ -89,7 +89,7 @@ func main() {
 			stat.Count, float64(stat.WinCount)/float64(stat.Count)*100, stat.PnlSum, stat.PnlSum/float64(stat.Count))
 
 		// 決済理由別の詳細
-		fmt.Println("  [決済理由別の内訳]")
+		fmt.Println("  [決済理由・子戦略別の内訳]")
 		reasons := make([]string, 0, len(symbolExitStats[sym]))
 		for r := range symbolExitStats[sym] {
 			reasons = append(reasons, r)
@@ -97,12 +97,12 @@ func main() {
 		sort.Strings(reasons)
 		for _, r := range reasons {
 			es := symbolExitStats[sym][r]
-			fmt.Printf("    - %-20s: %3d回, 損益: %8.1f, 平均保有: %5.1fs\n",
+			fmt.Printf("    - %-25s: %3d回, 損益: %8.1f, 平均保有: %5.1fs\n",
 				r, es.Count, es.PnlSum, es.HoldSum/float64(es.Count))
 		}
 
 		// 約定待ち時間
-		if qs, ok := queueStats[sym]; ok {
+		if qs, ok := queueStats[sym]; ok && qs.Count > 0 {
 			fmt.Printf("  [約定待ち時間] 平均: %dms, 最小: %dms, 最大: %dms\n",
 				qs.TimeSum/int64(qs.Count), qs.Min, qs.Max)
 		}
@@ -136,9 +136,9 @@ func processFile(path string, symbolStats map[string]*SymbolStat, queueStats map
 			continue
 		}
 
-		switch entry.Event {
+		switch entry.Msg {
 		case "POSITION_CLOSED":
-			stratKey := entry.Symbol + " [" + entry.Strategy + "]"
+			stratKey := entry.Symbol + " [" + entry.Sniper + "]"
 			if _, ok := symbolStats[stratKey]; !ok {
 				symbolStats[stratKey] = &SymbolStat{PnlDist: make(map[float64]int)}
 			}
@@ -153,16 +153,24 @@ func processFile(path string, symbolStats map[string]*SymbolStat, queueStats map
 			if symbolExitStats[stratKey] == nil {
 				symbolExitStats[stratKey] = make(map[string]*ExitStat)
 			}
-			if symbolExitStats[stratKey][entry.ExitReason] == nil {
-				symbolExitStats[stratKey][entry.ExitReason] = &ExitStat{}
+			reason := entry.ExitReason
+			if reason == "" {
+				reason = "(不明)"
 			}
-			stat := symbolExitStats[stratKey][entry.ExitReason]
+			if symbolExitStats[stratKey][reason] == nil {
+				symbolExitStats[stratKey][reason] = &ExitStat{}
+			}
+			stat := symbolExitStats[stratKey][reason]
 			stat.Count++
 			stat.PnlSum += entry.Pnl
 			stat.HoldSum += entry.HoldTimeSec
 
 		case "FILLED":
-			stratKey := entry.Symbol + " [" + entry.Strategy + "]"
+			stratKey := entry.Symbol + " [" + entry.Sniper + "]"
+			// QueueTimeMs が 0 の場合は統計に含めない
+			if entry.QueueTimeMs == 0 {
+				continue
+			}
 			if _, ok := queueStats[stratKey]; !ok {
 				queueStats[stratKey] = &QueueStat{Min: math.MaxInt64, Max: 0}
 			}
@@ -178,3 +186,5 @@ func processFile(path string, symbolStats map[string]*SymbolStat, queueStats map
 		}
 	}
 }
+
+

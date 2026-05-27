@@ -177,7 +177,7 @@ func TestMarketGateway_SendOrderRaw_DelivType(t *testing.T) {
 			)
 
 			_, err := gateway.SendOrderRaw(context.Background(), order.SendOrderInput{
-				Order:   *ord,
+				Order:   ord,
 				Request: req,
 			})
 

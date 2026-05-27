@@ -258,17 +258,20 @@ func (s *Spotter) applyExecution(sniperID string, exec order.Execution, action o
 			slog.String("symbol", s.Detail.Code),
 			slog.Float64("qty", exec.Qty),
 			slog.Float64("price", exec.Price),
+			slog.String("exit_reason", parentOrder.Reason), // 🌟 理由を記録
 		)
 	case order.ACTION_SELL:
 		var closePositions []order.ClosePosition
+		reason := ""
 		if parentOrder != nil {
 			closePositions = parentOrder.ClosePositions
+			reason = parentOrder.Reason
 		}
-		s.reducePositions(sniperID, exec.Qty, exec.Price, exec.ExecutionTime, closePositions)
+		s.reducePositions(sniperID, exec.Qty, exec.Price, exec.ExecutionTime, closePositions, reason)
 	}
 }
 
-func (s *Spotter) reducePositions(sniperID string, sellQty float64, sellPrice float64, sellTime time.Time, closePositions []order.ClosePosition) {
+func (s *Spotter) reducePositions(sniperID string, sellQty float64, sellPrice float64, sellTime time.Time, closePositions []order.ClosePosition, closeReason string) {
 	remainingToSell := sellQty
 	var totalTradePnL float64
 	var earliestEntryTime time.Time
@@ -351,6 +354,7 @@ func (s *Spotter) reducePositions(sniperID string, sellQty float64, sellPrice fl
 		slog.String("symbol", s.Detail.Code),
 		slog.Float64("pnl", totalTradePnL),
 		slog.Float64("hold_time_sec", holdTimeSec),
+		slog.String("exit_reason", closeReason), // 🌟 理由を記録
 	)
 }
 

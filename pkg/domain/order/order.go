@@ -72,6 +72,7 @@ type Order struct {
 
 	CancelSentAt time.Time // 🌟 キャンセル送信時刻（ゾンビ防止用）
 
+	Reason string // 🌟 戦略がこの注文を出した理由（子戦略名など）
 
 	// 内部ステータスと疑似約定のトラッキング
 	InternalState InternalState

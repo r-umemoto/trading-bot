@@ -24,7 +24,7 @@ func TestGatewayLatency_OrderMatchingDelay(t *testing.T) {
 
 	// 10:00:00.000 に指値買い注文を送信
 	ord, err := g.SendOrder(context.Background(), order.SendOrderInput{
-		Order: order.Order{
+		Order: &order.Order{
 			Symbol:     "6758",
 			Action:     order.ACTION_BUY,
 			OrderQty:   100,
@@ -84,7 +84,7 @@ func TestGatewayLatency_CancelRace(t *testing.T) {
 
 	// 指値注文送信 (到達予定: 10:00:00.100)
 	ord, _ := g.SendOrder(context.Background(), order.SendOrderInput{
-		Order: order.Order{
+		Order: &order.Order{
 			Symbol:     "6758",
 			Action:     order.ACTION_BUY,
 			OrderQty:   100,
@@ -168,7 +168,7 @@ func TestGatewayLatency_VolumeModelDeferredDepth(t *testing.T) {
 
 	// 10:00:00.000 に指値買い注文 (990円) を送信 (到達予定: 10:00:00.100)
 	ord, _ := g.SendOrder(context.Background(), order.SendOrderInput{
-		Order: order.Order{
+		Order: &order.Order{
 			Symbol:     "6758",
 			Action:     order.ACTION_BUY,
 			OrderQty:   100,
