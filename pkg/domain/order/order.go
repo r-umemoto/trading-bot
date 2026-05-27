@@ -98,6 +98,7 @@ func NewOrder(id string, symbol string, action Action, price float64, qty float6
 		OrderPrice:    price,
 		OrderQty:      qty,
 		Status:        ORDER_STATUS_WAITING,
+		CashMargin:    CASH_MARGIN_MARGIN_ENTRY, // デフォルトは信用新規
 		InternalState: STATE_PREPARING,
 		CreatedAt:     time.Now(),
 	}

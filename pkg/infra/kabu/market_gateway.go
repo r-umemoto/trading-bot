@@ -108,7 +108,11 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 		side = api.SIDE_BUY
 	}
 
-	cashMargin := order.CASH_MARGIN_MARGIN_ENTRY // デフォルトは「新規」
+	cashMargin := ord.CashMargin
+	if cashMargin == order.CASH_MARGIN_NONE {
+		return ord, fmt.Errorf("CashMarginが指定されていません (Symbol: %s)", ord.Symbol)
+	}
+
 	if req.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(req.ClosePositions) > 0 {
 		cashMargin = order.CASH_MARGIN_MARGIN_EXIT // 返済指示があれば「返済」
 	}
