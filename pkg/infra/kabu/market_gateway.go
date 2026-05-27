@@ -24,7 +24,6 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		wsClient:      wsClient,
 		tickChannels:  make(map[string]chan tick.Tick),
 		orderChannels: make(map[string]chan order.Orders),
-		wsPushCh:      make(chan api.PushMessage, 1000),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
 	m.dataPool = tick.NewDefaultDataPool(kabuProvider)
@@ -46,7 +45,6 @@ type KabuClientInterface interface {
 type MarketGateway struct {
 	client        KabuClientInterface
 	wsClient      *api.WSClient
-	wsPushCh      chan api.PushMessage
 	tickChannels  map[string]chan tick.Tick
 	orderChannels map[string]chan order.Orders
 	dataPool      tick.DataPool
@@ -58,7 +56,6 @@ var _ Sender = (*MarketGateway)(nil)
 
 func (m *MarketGateway) Listen(ctx context.Context) (*market.MarketChannels, error) {
 	// 1. 各種ワーカーを起動
-	go m.wsClient.Listen(m.wsPushCh)
 	go m.startWebSocketLoop(ctx)
 	go m.startPollingLoop(ctx)
 	m.dispatcher.Start(ctx)
