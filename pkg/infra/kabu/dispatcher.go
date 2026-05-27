@@ -22,7 +22,7 @@ type OrderJob struct {
 
 // Sender は Dispatcher が実際に発注・キャンセルを実行するためのインターフェースです
 type Sender interface {
-	SendOrderRaw(ctx context.Context, input order.SendOrderInput) (order.Order, error)
+	SendOrderRaw(ctx context.Context, input order.SendOrderInput) (*order.Order, error)
 	CancelOrderRaw(ctx context.Context, orderID string) error
 }
 
@@ -135,7 +135,7 @@ func (d *OrderDispatcher) executeJob(ctx context.Context, job *OrderJob) {
 	}
 
 	if job.OrderPtr != nil {
-		updatedOrder, err := d.sender.SendOrderRaw(apiCtx, order.SendOrderInput{Order: *job.OrderPtr, Request: *job.OrderReq})
+		updatedOrder, err := d.sender.SendOrderRaw(apiCtx, order.SendOrderInput{Order: job.OrderPtr, Request: *job.OrderReq})
 		if err != nil {
 			job.ResultChan <- order.OrderResult{
 				Symbol: job.Symbol,
@@ -144,7 +144,8 @@ func (d *OrderDispatcher) executeJob(ctx context.Context, job *OrderJob) {
 			}
 			return
 		}
-		*job.OrderPtr = updatedOrder
+		// 指針: 内部の状態を更新
+		*job.OrderPtr = *updatedOrder
 		job.ResultChan <- order.OrderResult{
 			Symbol:  job.Symbol,
 			OrderID: updatedOrder.ID,

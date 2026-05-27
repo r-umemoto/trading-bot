@@ -33,7 +33,7 @@ type MarketGateway interface {
 	// DataPool はゲートウェイが内部で保持・更新する時価データプールを取得します
 	DataPool() tick.DataPool
 
-	SendOrder(ctx context.Context, input order.SendOrderInput) (order.Order, error)
+	SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error)
 	CancelOrder(ctx context.Context, orderID string) error
 	GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error)
 	GetOrders(ctx context.Context) (order.Orders, error)

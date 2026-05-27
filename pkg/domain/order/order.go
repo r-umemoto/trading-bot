@@ -67,14 +67,11 @@ type Order struct {
 	Status OrderStatus // 注文の状態
 	CumQty float64     // 🌟 APIが報告してきた累計約定数量
 
-	HasIFD       bool      // 🌟 IFD注文の有無
-	IFDAction    Action    // IFD注文のアクション (BUY/SELL)
-	IFDPrice     float64   // IFD注文の価格
-	IFDOrderType OrderType // IFD注文の執行条件
+	ClosePositions []ClosePosition // 🌟 指定返済用
+	IfDone         *Order          // 🌟 この注文が約定した後に有効になる注文
 
 	CancelSentAt time.Time // 🌟 キャンセル送信時刻（ゾンビ防止用）
 
-	ClosePositions []ClosePosition // 🌟 指定返済用
 
 	// 内部ステータスと疑似約定のトラッキング
 	InternalState InternalState
@@ -190,6 +187,6 @@ type Orders struct {
 
 // SendOrderInput は新規発注に必要なパラメータを一括してまとめた構造体です
 type SendOrderInput struct {
-	Order   Order
+	Order   *Order
 	Request OrderRequest
 }

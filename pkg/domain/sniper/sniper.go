@@ -61,7 +61,7 @@ type Sniper struct {
 	Strategy          Strategy
 	State             strategy.StrategyState
 	ExecutionPolicy   strategy.ExecutionPolicy
-	ManagedOrders     []*ManagedOrder
+	ActiveOrders      []*order.Order
 	Logger            *slog.Logger
 	mu                sync.Mutex
 	lifecycle         LifecycleState
@@ -85,7 +85,7 @@ func NewSniper(id string, detail symbol.Symbol, strategy Strategy, policy strate
 		Detail:              detail,
 		Strategy:            strategy,
 		ExecutionPolicy:     policy,
-		ManagedOrders:       make([]*ManagedOrder, 0),
+		ActiveOrders:        make([]*order.Order, 0),
 		AccountType:         order.ACCOUNT_SPECIAL,
 		Exchange:            exchange,
 		MarginTradeType:     order.TRADE_TYPE_GENERAL_DAY,
@@ -108,32 +108,35 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	}
 
 	// --- 1. 管理対象の状態整理 ---
-	var reconciled []*ManagedOrder
+	var reconciled []*order.Order
 	var hasProcessingTrade bool
 	var blockingOrder *order.Order
 
-	for _, m := range s.ManagedOrders {
-		if m.IsCompleted() {
+	for _, curr := range s.ActiveOrders {
+		if curr.IsCompleted() {
+			// 🌟 親注文が約定完了している場合、子注文(IfDone)があれば追跡を開始する
+			if curr.Status == order.ORDER_STATUS_FILLED && curr.IfDone != nil {
+				fmt.Printf("🎯 [%s] 子注文(IFD)の追跡を開始します: %s\n", s.Detail.Code, curr.IfDone.ID)
+				// 子注文を管理対象に加える（IfDoneポインタを消すことで二重追加を防止）
+				child := curr.IfDone
+				curr.IfDone = nil 
+				reconciled = append(reconciled, child)
+				hasProcessingTrade = true
+			}
 			continue
 		}
-		reconciled = append(reconciled, m)
+		reconciled = append(reconciled, curr)
 		hasProcessingTrade = true
 
-		// 疑似約定タイムアウト時は IN_PROGRESS に戻す（APIが約定を反映するのを待つ）
-		if m.CheckTimeout(now) {
-			fmt.Printf("⚠️ [%s] 疑似約定タイムアウト: %s\n", s.Detail.Code, m.CurrentOrder().ID)
-		}
-
-		curr := m.CurrentOrder()
-		if s.ExecutionPolicy != nil && curr != nil && !curr.IsPending() && curr.Status != order.ORDER_STATUS_CANCEL_SENT && !curr.IsCompleted() {
+		if s.ExecutionPolicy != nil && !curr.IsPending() && curr.Status != order.ORDER_STATUS_CANCEL_SENT && !curr.IsCompleted() {
 			s.ExecutionPolicy.ApplySyntheticFill(curr, obs.Tick)
 		}
 
-		if curr != nil && !curr.IsCompleted() {
+		if !curr.IsCompleted() {
 			blockingOrder = curr
 		}
 	}
-	s.ManagedOrders = reconciled
+	s.ActiveOrders = reconciled
 
 	// --- 2. 戦略判断の取得 ---
 	currentPos := s.calculatePosition(obs.Positions)
@@ -164,8 +167,7 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	s.logStatus(obs, input)
 
 	// --- 3. 整合性チェック（Reconciliation） ---
-	for _, m := range s.ManagedOrders {
-		curr := m.CurrentOrder()
+	for _, curr := range s.ActiveOrders {
 		if curr == nil || curr.IsPending() || curr.Status == order.ORDER_STATUS_CANCEL_SENT {
 			continue
 		}
@@ -177,11 +179,6 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 				curr.Status = order.ORDER_STATUS_CANCEL_SENT
 				curr.CancelSentAt = time.Now()
 				return Bullet{CancelOrderID: curr.ID, Order: curr}
-			}
-
-			if curr.Status == order.ORDER_STATUS_NONE {
-				fmt.Printf("🚫 [%s] 未発注の論理注文(%s)を中止しました\n", s.Detail.Code, m.ID)
-				m.Status = StatusCanceled
 			}
 		}
 	}
@@ -199,16 +196,19 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 		return Bullet{}
 	}
 
-	managed := s.buildManagedOrder(obs, signal)
-	s.ManagedOrders = append(s.ManagedOrders, managed)
+	entry, exit := s.buildOrderPair(obs, signal)
+	s.ActiveOrders = append(s.ActiveOrders, entry)
+	if exit != nil {
+		entry.IfDone = exit
+	}
 
-	managed.Entry.CreatedAt = now
-	_, req := s.wrapRequest(managed.Entry)
+	entry.CreatedAt = now
+	_, req := s.wrapRequest(entry)
 
-	return Bullet{Order: managed.Entry, Request: &req}
+	return Bullet{Order: entry, Request: &req}
 }
 
-func (s *Sniper) buildManagedOrder(obs Observation, signal brain.Signal) *ManagedOrder {
+func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Order, *order.Order) {
 	marketAction, _ := signal.Action.ToMarketAction()
 
 	var closePositions []order.ClosePosition
@@ -237,62 +237,9 @@ func (s *Sniper) buildManagedOrder(obs Observation, signal brain.Signal) *Manage
 		exit.InternalState = order.STATE_PREPARING
 	}
 
-	return NewManagedOrder(entry.ID, entry, exit)
+	return entry, exit
 }
 
-func (s *Sniper) HandleIFD(obs Observation) Bullet {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := obs.Tick.CurrentPriceTime
-	if now.IsZero() {
-		now = time.Now()
-	}
-
-	var triggeredBullet Bullet
-
-	for _, m := range s.ManagedOrders {
-		if m.IsCompleted() {
-			continue
-		}
-
-		// 状態遷移管理（IFD: 決済発火）
-		switch m.Status {
-		case StatusEntryActive:
-			if m.Entry.Status == order.ORDER_STATUS_FILLED {
-				if m.Exit != nil {
-					fmt.Printf("⚡ [%s] IFD発動: エントリー約定(%s) -> 決済注文(%s)を即時発射します\n", s.Detail.Code, m.Entry.ID, m.Exit.Action)
-					m.Status = StatusExitPreparing
-					m.Exit.CreatedAt = now
-					m.Exit.InternalState = order.STATE_PENDING
-					m.Exit.ClosePositions = make([]order.ClosePosition, 0)
-					for _, exec := range m.Entry.Executions {
-						m.Exit.ClosePositions = append(m.Exit.ClosePositions, order.ClosePosition{
-							HoldID: exec.ID,
-							Qty:    exec.Qty,
-						})
-					}
-					_, req := s.wrapRequest(m.Exit)
-					triggeredBullet = Bullet{Order: m.Exit, Request: &req}
-					m.Status = StatusExitActive
-				} else {
-					m.Status = StatusCompleted
-				}
-			} else if m.Entry.Status == order.ORDER_STATUS_CANCELED || m.Entry.Status == order.ORDER_STATUS_EXPIRED {
-				m.Status = StatusCanceled
-			}
-
-		case StatusExitActive:
-			if m.Exit.Status == order.ORDER_STATUS_FILLED {
-				m.Status = StatusCompleted
-			} else if m.Exit.Status == order.ORDER_STATUS_CANCELED || m.Exit.Status == order.ORDER_STATUS_EXPIRED {
-				m.Status = StatusCanceled
-			}
-		}
-	}
-
-	return triggeredBullet
-}
 
 func (s *Sniper) simulateSignal(currentPos strategy.Position, sig brain.Signal) strategy.Position {
 	if sig.Action == brain.ACTION_HOLD {
@@ -328,10 +275,9 @@ func (s *Sniper) logStatus(obs Observation, input strategy.StrategyInput) {
 		return
 	}
 	var orderDetails []string
-	for _, m := range s.ManagedOrders {
-		curr := m.CurrentOrder()
+	for _, curr := range s.ActiveOrders {
 		if curr != nil {
-			orderDetails = append(orderDetails, fmt.Sprintf("%s:%s Status:%d", curr.ID, curr.Action, m.Status))
+			orderDetails = append(orderDetails, fmt.Sprintf("%s:%s Status:%d", curr.ID, curr.Action, curr.Status))
 		}
 	}
 	s.Logger.Info("STRATEGY_STATUS",
@@ -350,8 +296,7 @@ func (s *Sniper) calculatePosition(groundPositions []position.Position) strategy
 		totalQty += p.LeavesQty
 		totalCost += p.Price * p.LeavesQty
 	}
-	for _, m := range s.ManagedOrders {
-		curr := m.CurrentOrder()
+	for _, curr := range s.ActiveOrders {
 		if curr != nil && curr.Status == order.ORDER_STATUS_FILL_EXPECTED {
 			switch curr.Action {
 			case order.ACTION_BUY:
@@ -402,15 +347,9 @@ func (s *Sniper) matchPositionsToClose(obs Observation, qty float64) ([]order.Cl
 func (s *Sniper) FailSendingOrder(ord *order.Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, m := range s.ManagedOrders {
-		if m.Entry == ord {
-			s.ManagedOrders = append(s.ManagedOrders[:i], s.ManagedOrders[i+1:]...)
-			break
-		}
-		if m.Exit != nil && m.Exit == ord {
-			// 決済失敗時は削除せず、ステータスを戻して再試行を待つ
-			fmt.Printf("⚠️ [%s] 決済注文の送信に失敗しました。再試行を待機します (ID: %s)\n", s.Detail.Code, ord.ID)
-			m.Status = StatusEntryActive
+	for i, o := range s.ActiveOrders {
+		if o == ord {
+			s.ActiveOrders = append(s.ActiveOrders[:i], s.ActiveOrders[i+1:]...)
 			break
 		}
 	}
@@ -419,10 +358,9 @@ func (s *Sniper) FailSendingOrder(ord *order.Order) {
 func (s *Sniper) UpdateOrderID(ord *order.Order, newID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, m := range s.ManagedOrders {
-		curr := m.CurrentOrder()
-		if curr == ord || curr.ID == ord.ID {
-			curr.ID = newID
+	for _, o := range s.ActiveOrders {
+		if o == ord || o.ID == ord.ID {
+			o.ID = newID
 			break
 		}
 	}
@@ -431,10 +369,9 @@ func (s *Sniper) UpdateOrderID(ord *order.Order, newID string) {
 func (s *Sniper) RevertOrderStatus(ord *order.Order, status order.OrderStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, m := range s.ManagedOrders {
-		curr := m.CurrentOrder()
-		if curr == ord || curr.ID == ord.ID {
-			curr.Status = status
+	for _, o := range s.ActiveOrders {
+		if o == ord || o.ID == ord.ID {
+			o.Status = status
 			break
 		}
 	}

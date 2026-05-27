@@ -8,7 +8,6 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
-	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // SniperNest は特定の銘柄（Symbol）における「狙撃陣地」です。
@@ -54,13 +53,7 @@ func (n *SniperNest) Start(ctx context.Context) {
 				}
 			case ords := <-n.Channels.Order:
 				n.Spotter.Update(ords, time.Now())
-				for _, s := range n.Snipers {
-					obs := n.Spotter.PrepareObservation(s.ID, tick.Tick{})
-					bullet := s.HandleIFD(obs)
-					if bullet.HasOrder() || bullet.HasCancel() {
-						go n.fire(ctx, s, bullet)
-					}
-				}
+				// Note: HandleIFD logic is now handled by the gateway
 			}
 		}
 	}()
@@ -78,7 +71,7 @@ func (n *SniperNest) fire(ctx context.Context, s *sniper.Sniper, b sniper.Bullet
 
 	if b.HasOrder() {
 		n.Spotter.RecordBullet(s.ID, b)
-		updatedOrder, err := n.Gateway.SendOrder(ctx, order.SendOrderInput{Order: *b.Order, Request: *b.Request})
+		updatedOrder, err := n.Gateway.SendOrder(ctx, order.SendOrderInput{Order: b.Order, Request: *b.Request})
 		if err != nil {
 			fmt.Printf("発注失敗 (Symbol: %s): %v\n", n.SymbolCode, err)
 			s.FailSendingOrder(b.Order)

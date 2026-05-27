@@ -82,8 +82,8 @@ func (m *MarketGateway) DataPool() tick.DataPool {
 
 // SendOrder は market.MarketGateway (Orderer) の実装です。
 // 結果が出るまで内部的にブロックします（SniperNest等から非同期で呼ばれる想定）。
-func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (order.Order, error) {
-	resCh := m.dispatcher.Submit(input.Order.Symbol, &input.Order, &input.Request, "")
+func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
+	resCh := m.dispatcher.Submit(input.Order.Symbol, input.Order, &input.Request, "")
 	select {
 	case <-ctx.Done():
 		return input.Order, ctx.Err()
@@ -92,14 +92,14 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 			return input.Order, res.Error
 		}
 		if res.Order != nil {
-			return *res.Order, nil
+			return res.Order, nil
 		}
 		return input.Order, nil
 	}
 }
 
 // SendOrderRaw は実際にAPIを叩く低レベルメソッドです
-func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderInput) (order.Order, error) {
+func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
 	ord := input.Order
 	req := input.Request
 

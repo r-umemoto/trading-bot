@@ -94,12 +94,11 @@ func (g *SyncBacktestGateway) DataPool() tick.DataPool {
 	return g.dataPool
 }
 
-func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (order.Order, error) {
+func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
 	g.orderIdx++
 	orderID := fmt.Sprintf("bt_order_%d", g.orderIdx)
 
-	ord := new(order.Order)
-	*ord = input.Order
+	ord := input.Order
 	ord.ID = orderID
 	ord.Status = order.ORDER_STATUS_WAITING
 	ord.InternalState = order.STATE_ACTIVE
@@ -118,7 +117,7 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrd
 		g.cumulativeVolumes[orderID] = 0
 	}
 
-	return *ord, nil
+	return ord, nil
 }
 
 func (g *SyncBacktestGateway) CancelOrder(ctx context.Context, orderID string) error {
@@ -279,6 +278,23 @@ func (g *SyncBacktestGateway) executeAll(id string, price float64) {
 	}
 	ord.AddExecution(exec)
 	ord.Status = order.ORDER_STATUS_FILLED
+
+	// 🌟 IFD自動発火ロジック
+	if ord.IfDone != nil {
+		fmt.Printf("⚡ [Backtest] IFD発動: 親注文(%s)約定 -> 子注文(%s)を即時発射します\n", ord.ID, ord.IfDone.Action)
+		// 決済注文なので返済指定が必要な場合はここで補完するロジックが必要だが、
+		// 現状のSniper実装ではExit注文生成時に既にClosePositions等が設定されている前提。
+		reqType := order.ORDER_TYPE_MARKET
+		if ord.IfDone.OrderPrice > 0 {
+			reqType = order.ORDER_TYPE_LIMIT
+		}
+		_, _ = g.SendOrder(context.Background(), order.SendOrderInput{
+			Order: ord.IfDone,
+			Request: order.OrderRequest{
+				OrderType: reqType,
+			},
+		})
+	}
 }
 
 func (g *SyncBacktestGateway) getDepth(symbol string, action order.Action, price float64) float64 {

@@ -115,19 +115,7 @@ func RunBacktest() error {
 			for _, s := range snipers {
 				sp := spotters[s.Detail.Code]
 				sp.Update(report, tick.CurrentPriceTime)
-
-				obs := sp.PrepareObservation(s.ID, tick)
-				bullet := s.HandleIFD(obs)
-				if bullet.HasOrder() {
-					sp.RecordBullet(s.ID, bullet)
-					fmt.Printf("🚀 [%s] HandleIFD経由で注文を送信します: %s %.2f株\n", s.Detail.Code, bullet.Order.Action, bullet.Order.OrderQty)
-					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
-					if err != nil {
-						s.FailSendingOrder(bullet.Order)
-					} else {
-						*bullet.Order = updatedOrder
-					}
-				}
+				// IFD発火ロジックはgateway内部に移譲されたため、ここでのHandleIFD呼び出しは不要
 			}
 		}
 
@@ -147,11 +135,11 @@ func RunBacktest() error {
 
 				if bullet.HasOrder() {
 					sp.RecordBullet(s.ID, bullet)
-					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
+					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: bullet.Order, Request: *bullet.Request})
 					if err != nil {
 						s.FailSendingOrder(bullet.Order)
 					} else {
-						*bullet.Order = updatedOrder
+						bullet.Order = updatedOrder
 					}
 				}
 			}
@@ -175,17 +163,6 @@ func RunBacktest() error {
 					for _, s := range snipers {
 						sp := spotters[s.Detail.Code]
 						sp.Update(report, state.LatestTick.CurrentPriceTime)
-						obs := sp.PrepareObservation(s.ID, state.LatestTick)
-						bullet := s.HandleIFD(obs)
-						if bullet.HasOrder() {
-							sp.RecordBullet(s.ID, bullet)
-							updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: *bullet.Order, Request: *bullet.Request})
-							if err != nil {
-								s.FailSendingOrder(bullet.Order)
-							} else {
-								*bullet.Order = updatedOrder
-							}
-						}
 					}
 				}
 				<-tickCh

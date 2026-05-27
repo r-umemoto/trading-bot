@@ -71,11 +71,11 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 				order.ORDER_TYPE_MARKET,
 			)
 
-			updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: *ord, Request: req})
+			updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord, Request: req})
 			if err != nil {
 				return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.Symbol, err)
 			}
-			*ord = updatedOrder
+			ord = updatedOrder
 			cleaned = true
 		}
 	}
@@ -108,10 +108,13 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 
 	for _, s := range c.snipers {
 		s.ForceExit()
-		for _, m := range s.ManagedOrders {
+		for _, o := range s.ActiveOrders {
 			// エントリーと決済の両方の注文をチェックしてキャンセル
-			ordersToCancel := []*order.Order{m.Entry, m.Exit}
-			for _, o := range ordersToCancel {
+ 			ordersToCancel := []*order.Order{o}
+ 			if o.IfDone != nil {
+ 				ordersToCancel = append(ordersToCancel, o.IfDone)
+ 			}
+ 			for _, o := range ordersToCancel {
 				if o != nil && !o.IsCompleted() {
 					fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Detail.Code, o.ID)
 					err := c.marketGateway.CancelOrder(ctx, o.ID)
@@ -162,11 +165,11 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 						order.ORDER_TYPE_MARKET,
 					)
 
-					updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: *ord, Request: req})
+					updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord, Request: req})
 					if err != nil {
 						fmt.Printf("❌ [%s] 強送決済エラー: %v\n", pos.Symbol, err)
 					} else {
-						*ord = updatedOrder
+						ord = updatedOrder
 					}
 					// 🌟 連射を避けるために少し待機
 					time.Sleep(200 * time.Millisecond)
