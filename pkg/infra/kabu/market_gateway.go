@@ -161,12 +161,12 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 	case order.CASH_MARGIN_CASH:
 		switch ord.Action {
 		case order.ACTION_BUY:
-			// 指定なし
+			deliverType = 2
 		case order.ACTION_SELL:
 			deliverType = 0
 		}
 	case order.CASH_MARGIN_MARGIN_ENTRY:
-		deliverType = 2
+		deliverType = 0
 	case order.CASH_MARGIN_MARGIN_EXIT:
 		deliverType = 2
 	}
