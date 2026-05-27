@@ -354,7 +354,9 @@ func (s *Spotter) reducePositions(sniperID string, sellQty float64, sellPrice fl
 		slog.String("symbol", s.Detail.Code),
 		slog.Float64("pnl", totalTradePnL),
 		slog.Float64("hold_time_sec", holdTimeSec),
-		slog.String("exit_reason", closeReason), // 🌟 理由を記録
+		slog.String("exit_reason", closeReason),
+		slog.Time("entry_time", earliestEntryTime), // 🌟 追加
+		slog.Time("exit_time", sellTime),           // 🌟 追加
 	)
 }
 
