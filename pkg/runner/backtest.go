@@ -230,6 +230,18 @@ func (p *backtestPerformanceProvider) GetPerformance(sniperID string) sniper.Per
 	return sniper.Performance{}
 }
 
+func (p *backtestPerformanceProvider) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
+	for _, sp := range p.spotters {
+		// sniperIDが一致するSpotterを探して含み損益を計算
+		// バックテストでは銘柄ごとにSpotterが分かれている
+		unrealized := sp.GetUnrealizedPnL(sniperID, currentPrice)
+		if unrealized != 0 {
+			return unrealized
+		}
+	}
+	return 0
+}
+
 func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 	// 🌟 CSVファイル名から日付 (YYYYMMDD) を抽出。デフォルトは実行当日の日付
 	baseDate := time.Now()

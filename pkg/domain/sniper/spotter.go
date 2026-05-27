@@ -206,6 +206,17 @@ func (s *Spotter) GetPerformance(sniperID string) Performance {
 	return s.sniperPerformance[sniperID]
 }
 
+func (s *Spotter) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var unrealized float64
+	for _, p := range s.sniperPositions[sniperID] {
+		unrealized += (currentPrice - p.Price) * p.LeavesQty
+	}
+	return unrealized
+}
+
 // PrepareObservation は最新の Tick をもとに、指定した Sniper に渡すためのスナップショットを作成します。
 func (s *Spotter) PrepareObservation(sniperID string, t tick.Tick) Observation {
 	s.mu.Lock()

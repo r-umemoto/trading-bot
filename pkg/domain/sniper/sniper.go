@@ -22,6 +22,7 @@ type Strategy interface {
 
 type PerformanceProvider interface {
 	GetPerformance(sniperID string) Performance
+	GetUnrealizedPnL(sniperID string, currentPrice float64) float64
 }
 
 type LifecycleState int
@@ -58,7 +59,6 @@ type Sniper struct {
 	ID                string
 	Detail            symbol.Symbol
 	Strategy          Strategy
-	LatestObservation Observation
 	State             strategy.StrategyState
 	ExecutionPolicy   strategy.ExecutionPolicy
 	ManagedOrders     []*ManagedOrder
@@ -97,8 +97,6 @@ func NewSniper(id string, detail symbol.Symbol, strategy Strategy, policy strate
 func (s *Sniper) Tick(obs Observation) Bullet {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	s.LatestObservation = obs
 
 	now := obs.Tick.CurrentPriceTime
 	if now.IsZero() {
@@ -245,8 +243,6 @@ func (s *Sniper) buildManagedOrder(obs Observation, signal brain.Signal) *Manage
 func (s *Sniper) HandleIFD(obs Observation) Bullet {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	s.LatestObservation = obs
 
 	now := obs.Tick.CurrentPriceTime
 	if now.IsZero() {
@@ -469,10 +465,3 @@ func (s *Sniper) ForceExit() {
 	fmt.Printf("🚨 [%s] 強制停止モードON。\n", s.Detail.Code)
 }
 
-func (s *Sniper) CalcUnrealizedPnL(obs Observation) float64 {
-	var unrealized float64
-	for _, p := range obs.Positions {
-		unrealized += (obs.Tick.Price - p.Price) * p.LeavesQty
-	}
-	return unrealized
-}

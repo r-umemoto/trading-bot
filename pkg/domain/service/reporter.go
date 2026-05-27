@@ -62,7 +62,7 @@ func (r *PerformanceReporter) PrintPerformanceReport(enableCSV bool) {
 		var unrealized float64
 		marketState := r.dataPool.GetState(s.Detail.Code)
 		if !marketState.LatestTick.CurrentPriceTime.IsZero() {
-			unrealized = s.CalcUnrealizedPnL(s.LatestObservation)
+			unrealized = r.provider.GetUnrealizedPnL(s.ID, marketState.LatestTick.Price)
 		}
 
 		// 成績を集計

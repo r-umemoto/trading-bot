@@ -68,3 +68,14 @@ func (u *TradeUseCase) GetPerformance(sniperID string) sniper.Performance {
 	}
 	return sniper.Performance{}
 }
+
+func (u *TradeUseCase) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
+	for _, nest := range u.nests {
+		for _, s := range nest.Snipers {
+			if s.ID == sniperID {
+				return nest.Spotter.GetUnrealizedPnL(sniperID, currentPrice)
+			}
+		}
+	}
+	return 0
+}
