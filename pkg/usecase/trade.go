@@ -4,7 +4,6 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
@@ -48,16 +47,16 @@ func (u *TradeUseCase) runNestEventLoop(ctx context.Context, nest *sniper.Sniper
 			// ドメイン集約にビジネスロジックの評価を委譲 (純粋関数)
 			actions := nest.HandleTick(t)
 			for _, act := range actions {
-				go u.fire(ctx, nest.SymbolCode, act.Sniper, act.Bullet)
+				go u.fire(ctx, nest, act.SniperID, act.Bullet)
 			}
 		case ords := <-chs.Order:
-			nest.Spotter.Update(ords, time.Now())
+			nest.UpdateOrders(ords)
 		}
 	}
 }
 
 // fire は実際の発注・キャンセル処理を API ゲートウェイに対して非同期に実行します
-func (u *TradeUseCase) fire(ctx context.Context, symbol string, s *sniper.Sniper, b sniper.Bullet) {
+func (u *TradeUseCase) fire(ctx context.Context, nest *sniper.SniperNest, sniperID string, b sniper.Bullet) {
 	if b.HasCancel() {
 		err := u.gateway.CancelOrder(ctx, b.CancelOrderID)
 		if err != nil {
@@ -68,20 +67,18 @@ func (u *TradeUseCase) fire(ctx context.Context, symbol string, s *sniper.Sniper
 	if b.HasOrder() {
 		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: b.Order, Request: *b.Request})
 		if err != nil {
-			fmt.Printf("発注失敗 (Symbol: %s): %v\n", symbol, err)
-			s.FailSendingOrder(b.Order)
+			fmt.Printf("発注失敗 (Symbol: %s): %v\n", nest.SymbolCode, err)
+			nest.FailSendingOrder(sniperID, b.Order)
 			return
 		}
-		s.UpdateOrderID(b.Order, updatedOrder.ID)
+		nest.UpdateOrderID(sniperID, b.Order, updatedOrder.ID)
 	}
 }
 
 func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
-	var targets []service.ReportableTarget
+	var targets []sniper.ReportableTarget
 	for _, n := range u.nests {
-		for _, s := range n.Snipers {
-			targets = append(targets, s)
-		}
+		targets = append(targets, n.GetReportableTargets()...)
 	}
 	report := service.GeneratePerformanceReport(u, targets, u.gateway.DataPool())
 	presenter := NewReportPresenter()
@@ -90,10 +87,8 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 
 func (u *TradeUseCase) GetPerformance(sniperID string) sniper.Performance {
 	for _, nest := range u.nests {
-		for _, s := range nest.Snipers {
-			if s.ID == sniperID {
-				return nest.Spotter.GetPerformance(sniperID)
-			}
+		if nest.HasSniper(sniperID) {
+			return nest.GetPerformance(sniperID)
 		}
 	}
 	return sniper.Performance{}
@@ -101,10 +96,8 @@ func (u *TradeUseCase) GetPerformance(sniperID string) sniper.Performance {
 
 func (u *TradeUseCase) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
 	for _, nest := range u.nests {
-		for _, s := range nest.Snipers {
-			if s.ID == sniperID {
-				return nest.Spotter.GetUnrealizedPnL(sniperID, currentPrice)
-			}
+		if nest.HasSniper(sniperID) {
+			return nest.GetUnrealizedPnL(sniperID, currentPrice)
 		}
 	}
 	return 0

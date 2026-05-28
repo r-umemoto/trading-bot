@@ -16,12 +16,6 @@ type AggregatedPerformance struct {
 	UnrealizedPnL float64
 }
 
-type ReportableTarget interface {
-	GetID() string
-	GetSymbolCode() string
-	GetStrategyName() string
-}
-
 // PerformanceReport は取引成績の純粋なドメイン集集計結果（エンティティ / 値オブジェクト）です
 type PerformanceReport struct {
 	Total    *AggregatedPerformance
@@ -31,7 +25,7 @@ type PerformanceReport struct {
 }
 
 // GeneratePerformanceReport はターゲット群から成績を集計し、ドメインモデルを生成します (純粋関数)
-func GeneratePerformanceReport(provider sniper.PerformanceProvider, targets []ReportableTarget, dataPool tick.DataPool) *PerformanceReport {
+func GeneratePerformanceReport(provider sniper.PerformanceProvider, targets []sniper.ReportableTarget, dataPool tick.DataPool) *PerformanceReport {
 	perfMap := make(map[string]*AggregatedPerformance)
 	symPerfMap := make(map[string]*AggregatedPerformance)
 	stratPerfMap := make(map[string]*AggregatedPerformance)

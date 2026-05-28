@@ -192,7 +192,7 @@ func RunBacktest() error {
 
 	// 結果の出力
 	provider := &backtestPerformanceProvider{spotters: spotters}
-	reportTargets := make([]service.ReportableTarget, len(snipers))
+	reportTargets := make([]sniper.ReportableTarget, len(snipers))
 	for i, s := range snipers {
 		reportTargets[i] = s
 	}

@@ -40,14 +40,14 @@ func (s *SystemUseCase) Initialize(ctx context.Context) error {
 	seen := make(map[string]bool)
 
 	for _, nest := range s.nests {
-		for _, sn := range nest.Snipers {
-			key := fmt.Sprintf("%s:%d", sn.Detail.Code, sn.Exchange)
+		for _, exchange := range nest.GetExchanges() {
+			key := fmt.Sprintf("%s:%d", nest.SymbolCode, exchange)
 			if seen[key] {
 				continue
 			}
 			reqs = append(reqs, market.ResisterSymbolRequest{
-				Symbol:   sn.Detail.Code,
-				Exchange: sn.Exchange,
+				Symbol:   nest.SymbolCode,
+				Exchange: exchange,
 			})
 			seen[key] = true
 		}
