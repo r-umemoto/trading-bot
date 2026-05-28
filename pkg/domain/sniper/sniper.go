@@ -404,3 +404,14 @@ func (s *Sniper) ForceExit() {
 	fmt.Printf("🚨 [%s] 強制停止モードON。\n", s.Detail.Code)
 }
 
+func (s *Sniper) GetSymbolCode() string {
+	return s.Detail.Code
+}
+
+func (s *Sniper) GetActiveOrders() []*order.Order {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ActiveOrders
+}
+
+

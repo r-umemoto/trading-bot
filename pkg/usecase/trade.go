@@ -11,16 +11,19 @@ import (
 
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
-	snipers    []*sniper.Sniper
 	nests      []*SniperNest
 	gateway    market.MarketGateway
 	reporter   *service.PerformanceReporter
 }
 
-func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway) *TradeUseCase {
+func NewTradeUseCase(nests []*SniperNest, gateway market.MarketGateway) *TradeUseCase {
 	u := &TradeUseCase{
-		snipers: snipers,
+		nests:   nests,
 		gateway: gateway,
+	}
+	var snipers []*sniper.Sniper
+	for _, n := range nests {
+		snipers = append(snipers, n.Snipers...)
 	}
 	u.reporter = service.NewPerformanceReporter(u, snipers, gateway.DataPool())
 	return u
@@ -28,29 +31,14 @@ func NewTradeUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway) *Tr
 
 // Start は市場データ受信を開始し、各銘柄ごとの SniperNest を起動します
 func (u *TradeUseCase) Start(ctx context.Context, chs *market.MarketChannels) {
-	u.nests = make([]*SniperNest, 0, len(chs.Ticks))
-
-	for symbol, tickCh := range chs.Ticks {
+	for _, nest := range u.nests {
+		tickCh := chs.Ticks[nest.SymbolCode]
+		orderCh := chs.Orders[nest.SymbolCode]
 		symChs := market.SymbolChannels{
 			Tick:  tickCh,
-			Order: chs.Orders[symbol],
+			Order: orderCh,
 		}
-
-		var symbolSnipers []*sniper.Sniper
-		for _, s := range u.snipers {
-			if s.Detail.Code == symbol {
-				symbolSnipers = append(symbolSnipers, s)
-			}
-		}
-
-		var spotter *sniper.Spotter
-		if len(symbolSnipers) > 0 {
-			spotter = sniper.NewSpotter(symbolSnipers[0].Detail, symbolSnipers[0].Logger)
-		}
-
-		nest := NewSniperNest(symbol, spotter, symbolSnipers, symChs, u.gateway)
-		nest.Start(ctx)
-		u.nests = append(u.nests, nest)
+		nest.Start(ctx, symChs)
 	}
 }
 
@@ -79,3 +67,4 @@ func (u *TradeUseCase) GetUnrealizedPnL(sniperID string, currentPrice float64) f
 	}
 	return 0
 }
+

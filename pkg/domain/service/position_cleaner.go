@@ -7,18 +7,23 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
-	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 )
+
+type CleanableTarget interface {
+	ForceExit()
+	GetSymbolCode() string
+	GetActiveOrders() []*order.Order
+}
 
 // PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するサービスです。
 type PositionCleaner struct {
-	snipers       []*sniper.Sniper
+	targets       []CleanableTarget
 	marketGateway market.MarketGateway
 }
 
-func NewPositionCleaner(snipers []*sniper.Sniper, marketGateway market.MarketGateway) *PositionCleaner {
+func NewPositionCleaner(targets []CleanableTarget, marketGateway market.MarketGateway) *PositionCleaner {
 	return &PositionCleaner{
-		snipers:       snipers,
+		targets:       targets,
 		marketGateway: marketGateway,
 	}
 }
@@ -106,20 +111,22 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 
 	fmt.Println("\n🚨 全スナイパーに緊急撤退命令を出します...")
 
-	for _, s := range c.snipers {
+	for _, s := range c.targets {
 		s.ForceExit()
-		for _, o := range s.ActiveOrders {
+		activeOrders := s.GetActiveOrders()
+		symbolCode := s.GetSymbolCode()
+		for _, o := range activeOrders {
 			// エントリーと決済の両方の注文をチェックしてキャンセル
- 			ordersToCancel := []*order.Order{o}
- 			if o.IfDone != nil {
- 				ordersToCancel = append(ordersToCancel, o.IfDone)
- 			}
- 			for _, o := range ordersToCancel {
+			ordersToCancel := []*order.Order{o}
+			if o.IfDone != nil {
+				ordersToCancel = append(ordersToCancel, o.IfDone)
+			}
+			for _, o := range ordersToCancel {
 				if o != nil && !o.IsCompleted() {
-					fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", s.Detail.Code, o.ID)
+					fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", symbolCode, o.ID)
 					err := c.marketGateway.CancelOrder(ctx, o.ID)
 					if err != nil {
-						fmt.Printf("❌ [%s] キャンセルエラー: %v\n", s.Detail.Code, err)
+						fmt.Printf("❌ [%s] キャンセルエラー: %v\n", symbolCode, err)
 					} else {
 						o.Status = order.ORDER_STATUS_CANCELED
 					}

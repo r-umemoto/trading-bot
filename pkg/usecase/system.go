@@ -6,20 +6,23 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
-	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 )
 
 // SystemUseCase はシステムの起動時・終了時のライフサイクル処理を行うユースケースです
 type SystemUseCase struct {
-	snipers []*sniper.Sniper
+	nests   []*SniperNest
 	cleaner *service.PositionCleaner
 	gateway market.MarketGateway
 }
 
-func NewSystemUseCase(snipers []*sniper.Sniper, gateway market.MarketGateway) *SystemUseCase {
+func NewSystemUseCase(nests []*SniperNest, gateway market.MarketGateway) *SystemUseCase {
+	targets := make([]service.CleanableTarget, len(nests))
+	for i, n := range nests {
+		targets[i] = n
+	}
 	return &SystemUseCase{
-		snipers: snipers,
-		cleaner: service.NewPositionCleaner(snipers, gateway),
+		nests:   nests,
+		cleaner: service.NewPositionCleaner(targets, gateway),
 		gateway: gateway,
 	}
 }
@@ -36,16 +39,18 @@ func (s *SystemUseCase) Initialize(ctx context.Context) error {
 	var reqs []market.ResisterSymbolRequest
 	seen := make(map[string]bool)
 
-	for _, sn := range s.snipers {
-		key := fmt.Sprintf("%s:%d", sn.Detail.Code, sn.Exchange)
-		if seen[key] {
-			continue
+	for _, nest := range s.nests {
+		for _, sn := range nest.Snipers {
+			key := fmt.Sprintf("%s:%d", sn.Detail.Code, sn.Exchange)
+			if seen[key] {
+				continue
+			}
+			reqs = append(reqs, market.ResisterSymbolRequest{
+				Symbol:   sn.Detail.Code,
+				Exchange: sn.Exchange,
+			})
+			seen[key] = true
 		}
-		reqs = append(reqs, market.ResisterSymbolRequest{
-			Symbol:   sn.Detail.Code,
-			Exchange: sn.Exchange,
-		})
-		seen[key] = true
 	}
 
 	if err := s.gateway.RegisterSymbols(ctx, reqs); err != nil {
@@ -75,5 +80,6 @@ func (s *SystemUseCase) Shutdown(ctx context.Context) error {
 
 	return nil
 }
+
 
 

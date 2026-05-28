@@ -16,7 +16,6 @@ type SniperNest struct {
 	SymbolCode string
 	Spotter    *sniper.Spotter
 	Snipers    []*sniper.Sniper
-	Channels   market.SymbolChannels
 	Gateway    market.MarketGateway
 }
 
@@ -24,26 +23,24 @@ func NewSniperNest(
 	code string,
 	spotter *sniper.Spotter,
 	snipers []*sniper.Sniper,
-	chs market.SymbolChannels,
 	gw market.MarketGateway,
 ) *SniperNest {
 	return &SniperNest{
 		SymbolCode: code,
 		Spotter:    spotter,
 		Snipers:    snipers,
-		Channels:   chs,
 		Gateway:    gw,
 	}
 }
 
 // Start は市場イベント受信ループを起動します。
-func (n *SniperNest) Start(ctx context.Context) {
+func (n *SniperNest) Start(ctx context.Context, chs market.SymbolChannels) {
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case t := <-n.Channels.Tick:
+			case t := <-chs.Tick:
 				for _, s := range n.Snipers {
 					obs := n.Spotter.PrepareObservation(s.ID, t)
 					bullet := s.Tick(obs)
@@ -51,7 +48,7 @@ func (n *SniperNest) Start(ctx context.Context) {
 						go n.fire(ctx, s, bullet)
 					}
 				}
-			case ords := <-n.Channels.Order:
+			case ords := <-chs.Order:
 				n.Spotter.Update(ords, time.Now())
 				// Note: HandleIFD logic is now handled by the gateway
 			}
@@ -80,4 +77,25 @@ func (n *SniperNest) fire(ctx context.Context, s *sniper.Sniper, b sniper.Bullet
 		// 成功時: APIが発行した本物のOrderIDに更新
 		s.UpdateOrderID(b.Order, updatedOrder.ID)
 	}
+}
+
+// ForceExit は配下の全スナイパーを強制終了させます
+func (n *SniperNest) ForceExit() {
+	for _, s := range n.Snipers {
+		s.ForceExit()
+	}
+}
+
+// GetSymbolCode はこの陣地の対象銘柄コードを返します
+func (n *SniperNest) GetSymbolCode() string {
+	return n.SymbolCode
+}
+
+// GetActiveOrders は配下の全スナイパーのアクティブな注文をすべて集約して返します
+func (n *SniperNest) GetActiveOrders() []*order.Order {
+	var allOrders []*order.Order
+	for _, s := range n.Snipers {
+		allOrders = append(allOrders, s.GetActiveOrders()...)
+	}
+	return allOrders
 }

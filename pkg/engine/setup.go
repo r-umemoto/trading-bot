@@ -42,8 +42,24 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
 	}
 
-	tradeUC := usecase.NewTradeUseCase(snipers, gateway)
-	systemUC := usecase.NewSystemUseCase(snipers, gateway)
+	// 4. 狙撃陣地（SniperNest）の構築
+	var nests []*usecase.SniperNest
+	snipersBySymbol := make(map[string][]*sniper.Sniper)
+	for _, s := range snipers {
+		snipersBySymbol[s.Detail.Code] = append(snipersBySymbol[s.Detail.Code], s)
+	}
+
+	for symbol, symSnipers := range snipersBySymbol {
+		var spotter *sniper.Spotter
+		if len(symSnipers) > 0 {
+			spotter = sniper.NewSpotter(symSnipers[0].Detail, symSnipers[0].Logger)
+		}
+		nest := usecase.NewSniperNest(symbol, spotter, symSnipers, gateway)
+		nests = append(nests, nest)
+	}
+
+	tradeUC := usecase.NewTradeUseCase(nests, gateway)
+	systemUC := usecase.NewSystemUseCase(nests, gateway)
 	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
 	// 5. エンジンの完成
