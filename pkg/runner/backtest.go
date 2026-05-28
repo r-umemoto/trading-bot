@@ -91,11 +91,11 @@ func RunBacktest() error {
 	}
 
 	// PositionCleaner の起動 (Gatewayに依存するため)
-	cleanableTargets := make([]service.CleanableTarget, len(snipers))
+	cleanableTargets := make([]usecase.CleanableTarget, len(snipers))
 	for i, s := range snipers {
 		cleanableTargets[i] = s
 	}
-	_ = service.NewPositionCleaner(cleanableTargets, gateway)
+	_ = usecase.NewPositionCleaner(cleanableTargets, gateway)
 
 	// 5. Feederの準備
 	csvTickChan := make(chan tick.Tick, 1000)

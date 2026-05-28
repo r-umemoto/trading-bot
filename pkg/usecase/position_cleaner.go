@@ -1,4 +1,4 @@
-package service
+package usecase
 
 import (
 	"context"
@@ -15,7 +15,7 @@ type CleanableTarget interface {
 	GetActiveOrders() []*order.Order
 }
 
-// PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するサービスです。
+// PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するアプリケーションサービスです。
 type PositionCleaner struct {
 	targets       []CleanableTarget
 	marketGateway market.MarketGateway
