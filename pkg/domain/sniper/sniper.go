@@ -414,4 +414,13 @@ func (s *Sniper) GetActiveOrders() []*order.Order {
 	return s.ActiveOrders
 }
 
+func (s *Sniper) GetID() string {
+	return s.ID
+}
+
+func (s *Sniper) GetStrategyName() string {
+	return s.Strategy.Name()
+}
+
+
 

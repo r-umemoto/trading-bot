@@ -191,7 +191,11 @@ func RunBacktest() error {
 
 	// 結果の出力
 	provider := &backtestPerformanceProvider{spotters: spotters}
-	reporter := service.NewPerformanceReporter(provider, snipers, gateway.DataPool())
+	reportTargets := make([]service.ReportableTarget, len(snipers))
+	for i, s := range snipers {
+		reportTargets[i] = s
+	}
+	reporter := service.NewPerformanceReporter(provider, reportTargets, gateway.DataPool())
 	reporter.PrintPerformanceReport(false)
 
 	return nil

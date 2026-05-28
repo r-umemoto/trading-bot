@@ -22,17 +22,23 @@ type AggregatedPerformance struct {
 	UnrealizedPnL float64
 }
 
+type ReportableTarget interface {
+	GetID() string
+	GetSymbolCode() string
+	GetStrategyName() string
+}
+
 // PerformanceReporter は全スナイパーの成績を集計し、出力およびCSV保存を行うレポート作成サービスです
 type PerformanceReporter struct {
 	provider sniper.PerformanceProvider
-	snipers  []*sniper.Sniper
+	targets  []ReportableTarget
 	dataPool tick.DataPool
 }
 
-func NewPerformanceReporter(provider sniper.PerformanceProvider, snipers []*sniper.Sniper, dataPool tick.DataPool) *PerformanceReporter {
+func NewPerformanceReporter(provider sniper.PerformanceProvider, targets []ReportableTarget, dataPool tick.DataPool) *PerformanceReporter {
 	return &PerformanceReporter{
 		provider: provider,
-		snipers:  snipers,
+		targets:  targets,
 		dataPool: dataPool,
 	}
 }
@@ -44,15 +50,17 @@ func (r *PerformanceReporter) PrintPerformanceReport(enableCSV bool) {
 	stratPerfMap := make(map[string]*AggregatedPerformance)
 	totalPerf := &AggregatedPerformance{Name: "Total"}
 
-	for _, s := range r.snipers {
-		stratName := s.Strategy.Name()
-		key := s.Detail.Code + "|" + stratName
+	for _, s := range r.targets {
+		stratName := s.GetStrategyName()
+		symbolCode := s.GetSymbolCode()
+		targetID := s.GetID()
+		key := symbolCode + "|" + stratName
 
 		if perfMap[key] == nil {
 			perfMap[key] = &AggregatedPerformance{Name: strings.Replace(key, "|", " x ", 1)}
 		}
-		if symPerfMap[s.Detail.Code] == nil {
-			symPerfMap[s.Detail.Code] = &AggregatedPerformance{Name: s.Detail.Code}
+		if symPerfMap[symbolCode] == nil {
+			symPerfMap[symbolCode] = &AggregatedPerformance{Name: symbolCode}
 		}
 		if stratPerfMap[stratName] == nil {
 			stratPerfMap[stratName] = &AggregatedPerformance{Name: stratName}
@@ -60,13 +68,13 @@ func (r *PerformanceReporter) PrintPerformanceReport(enableCSV bool) {
 
 		// 含み損益の計算
 		var unrealized float64
-		marketState := r.dataPool.GetState(s.Detail.Code)
+		marketState := r.dataPool.GetState(symbolCode)
 		if !marketState.LatestTick.CurrentPriceTime.IsZero() {
-			unrealized = r.provider.GetUnrealizedPnL(s.ID, marketState.LatestTick.Price)
+			unrealized = r.provider.GetUnrealizedPnL(targetID, marketState.LatestTick.Price)
 		}
 
 		// 成績を集計
-		perf := r.provider.GetPerformance(s.ID)
+		perf := r.provider.GetPerformance(targetID)
 		updatePerf := func(p *AggregatedPerformance) {
 			p.Trades += perf.Trades
 			p.Wins += perf.Wins
@@ -76,7 +84,7 @@ func (r *PerformanceReporter) PrintPerformanceReport(enableCSV bool) {
 		}
 
 		updatePerf(perfMap[key])
-		updatePerf(symPerfMap[s.Detail.Code])
+		updatePerf(symPerfMap[symbolCode])
 		updatePerf(stratPerfMap[stratName])
 		updatePerf(totalPerf)
 	}

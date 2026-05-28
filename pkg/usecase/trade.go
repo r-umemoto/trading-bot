@@ -21,11 +21,13 @@ func NewTradeUseCase(nests []*SniperNest, gateway market.MarketGateway) *TradeUs
 		nests:   nests,
 		gateway: gateway,
 	}
-	var snipers []*sniper.Sniper
+	var targets []service.ReportableTarget
 	for _, n := range nests {
-		snipers = append(snipers, n.Snipers...)
+		for _, s := range n.Snipers {
+			targets = append(targets, s)
+		}
 	}
-	u.reporter = service.NewPerformanceReporter(u, snipers, gateway.DataPool())
+	u.reporter = service.NewPerformanceReporter(u, targets, gateway.DataPool())
 	return u
 }
 
