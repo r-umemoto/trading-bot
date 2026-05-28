@@ -6,16 +6,17 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 )
 
 // SystemUseCase はシステムの起動時・終了時のライフサイクル処理を行うユースケースです
 type SystemUseCase struct {
-	nests   []*SniperNest
+	nests   []*sniper.SniperNest
 	cleaner *service.PositionCleaner
 	gateway market.MarketGateway
 }
 
-func NewSystemUseCase(nests []*SniperNest, gateway market.MarketGateway) *SystemUseCase {
+func NewSystemUseCase(nests []*sniper.SniperNest, gateway market.MarketGateway) *SystemUseCase {
 	targets := make([]service.CleanableTarget, len(nests))
 	for i, n := range nests {
 		targets[i] = n

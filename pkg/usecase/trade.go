@@ -3,19 +3,22 @@ package usecase
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 )
 
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
-	nests      []*SniperNest
-	gateway    market.MarketGateway
+	nests   []*sniper.SniperNest
+	gateway market.MarketGateway
 }
 
-func NewTradeUseCase(nests []*SniperNest, gateway market.MarketGateway) *TradeUseCase {
+func NewTradeUseCase(nests []*sniper.SniperNest, gateway market.MarketGateway) *TradeUseCase {
 	return &TradeUseCase{
 		nests:   nests,
 		gateway: gateway,
@@ -31,7 +34,45 @@ func (u *TradeUseCase) Start(ctx context.Context, chs *market.MarketChannels) {
 			Tick:  tickCh,
 			Order: orderCh,
 		}
-		nest.Start(ctx, symChs)
+		go u.runNestEventLoop(ctx, nest, symChs)
+	}
+}
+
+// runNestEventLoop は特定の銘柄（SniperNest）のイベントループを非同期に監視します
+func (u *TradeUseCase) runNestEventLoop(ctx context.Context, nest *sniper.SniperNest, chs market.SymbolChannels) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t := <-chs.Tick:
+			// ドメイン集約にビジネスロジックの評価を委譲 (純粋関数)
+			actions := nest.HandleTick(t)
+			for _, act := range actions {
+				go u.fire(ctx, nest.SymbolCode, act.Sniper, act.Bullet)
+			}
+		case ords := <-chs.Order:
+			nest.Spotter.Update(ords, time.Now())
+		}
+	}
+}
+
+// fire は実際の発注・キャンセル処理を API ゲートウェイに対して非同期に実行します
+func (u *TradeUseCase) fire(ctx context.Context, symbol string, s *sniper.Sniper, b sniper.Bullet) {
+	if b.HasCancel() {
+		err := u.gateway.CancelOrder(ctx, b.CancelOrderID)
+		if err != nil {
+			fmt.Printf("キャンセル失敗 (ID: %s): %v\n", b.CancelOrderID, err)
+		}
+	}
+
+	if b.HasOrder() {
+		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: b.Order, Request: *b.Request})
+		if err != nil {
+			fmt.Printf("発注失敗 (Symbol: %s): %v\n", symbol, err)
+			s.FailSendingOrder(b.Order)
+			return
+		}
+		s.UpdateOrderID(b.Order, updatedOrder.ID)
 	}
 }
 
@@ -68,4 +109,3 @@ func (u *TradeUseCase) GetUnrealizedPnL(sniperID string, currentPrice float64) f
 	}
 	return 0
 }
-

@@ -43,7 +43,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	}
 
 	// 4. 狙撃陣地（SniperNest）の構築
-	var nests []*usecase.SniperNest
+	var nests []*sniper.SniperNest
 	snipersBySymbol := make(map[string][]*sniper.Sniper)
 	for _, s := range snipers {
 		snipersBySymbol[s.Detail.Code] = append(snipersBySymbol[s.Detail.Code], s)
@@ -54,7 +54,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 		if len(symSnipers) > 0 {
 			spotter = sniper.NewSpotter(symSnipers[0].Detail, symSnipers[0].Logger)
 		}
-		nest := usecase.NewSniperNest(symbol, spotter, symSnipers, gateway)
+		nest := sniper.NewSniperNest(symbol, spotter, symSnipers)
 		nests = append(nests, nest)
 	}
 
