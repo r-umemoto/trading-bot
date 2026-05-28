@@ -17,7 +17,6 @@ import (
 type Observation struct {
 	Tick        tick.Tick
 	Positions   []position.Position
-	Orders      []*order.Order
 	Performance Performance
 }
 
@@ -34,7 +33,6 @@ func (o Observation) HoldQty() float64 {
 type Spotter struct {
 	Detail              symbol.Symbol
 	sniperPositions     map[string][]position.Position
-	sniperOrders        map[string][]*order.Order
 	sniperPerformance   map[string]Performance
 	processedExecutions map[string]bool
 	Logger              *slog.Logger
@@ -48,31 +46,19 @@ func NewSpotter(detail symbol.Symbol, logger *slog.Logger) *Spotter {
 	return &Spotter{
 		Detail:              detail,
 		sniperPositions:     make(map[string][]position.Position),
-		sniperOrders:        make(map[string][]*order.Order),
 		sniperPerformance:   make(map[string]Performance),
 		processedExecutions: make(map[string]bool),
 		Logger:              logger,
 	}
 }
 
-// RecordBullet は Sniper が発行した判断（Bullet）を記録し、注文とスナイパーを紐付けます。
-func (s *Spotter) RecordBullet(sniperID string, bullet Bullet) {
-	if bullet.Order == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.sniperOrders[sniperID] = append(s.sniperOrders[sniperID], bullet.Order)
-}
-
 // Update は API からの注文レポートを受け取り、内部の「事実」を更新します。
-func (s *Spotter) Update(report order.Orders, now time.Time) {
+func (s *Spotter) Update(sniperActiveOrders map[string][]*order.Order, report order.Orders, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// 1. 各スナイパーごとに注文状態の整理（Reconciliation）
-	for sniperID, orders := range s.sniperOrders {
+	for sniperID, orders := range sniperActiveOrders {
 		var reconciledOrders []*order.Order
 		// 未完了注文の保持（APIへの反映待ち含む）
 		for _, o := range orders {
@@ -145,48 +131,7 @@ func (s *Spotter) Update(report order.Orders, now time.Time) {
 					})
 				}
 			}
-
-			// 完了した注文も、レポートにある限りは保持する
-			exists := false
-			for _, ro := range reconciledOrders {
-				if ro.ID == matchedInternal.ID {
-					exists = true
-					break
-				}
-			}
-			if !exists {
-				reconciledOrders = append(reconciledOrders, matchedInternal)
-			}
 		}
-
-		// 完了済み注文の整理（ゾンビ管理）
-		var activeOrders []*order.Order
-		var completedButNotInReport []*order.Order
-
-		for _, o := range reconciledOrders {
-			inReport := false
-			for _, ext := range report.Orders {
-				if ext.ID == o.ID {
-					inReport = true
-					break
-				}
-			}
-
-			if !o.IsCompleted() || inReport {
-				activeOrders = append(activeOrders, o)
-			} else {
-				completedButNotInReport = append(completedButNotInReport, o)
-			}
-		}
-
-		sort.Slice(completedButNotInReport, func(i, j int) bool {
-			return completedButNotInReport[i].CreatedAt.After(completedButNotInReport[j].CreatedAt)
-		})
-		if len(completedButNotInReport) > 10 {
-			completedButNotInReport = completedButNotInReport[:10]
-		}
-
-		s.sniperOrders[sniperID] = append(activeOrders, completedButNotInReport...)
 
 		// 2. 約定の反映（時系列順）
 		sort.Slice(pendingExecs, func(i, j int) bool {
@@ -226,14 +171,9 @@ func (s *Spotter) PrepareObservation(sniperID string, t tick.Tick) Observation {
 	posCopy := make([]position.Position, len(pos))
 	copy(posCopy, pos)
 
-	ords := s.sniperOrders[sniperID]
-	orderCopy := make([]*order.Order, len(ords))
-	copy(orderCopy, ords)
-
 	return Observation{
 		Tick:        t,
 		Positions:   posCopy,
-		Orders:      orderCopy,
 		Performance: s.sniperPerformance[sniperID],
 	}
 }
@@ -372,8 +312,4 @@ func (s *Spotter) updatePerformance(sniperID string, pnl float64) {
 	s.sniperPerformance[sniperID] = perf
 }
 
-// AddOrder は後方互換性のために残していますが、基本的には RecordBullet を使用してください。
-func (s *Spotter) AddOrder(o *order.Order) {
-	// SniperIDが不明なため、"default" グループに記録
-	s.RecordBullet("default", Bullet{Order: o})
-}
+

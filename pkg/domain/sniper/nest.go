@@ -37,16 +37,14 @@ func NewSniperNest(code string, spotter *Spotter, snipers []*Sniper) *SniperNest
 }
 
 // HandleTick は時価（Tick）の更新を受け取り、配下の各スナイパーに Observation を配分して意思決定を促します。
-// アクション（発注・キャンセル）が必要な場合は FireAction を生成し、Spotter に注文弾（Bullet）を記録した上で返します。
+// アクション（発注・キャンセル）が必要な場合は FireAction を生成して返します。
 func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 	var actions []FireAction
 	for _, s := range n.snipers {
 		obs := n.spotter.PrepareObservation(s.ID, t)
 		bullet := s.Tick(obs)
+
 		if bullet.HasOrder() || bullet.HasCancel() {
-			if bullet.HasOrder() {
-				n.spotter.RecordBullet(s.ID, bullet)
-			}
 			actions = append(actions, FireAction{
 				SniperID: s.ID,
 				Bullet:   bullet,
@@ -79,7 +77,11 @@ func (n *SniperNest) GetActiveOrders() []*order.Order {
 
 // UpdateOrders は注文・約定レポートをもとに、内部の Spotter を更新します。
 func (n *SniperNest) UpdateOrders(report order.Orders) {
-	n.spotter.Update(report, time.Now())
+	activeOrdersMap := make(map[string][]*order.Order)
+	for _, s := range n.snipers {
+		activeOrdersMap[s.ID] = s.GetActiveOrders()
+	}
+	n.spotter.Update(activeOrdersMap, report, time.Now())
 }
 
 // GetPerformance は指定したスナイパーの成績を取得します。

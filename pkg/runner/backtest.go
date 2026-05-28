@@ -119,7 +119,10 @@ func RunBacktest() error {
 			report := <-orderReportCh
 			for _, s := range snipers {
 				sp := spotters[s.Detail.Code]
-				sp.Update(report, tick.CurrentPriceTime)
+				activeOrders := map[string][]*order.Order{
+					s.ID: s.GetActiveOrders(),
+				}
+				sp.Update(activeOrders, report, tick.CurrentPriceTime)
 				// IFD発火ロジックはgateway内部に移譲されたため、ここでのHandleIFD呼び出しは不要
 			}
 		}
@@ -139,7 +142,6 @@ func RunBacktest() error {
 				}
 
 				if bullet.HasOrder() {
-					sp.RecordBullet(s.ID, bullet)
 					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: bullet.Order, Request: *bullet.Request})
 					if err != nil {
 						s.FailSendingOrder(bullet.Order)
@@ -167,7 +169,10 @@ func RunBacktest() error {
 					report := <-orderReportCh
 					for _, s := range snipers {
 						sp := spotters[s.Detail.Code]
-						sp.Update(report, state.LatestTick.CurrentPriceTime)
+						activeOrders := map[string][]*order.Order{
+							s.ID: s.GetActiveOrders(),
+						}
+						sp.Update(activeOrders, report, state.LatestTick.CurrentPriceTime)
 					}
 				}
 				<-tickCh

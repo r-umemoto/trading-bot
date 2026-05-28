@@ -57,9 +57,11 @@ func TestSpotter_UpdateAndObserve(t *testing.T) {
 	sp := NewSpotter(detail, nil)
 	sniperID := "test-sniper"
 
-	// 1. 注文の追加
+	// 1. 注文の作成
 	ord := order.NewOrder("order-1", "9434", order.ACTION_BUY, 2000, 100)
-	sp.RecordBullet(sniperID, Bullet{Order: ord})
+	activeOrders := map[string][]*order.Order{
+		sniperID: {ord},
+	}
 
 	// 2. 約定レポートの反映
 	report := order.Orders{
@@ -75,7 +77,7 @@ func TestSpotter_UpdateAndObserve(t *testing.T) {
 			},
 		},
 	}
-	sp.Update(report, time.Now())
+	sp.Update(activeOrders, report, time.Now())
 
 	// 3. Observation の確認
 	obs := sp.PrepareObservation(sniperID, tick.Tick{Price: 2005})
