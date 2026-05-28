@@ -20,6 +20,9 @@ func (m *MockStrategy) AnalysisLogger() *slog.Logger                       { ret
 func (m *MockStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal {
 	return brain.Signal{Action: brain.ACTION_HOLD}
 }
+func (m *MockStrategy) ShouldCancel(input strategy.StrategyInput, ord *order.Order) bool {
+	return false
+}
 
 func TestSniper_Tick_WithObservation(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}

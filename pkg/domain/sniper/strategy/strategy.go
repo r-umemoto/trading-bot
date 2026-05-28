@@ -3,6 +3,7 @@ package strategy
 import (
 	"log/slog"
 
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
@@ -17,7 +18,7 @@ type Position struct {
 // 内部に計算ロジック（知恵）を隠蔽し、戦略側にはシンプルなインターフェースを提供します。
 type StrategyInput struct {
 	Position   Position  // 現在のポジション要約
-	LatestTick tick.Tick // 最新のTick
+	LatestTick tick.Tick // 最新 of Tick
 }
 
 // --- 戦略から利用する「道具箱」メソッド ---
@@ -39,4 +40,6 @@ type Strategy interface {
 	// 不要な場合は ACTION_HOLD を返します。
 	IfDone(input StrategyInput, prevSignal brain.Signal) brain.Signal
 	AnalysisLogger() *slog.Logger // 🌟 解析用ロガーを取得
+	// ShouldCancel は、現在アクティブな注文（未約定）をキャンセルすべきか戦略自身が判断します。
+	ShouldCancel(input StrategyInput, ord *order.Order) bool
 }

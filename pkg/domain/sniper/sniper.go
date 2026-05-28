@@ -18,6 +18,8 @@ type Strategy interface {
 	Evaluate(input strategy.StrategyInput) brain.Signal
 	IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal
 	AnalysisLogger() *slog.Logger
+	// ShouldCancel は、現在アクティブな注文（未約定）をキャンセルすべきか戦略自身が判断します。
+	ShouldCancel(input strategy.StrategyInput, ord *order.Order) bool
 }
 
 type PerformanceProvider interface {
@@ -172,9 +174,8 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 			continue
 		}
 
-		isStillDesired := s.ExecutionPolicy.IsOrderDesired(curr, signal, s.Detail)
-		if !isStillDesired {
-			if curr.Status == order.ORDER_STATUS_IN_PROGRESS || curr.Status == order.ORDER_STATUS_FILL_EXPECTED {
+		if s.Strategy.ShouldCancel(input, curr) {
+			if curr.Status == order.ORDER_STATUS_IN_PROGRESS {
 				fmt.Printf("🔄 [%s] 戦略不整合により注文(%s)をキャンセルします [Status:%v]\n", s.Detail.Code, curr.ID, curr.Status)
 				curr.Status = order.ORDER_STATUS_CANCEL_SENT
 				curr.CancelSentAt = time.Now()

@@ -3,6 +3,7 @@ package strategy
 import (
 	"log/slog"
 
+	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
@@ -93,6 +94,10 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 
 func (s *SampleStrategy) IfDone(input StrategyInput, prevSignal brain.Signal) brain.Signal {
 	return brain.Signal{Action: brain.ACTION_HOLD}
+}
+
+func (s *SampleStrategy) ShouldCancel(input StrategyInput, ord *order.Order) bool {
+	return false
 }
 
 // ----------------------------------------------------------------------------
