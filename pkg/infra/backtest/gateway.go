@@ -219,6 +219,16 @@ func (g *SyncBacktestGateway) ProcessTick(t tick.Tick) {
 			bidPrice = t.Price
 		}
 
+		if g.orderTypes[id] == order.ORDER_TYPE_MARKET {
+			if ord.Action == order.ACTION_BUY {
+				g.executeAll(id, askPrice)
+			} else {
+				g.executeAll(id, bidPrice)
+			}
+			executed = true
+			continue
+		}
+
 		if ord.Action == order.ACTION_BUY {
 			if askPrice < ord.OrderPrice {
 				g.executeAll(id, askPrice)
