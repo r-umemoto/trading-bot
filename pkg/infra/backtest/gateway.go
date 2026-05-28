@@ -279,11 +279,9 @@ func (g *SyncBacktestGateway) executeAll(id string, price float64) {
 	ord.AddExecution(exec)
 	ord.Status = order.ORDER_STATUS_FILLED
 
-	// 🌟 IFD自動発火ロジック
+	// 🌟 IFD自動発火ロジック (ゲートウェイ側での自動実行)
 	if ord.IfDone != nil {
 		fmt.Printf("⚡ [Backtest] IFD発動: 親注文(%s)約定 -> 子注文(%s)を即時発射します\n", ord.ID, ord.IfDone.Action)
-		// 決済注文なので返済指定が必要な場合はここで補完するロジックが必要だが、
-		// 現状のSniper実装ではExit注文生成時に既にClosePositions等が設定されている前提。
 		reqType := order.ORDER_TYPE_MARKET
 		if ord.IfDone.OrderPrice > 0 {
 			reqType = order.ORDER_TYPE_LIMIT

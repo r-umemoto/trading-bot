@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
@@ -20,10 +21,12 @@ import (
 
 func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
 	m := &MarketGateway{
-		client:        client,
-		wsClient:      wsClient,
-		tickChannels:  make(map[string]chan tick.Tick),
-		orderChannels: make(map[string]chan order.Orders),
+		client:         client,
+		wsClient:       wsClient,
+		tickChannels:   make(map[string]chan tick.Tick),
+		orderChannels:  make(map[string]chan order.Orders),
+		ifdTracker:     make(map[string]*order.Order),
+		parentRequests: make(map[string]order.OrderRequest),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
 	m.dataPool = tick.NewDefaultDataPool(kabuProvider)
@@ -49,6 +52,11 @@ type MarketGateway struct {
 	orderChannels map[string]chan order.Orders
 	dataPool      tick.DataPool
 	dispatcher    *OrderDispatcher
+
+	// IFD tracking fields
+	ifdMu          sync.Mutex
+	ifdTracker     map[string]*order.Order       // Key: Parent Order ID -> Value: Child Order
+	parentRequests map[string]order.OrderRequest // Key: Parent Order ID -> Value: Parent Request
 }
 
 var _ market.MarketGateway = (*MarketGateway)(nil)
@@ -92,6 +100,12 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 			return input.Order, res.Error
 		}
 		if res.Order != nil {
+			if res.Order.IfDone != nil {
+				m.ifdMu.Lock()
+				m.ifdTracker[res.Order.ID] = res.Order.IfDone
+				m.parentRequests[res.Order.ID] = input.Request
+				m.ifdMu.Unlock()
+			}
 			return res.Order, nil
 		}
 		return input.Order, nil
@@ -396,6 +410,9 @@ func (m *MarketGateway) startPollingLoop(ctx context.Context) {
 				continue
 			}
 
+			// 自動発注されるIFD子注文のチェック
+			m.checkAndFireIFD(ctx, ords)
+
 			// 注文一覧を全銘柄のチャネルへ安全にディスパッチ
 			for symbol, ch := range m.orderChannels {
 				select {
@@ -406,6 +423,62 @@ func (m *MarketGateway) startPollingLoop(ctx context.Context) {
 						c <- r
 					}(ch, ords)
 				}
+			}
+		}
+	}
+}
+
+func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) {
+	m.ifdMu.Lock()
+	defer m.ifdMu.Unlock()
+
+	if len(m.ifdTracker) == 0 {
+		return
+	}
+
+	for _, ord := range ords.Orders {
+		if ord.Status == order.ORDER_STATUS_FILLED {
+			child, tracked := m.ifdTracker[ord.ID]
+			if tracked {
+				parentReq := m.parentRequests[ord.ID]
+
+				fmt.Printf("⚡ [MarketGateway] IFD発動: 親注文(%s)約定 -> 子注文(%s)を自動発注します\n", ord.ID, child.Action)
+
+				reqType := order.ORDER_TYPE_MARKET
+				if child.OrderPrice > 0 {
+					reqType = order.ORDER_TYPE_LIMIT
+				}
+
+				closeOrder := order.CLOSE_POSITION_ORDER_NONE
+				if child.Action == order.ACTION_SELL {
+					closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
+				}
+
+				childReq := order.NewOrderRequest(
+					parentReq.Exchange,
+					parentReq.SecurityType,
+					parentReq.MarginTradeType,
+					parentReq.AccountType,
+					closeOrder,
+					nil, // ClosePositions is dynamically handled by closeOrder
+					reqType,
+				)
+
+				child.CreatedAt = time.Now()
+				child.InternalState = order.STATE_PENDING
+
+				go func(c *order.Order, req order.OrderRequest) {
+					resCh := m.dispatcher.Submit(c.Symbol, c, &req, "")
+					res := <-resCh
+					if res.Error != nil {
+						fmt.Printf("⚠️ [MarketGateway] IFD子注文自動発注失敗 (Symbol: %s): %v\n", c.Symbol, res.Error)
+					} else {
+						fmt.Printf("✅ [MarketGateway] IFD子注文自動発注成功 (ID: %s)\n", res.OrderID)
+					}
+				}(child, childReq)
+
+				delete(m.ifdTracker, ord.ID)
+				delete(m.parentRequests, ord.ID)
 			}
 		}
 	}
