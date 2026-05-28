@@ -33,17 +33,19 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 
 	// 2. 時刻監視用のキルスイッチコンテキストを構築（15:15で自動キャンセル）
-	ctx, cancel := context.WithCancel(ctx)
+	killCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go e.monitorKillSwitch(ctx, cancel)
+	go e.monitorKillSwitch(killCtx, cancel)
 
 	// 3. メインスレッドの待機（Ctrl+Cによる強制終了、または15:15のキルスイッチによるキャンセルまでここでブロック）
 	fmt.Println("🚀 リアルタイム監視ストリームを監視中...")
-	<-ctx.Done()
+	<-killCtx.Done()
 
 	// 4. システムのシャットダウンプロセス（全ポジションクローズ、登録解除など）
 	fmt.Println("🏁 システムのシャットダウンプロセスを開始します...")
-	return e.usecase.Shutdown(ctx)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer shutdownCancel()
+	return e.usecase.Shutdown(shutdownCtx)
 }
 
 // monitorKillSwitch は取引終了時刻（15:15）を監視し、到達時にコンテキストをキャンセルします
