@@ -13,22 +13,13 @@ import (
 type TradeUseCase struct {
 	nests      []*SniperNest
 	gateway    market.MarketGateway
-	reporter   *service.PerformanceReporter
 }
 
 func NewTradeUseCase(nests []*SniperNest, gateway market.MarketGateway) *TradeUseCase {
-	u := &TradeUseCase{
+	return &TradeUseCase{
 		nests:   nests,
 		gateway: gateway,
 	}
-	var targets []service.ReportableTarget
-	for _, n := range nests {
-		for _, s := range n.Snipers {
-			targets = append(targets, s)
-		}
-	}
-	u.reporter = service.NewPerformanceReporter(u, targets, gateway.DataPool())
-	return u
 }
 
 // Start は市場データ受信を開始し、各銘柄ごとの SniperNest を起動します
@@ -45,7 +36,15 @@ func (u *TradeUseCase) Start(ctx context.Context, chs *market.MarketChannels) {
 }
 
 func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
-	u.reporter.PrintPerformanceReport(enableCSV)
+	var targets []service.ReportableTarget
+	for _, n := range u.nests {
+		for _, s := range n.Snipers {
+			targets = append(targets, s)
+		}
+	}
+	report := service.GeneratePerformanceReport(u, targets, u.gateway.DataPool())
+	presenter := NewReportPresenter()
+	presenter.PrintPerformanceReport(report, enableCSV)
 }
 
 func (u *TradeUseCase) GetPerformance(sniperID string) sniper.Performance {

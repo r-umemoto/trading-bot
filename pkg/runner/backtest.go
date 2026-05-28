@@ -19,6 +19,7 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/backtest"
 	"github.com/r-umemoto/trading-bot/pkg/portfolio"
+	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
 
 // RunBacktest はバックテストの初期化と実行をカプセル化した関数です。
@@ -195,8 +196,9 @@ func RunBacktest() error {
 	for i, s := range snipers {
 		reportTargets[i] = s
 	}
-	reporter := service.NewPerformanceReporter(provider, reportTargets, gateway.DataPool())
-	reporter.PrintPerformanceReport(false)
+	report := service.GeneratePerformanceReport(provider, reportTargets, gateway.DataPool())
+	presenter := usecase.NewReportPresenter()
+	presenter.PrintPerformanceReport(report, false)
 
 	return nil
 }
