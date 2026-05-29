@@ -16,9 +16,8 @@ type DataPool interface {
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
 type DefaultDataPool struct {
-	symbols        map[string]*symbolData
+	symbols        sync.Map // Key: string (symbol), Value: *symbolData
 	feederProvider HistoricalFeederProvider
-	mu             sync.RWMutex // symbols マップ自体の操作（新しい銘柄の登録時）を保護
 }
 
 // symbolData は銘柄ごとのデータを保持し、個別にロックを制御します
@@ -38,30 +37,19 @@ func newSymbolData(symbol string) *symbolData {
 
 func NewDefaultDataPool(provider HistoricalFeederProvider) *DefaultDataPool {
 	return &DefaultDataPool{
-		symbols:        make(map[string]*symbolData),
 		feederProvider: provider,
 	}
 }
 
 func (a *DefaultDataPool) getOrCreateSymbolData(symbol string) *symbolData {
-	a.mu.RLock()
-	data, exists := a.symbols[symbol]
-	a.mu.RUnlock()
-
-	if exists {
-		return data
+	if val, ok := a.symbols.Load(symbol); ok {
+		return val.(*symbolData)
 	}
 
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Double check
-	if data, exists = a.symbols[symbol]; exists {
-		return data
+	data := newSymbolData(symbol)
+	if val, loaded := a.symbols.LoadOrStore(symbol, data); loaded {
+		return val.(*symbolData)
 	}
-
-	data = newSymbolData(symbol)
-	a.symbols[symbol] = data
 	return data
 }
 
