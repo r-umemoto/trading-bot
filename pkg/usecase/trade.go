@@ -9,54 +9,81 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // TradeUseCase は価格更新イベントを受け取り、該当するスナイパーに伝達するユースケースです
 type TradeUseCase struct {
-	nests   []*sniper.SniperNest
-	gateway market.MarketGateway
+	operations []sniper.Operation
+	gateway    market.MarketGateway
 }
 
-func NewTradeUseCase(nests []*sniper.SniperNest, gateway market.MarketGateway) *TradeUseCase {
+func NewTradeUseCase(operations []sniper.Operation, gateway market.MarketGateway) *TradeUseCase {
 	return &TradeUseCase{
-		nests:   nests,
-		gateway: gateway,
+		operations: operations,
+		gateway:    gateway,
 	}
 }
 
-// Start は市場データ受信を開始し、各銘柄ごとの SniperNest を起動します
+// Start は市場データ受信を開始し、各作戦ごとのイベントループを起動します
 func (u *TradeUseCase) Start(ctx context.Context, chs *market.MarketChannels) {
-	for _, nest := range u.nests {
-		tickCh := chs.Ticks[nest.SymbolCode]
-		orderCh := chs.Orders[nest.SymbolCode]
-		symChs := market.SymbolChannels{
-			Tick:  tickCh,
-			Order: orderCh,
+	for _, op := range u.operations {
+		symbols := op.GetSymbolCodes()
+
+		mergedTickCh := make(chan tick.Tick, 100)
+		mergedOrderCh := make(chan order.Orders, 100)
+
+		for _, sym := range symbols {
+			tickCh := chs.Ticks[sym]
+			orderCh := chs.Orders[sym]
+			if tickCh != nil {
+				go func(c <-chan tick.Tick) {
+					for t := range c {
+						select {
+						case <-ctx.Done():
+							return
+						case mergedTickCh <- t:
+						}
+					}
+				}(tickCh)
+			}
+			if orderCh != nil {
+				go func(c <-chan order.Orders) {
+					for o := range c {
+						select {
+						case <-ctx.Done():
+							return
+						case mergedOrderCh <- o:
+						}
+					}
+				}(orderCh)
+			}
 		}
-		go u.runNestEventLoop(ctx, nest, symChs)
+
+		go u.runOperationEventLoop(ctx, op, mergedTickCh, mergedOrderCh)
 	}
 }
 
-// runNestEventLoop は特定の銘柄（SniperNest）のイベントループを非同期に監視します
-func (u *TradeUseCase) runNestEventLoop(ctx context.Context, nest *sniper.SniperNest, chs market.SymbolChannels) {
+// runOperationEventLoop は特定の作戦のイベントループを非同期に監視します
+func (u *TradeUseCase) runOperationEventLoop(ctx context.Context, op sniper.Operation, tickCh <-chan tick.Tick, orderCh <-chan order.Orders) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case t := <-chs.Tick:
+		case t := <-tickCh:
 			// ドメイン集約にビジネスロジックの評価を委譲 (純粋関数)
-			actions := nest.HandleTick(t)
+			actions := op.HandleTick(t)
 			for _, act := range actions {
-				go u.fire(ctx, nest, act.SniperID, act.Bullet)
+				go u.fire(ctx, op, act.SniperID, act.Bullet)
 			}
-		case ords := <-chs.Order:
-			nest.UpdateOrders(ords)
+		case ords := <-orderCh:
+			op.UpdateOrders(ords)
 		}
 	}
 }
 
 // fire は実際の発注・キャンセル処理を API ゲートウェイに対して非同期に実行します
-func (u *TradeUseCase) fire(ctx context.Context, nest *sniper.SniperNest, sniperID string, b sniper.Bullet) {
+func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID string, b sniper.Bullet) {
 	if b.HasCancel() {
 		err := u.gateway.CancelOrder(ctx, b.CancelOrderID)
 		if err != nil {
@@ -67,18 +94,18 @@ func (u *TradeUseCase) fire(ctx context.Context, nest *sniper.SniperNest, sniper
 	if b.HasOrder() {
 		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: b.Order, Request: *b.Request})
 		if err != nil {
-			fmt.Printf("発注失敗 (Symbol: %s): %v\n", nest.SymbolCode, err)
-			nest.FailSendingOrder(sniperID, b.Order)
+			fmt.Printf("発注失敗 (Symbol: %s): %v\n", op.GetSymbolCode(), err)
+			op.FailSendingOrder(sniperID, b.Order)
 			return
 		}
-		nest.UpdateOrderID(sniperID, b.Order, updatedOrder.ID)
+		op.UpdateOrderID(sniperID, b.Order, updatedOrder.ID)
 	}
 }
 
 func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 	var targets []sniper.ReportableTarget
-	for _, n := range u.nests {
-		targets = append(targets, n.GetReportableTargets()...)
+	for _, op := range u.operations {
+		targets = append(targets, op.GetReportableTargets()...)
 	}
 	report := service.GeneratePerformanceReport(u, targets, u.gateway.DataPool())
 	presenter := NewReportPresenter()
@@ -86,18 +113,18 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 }
 
 func (u *TradeUseCase) GetPerformance(sniperID string) sniper.Performance {
-	for _, nest := range u.nests {
-		if nest.HasSniper(sniperID) {
-			return nest.GetPerformance(sniperID)
+	for _, op := range u.operations {
+		if op.HasSniper(sniperID) {
+			return op.GetPerformance(sniperID)
 		}
 	}
 	return sniper.Performance{}
 }
 
 func (u *TradeUseCase) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
-	for _, nest := range u.nests {
-		if nest.HasSniper(sniperID) {
-			return nest.GetUnrealizedPnL(sniperID, currentPrice)
+	for _, op := range u.operations {
+		if op.HasSniper(sniperID) {
+			return op.GetUnrealizedPnL(sniperID, currentPrice)
 		}
 	}
 	return 0

@@ -312,4 +312,14 @@ func (s *Spotter) updatePerformance(sniperID string, pnl float64) {
 	s.sniperPerformance[sniperID] = perf
 }
 
+func (s *Spotter) HoldQty(sniperID string) float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total float64
+	for _, p := range s.sniperPositions[sniperID] {
+		total += p.LeavesQty
+	}
+	return total
+}
+
 

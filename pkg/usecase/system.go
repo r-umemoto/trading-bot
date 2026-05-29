@@ -10,20 +10,20 @@ import (
 
 // SystemUseCase はシステムの起動時・終了時のライフサイクル処理を行うユースケースです
 type SystemUseCase struct {
-	nests   []*sniper.SniperNest
-	cleaner *PositionCleaner
-	gateway market.MarketGateway
+	operations []sniper.Operation
+	cleaner    *PositionCleaner
+	gateway    market.MarketGateway
 }
 
-func NewSystemUseCase(nests []*sniper.SniperNest, gateway market.MarketGateway) *SystemUseCase {
-	targets := make([]CleanableTarget, len(nests))
-	for i, n := range nests {
-		targets[i] = n
+func NewSystemUseCase(operations []sniper.Operation, gateway market.MarketGateway) *SystemUseCase {
+	targets := make([]CleanableTarget, len(operations))
+	for i, op := range operations {
+		targets[i] = op
 	}
 	return &SystemUseCase{
-		nests:   nests,
-		cleaner: NewPositionCleaner(targets, gateway),
-		gateway: gateway,
+		operations: operations,
+		cleaner:    NewPositionCleaner(targets, gateway),
+		gateway:    gateway,
 	}
 }
 
@@ -39,17 +39,19 @@ func (s *SystemUseCase) Initialize(ctx context.Context) error {
 	var reqs []market.ResisterSymbolRequest
 	seen := make(map[string]bool)
 
-	for _, nest := range s.nests {
-		for _, exchange := range nest.GetExchanges() {
-			key := fmt.Sprintf("%s:%d", nest.SymbolCode, exchange)
-			if seen[key] {
-				continue
+	for _, op := range s.operations {
+		for _, exchange := range op.GetExchanges() {
+			for _, sym := range op.GetSymbolCodes() {
+				key := fmt.Sprintf("%s:%d", sym, exchange)
+				if seen[key] {
+					continue
+				}
+				reqs = append(reqs, market.ResisterSymbolRequest{
+					Symbol:   sym,
+					Exchange: exchange,
+				})
+				seen[key] = true
 			}
-			reqs = append(reqs, market.ResisterSymbolRequest{
-				Symbol:   nest.SymbolCode,
-				Exchange: exchange,
-			})
-			seen[key] = true
 		}
 	}
 

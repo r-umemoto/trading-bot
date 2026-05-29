@@ -42,24 +42,88 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
 	}
 
-	// 4. 狙撃陣地（SniperNest）の構築
-	var nests []*sniper.SniperNest
+	// 4. 狙撃陣地（SniperNest）および 作戦（Operation）の構築
+	var operations []sniper.Operation
 	snipersBySymbol := make(map[string][]*sniper.Sniper)
 	for _, s := range snipers {
 		snipersBySymbol[s.Detail.Code] = append(snipersBySymbol[s.Detail.Code], s)
 	}
 
-	for symbol, symSnipers := range snipersBySymbol {
-		var spotter *sniper.Spotter
-		if len(symSnipers) > 0 {
-			spotter = sniper.NewSpotter(symSnipers[0].Detail, symSnipers[0].Logger)
+	// portfolio のパラメータ依存でペアトレードを構築する
+	for _, t := range targets {
+		hasPairTrading := false
+		for _, s := range t.Strategies {
+			if s == "pair_trading" {
+				hasPairTrading = true
+				break
+			}
 		}
-		nest := sniper.NewSniperNest(symbol, spotter, symSnipers)
-		nests = append(nests, nest)
+		if !hasPairTrading {
+			continue
+		}
+
+		p, err := parsePairTradingParams(t.Params)
+		if err != nil {
+			slog.Warn("ペアトレードパラメータのパースに失敗", slog.String("symbol", t.Symbol), slog.Any("error", err))
+			continue
+		}
+
+		// プライマリ側でのみ Operation を構築する
+		if !p.IsPrimary {
+			continue
+		}
+
+		symbolA := t.Symbol
+		symbolB := p.Partner
+
+		snipersA, okA := snipersBySymbol[symbolA]
+		snipersB, okB := snipersBySymbol[symbolB]
+
+		if okA && okB && len(snipersA) > 0 && len(snipersB) > 0 {
+			nestA := buildNestHelper(symbolA, snipersA)
+			nestB := buildNestHelper(symbolB, snipersB)
+
+			// 両スナイパーの戦略を InstructionStrategy にキャストして差し替え
+			var stratA *sniper.InstructionStrategy
+			var stratB *sniper.InstructionStrategy
+
+			if sa, ok := snipersA[0].Strategy.(*sniper.InstructionStrategy); ok {
+				stratA = sa
+			} else {
+				stratA = sniper.NewInstructionStrategy()
+				snipersA[0].Strategy = stratA
+			}
+
+			if sb, ok := snipersB[0].Strategy.(*sniper.InstructionStrategy); ok {
+				stratB = sb
+			} else {
+				stratB = sniper.NewInstructionStrategy()
+				snipersB[0].Strategy = stratB
+			}
+
+			opID := fmt.Sprintf("PairOp_%s_%s", symbolA, symbolB)
+			pairOp := sniper.NewPairTradingOperation(
+				opID, nestA, nestB, stratA, stratB, gateway.DataPool(), p.Threshold, p.Qty, snipersA[0].Logger,
+			)
+			operations = append(operations, pairOp)
+
+			slog.Info("ペアトレード作戦を構築しました", slog.String("opID", opID), slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
+
+			delete(snipersBySymbol, symbolA)
+			delete(snipersBySymbol, symbolB)
+		} else {
+			slog.Warn("ペアトレードに必要なスナイパーが不足しています", slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
+		}
 	}
 
-	tradeUC := usecase.NewTradeUseCase(nests, gateway)
-	systemUC := usecase.NewSystemUseCase(nests, gateway)
+	for symbol, symSnipers := range snipersBySymbol {
+		nest := buildNestHelper(symbol, symSnipers)
+		opID := fmt.Sprintf("Op_%s", symbol)
+		operations = append(operations, sniper.NewDefaultOperation(opID, nest))
+	}
+
+	tradeUC := usecase.NewTradeUseCase(operations, gateway)
+	systemUC := usecase.NewSystemUseCase(operations, gateway)
 	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
 	// 5. エンジンの完成
@@ -123,4 +187,45 @@ func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*s
 	}
 
 	return snipers, nil
+}
+
+func buildNestHelper(symbol string, symSnipers []*sniper.Sniper) *sniper.SniperNest {
+	var spotter *sniper.Spotter
+	if len(symSnipers) > 0 {
+		spotter = sniper.NewSpotter(symSnipers[0].Detail, symSnipers[0].Logger)
+	}
+	return sniper.NewSniperNest(symbol, spotter, symSnipers)
+}
+
+type PairTradingParams struct {
+	Partner   string
+	Threshold float64
+	Qty       float64
+	IsPrimary bool
+}
+
+func parsePairTradingParams(params map[string]interface{}) (PairTradingParams, error) {
+	var p PairTradingParams
+	raw, ok := params["pair_trading"]
+	if !ok {
+		return p, fmt.Errorf("pair_trading params missing")
+	}
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return p, fmt.Errorf("pair_trading params is not a map")
+	}
+
+	if partner, ok := m["partner"].(string); ok {
+		p.Partner = partner
+	}
+	if threshold, ok := m["threshold"].(float64); ok {
+		p.Threshold = threshold
+	}
+	if qty, ok := m["qty"].(float64); ok {
+		p.Qty = qty
+	}
+	if isPrimary, ok := m["is_primary"].(bool); ok {
+		p.IsPrimary = isPrimary
+	}
+	return p, nil
 }

@@ -64,8 +64,10 @@ func RunBacktest() error {
 		return fmt.Errorf("バックテストログディレクトリの作成に失敗: %w", err)
 	}
 
+	// 4. スナイパーの配備
 	var snipers []*sniper.Sniper
-	spotters := make(map[string]*sniper.Spotter)
+	snipersBySymbol := make(map[string][]*sniper.Sniper)
+
 	for _, sym := range watchList {
 		factory, err := strategy.GetFactory(sym.StrategyName)
 		if err != nil {
@@ -87,7 +89,92 @@ func RunBacktest() error {
 		sniperID := fmt.Sprintf("%s_%s", sym.StrategyName, sym.Detail.Code)
 		s := sniper.NewSniper(sniperID, sym.Detail, st, policy, sym.Exchange, analysisLogger)
 		snipers = append(snipers, s)
-		spotters[sym.Detail.Code] = sniper.NewSpotter(sym.Detail, analysisLogger)
+		snipersBySymbol[sym.Detail.Code] = append(snipersBySymbol[sym.Detail.Code], s)
+	}
+
+	// 5. 陣地（Nest）および 作戦（Operation）の構築
+	var operations []sniper.Operation
+
+	// portfolio のパラメータ依存でペアトレードを構築する
+	for _, t := range targets {
+		hasPairTrading := false
+		for _, s := range t.Strategies {
+			if s == "pair_trading" {
+				hasPairTrading = true
+				break
+			}
+		}
+		if !hasPairTrading {
+			continue
+		}
+
+		p, err := parsePairTradingParams(t.Params)
+		if err != nil {
+			slog.Warn("ペアトレードパラメータのパースに失敗", slog.String("symbol", t.Symbol), slog.Any("error", err))
+			continue
+		}
+
+		// プライマリ側でのみ Operation を構築する
+		if !p.IsPrimary {
+			continue
+		}
+
+		symbolA := t.Symbol
+		symbolB := p.Partner
+
+		snipersA, okA := snipersBySymbol[symbolA]
+		snipersB, okB := snipersBySymbol[symbolB]
+
+		if okA && okB && len(snipersA) > 0 && len(snipersB) > 0 {
+			// spotter の生成
+			spotterA := sniper.NewSpotter(snipersA[0].Detail, snipersA[0].Logger)
+			spotterB := sniper.NewSpotter(snipersB[0].Detail, snipersB[0].Logger)
+
+			nestA := sniper.NewSniperNest(symbolA, spotterA, snipersA)
+			nestB := sniper.NewSniperNest(symbolB, spotterB, snipersB)
+
+			// 両スナイパーの戦略を InstructionStrategy にキャストして差し替え
+			var stratA *sniper.InstructionStrategy
+			var stratB *sniper.InstructionStrategy
+
+			if sa, ok := snipersA[0].Strategy.(*sniper.InstructionStrategy); ok {
+				stratA = sa
+			} else {
+				stratA = sniper.NewInstructionStrategy()
+				snipersA[0].Strategy = stratA
+			}
+
+			if sb, ok := snipersB[0].Strategy.(*sniper.InstructionStrategy); ok {
+				stratB = sb
+			} else {
+				stratB = sniper.NewInstructionStrategy()
+				snipersB[0].Strategy = stratB
+			}
+
+			opID := fmt.Sprintf("PairOp_%s_%s", symbolA, symbolB)
+			pairOp := sniper.NewPairTradingOperation(
+				opID, nestA, nestB, stratA, stratB, dataPool, p.Threshold, p.Qty, snipersA[0].Logger,
+			)
+			operations = append(operations, pairOp)
+
+			slog.Info("バックテスト用ペアトレード作戦を構築しました", slog.String("opID", opID), slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
+
+			delete(snipersBySymbol, symbolA)
+			delete(snipersBySymbol, symbolB)
+		} else {
+			slog.Warn("バックテスト用ペアトレードに必要なスナイパーが不足しています", slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
+		}
+	}
+
+	// 残りの銘柄を単一銘柄 Operation として構築する
+	for symbol, symSnipers := range snipersBySymbol {
+		var spotter *sniper.Spotter
+		if len(symSnipers) > 0 {
+			spotter = sniper.NewSpotter(symSnipers[0].Detail, symSnipers[0].Logger)
+		}
+		nest := sniper.NewSniperNest(symbol, spotter, symSnipers)
+		opID := fmt.Sprintf("Op_%s", symbol)
+		operations = append(operations, sniper.NewDefaultOperation(opID, nest))
 	}
 
 	// PositionCleaner の起動 (Gatewayに依存するため)
@@ -117,36 +204,40 @@ func RunBacktest() error {
 
 		for len(orderReportCh) > 0 {
 			report := <-orderReportCh
-			for _, s := range snipers {
-				sp := spotters[s.Detail.Code]
-				activeOrders := map[string][]*order.Order{
-					s.ID: s.GetActiveOrders(),
-				}
-				sp.Update(activeOrders, report, tick.CurrentPriceTime)
-				// IFD発火ロジックはgateway内部に移譲されたため、ここでのHandleIFD呼び出しは不要
+			for _, op := range operations {
+				op.UpdateOrders(report)
 			}
 		}
 
 		t := <-tickCh
 
-		for _, s := range snipers {
-			if s.Detail.Code == t.Symbol {
-				sp := spotters[s.Detail.Code]
-				obs := sp.PrepareObservation(s.ID, t)
-				bullet := s.Tick(obs)
+		for _, op := range operations {
+			hasSymbol := false
+			for _, code := range op.GetSymbolCodes() {
+				if code == t.Symbol {
+					hasSymbol = true
+					break
+				}
+			}
+			if !hasSymbol {
+				continue
+			}
 
+			actions := op.HandleTick(t)
+
+			for _, act := range actions {
+				bullet := act.Bullet
 				if bullet.HasCancel() {
 					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", bullet.CancelOrderID)
 					_ = gateway.CancelOrder(context.Background(), bullet.CancelOrderID)
-					continue
 				}
 
 				if bullet.HasOrder() {
 					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: bullet.Order, Request: *bullet.Request})
 					if err != nil {
-						s.FailSendingOrder(bullet.Order)
+						op.FailSendingOrder(act.SniperID, bullet.Order)
 					} else {
-						bullet.Order = updatedOrder
+						op.UpdateOrderID(act.SniperID, bullet.Order, updatedOrder.ID)
 					}
 				}
 			}
@@ -167,15 +258,23 @@ func RunBacktest() error {
 				gateway.ProcessTick(state.LatestTick)
 				for len(orderReportCh) > 0 {
 					report := <-orderReportCh
-					for _, s := range snipers {
-						sp := spotters[s.Detail.Code]
-						activeOrders := map[string][]*order.Order{
-							s.ID: s.GetActiveOrders(),
-						}
-						sp.Update(activeOrders, report, state.LatestTick.CurrentPriceTime)
+					for _, op := range operations {
+						op.UpdateOrders(report)
 					}
 				}
-				<-tickCh
+				t := <-tickCh
+				for _, op := range operations {
+					hasSymbol := false
+					for _, code := range op.GetSymbolCodes() {
+						if code == t.Symbol {
+							hasSymbol = true
+							break
+						}
+					}
+					if hasSymbol {
+						_ = op.HandleTick(t)
+					}
+				}
 			}
 		}
 	}
@@ -196,10 +295,10 @@ func RunBacktest() error {
 	fmt.Printf("総発注数: %d件\n", len(ords.Orders))
 
 	// 結果の出力
-	provider := &backtestPerformanceProvider{spotters: spotters}
-	reportTargets := make([]sniper.ReportableTarget, len(snipers))
-	for i, s := range snipers {
-		reportTargets[i] = s
+	provider := &backtestPerformanceProvider{operations: operations}
+	reportTargets := make([]sniper.ReportableTarget, 0)
+	for _, op := range operations {
+		reportTargets = append(reportTargets, op.GetReportableTargets()...)
 	}
 	report := service.GeneratePerformanceReport(provider, reportTargets, gateway.DataPool())
 	presenter := usecase.NewReportPresenter()
@@ -209,26 +308,22 @@ func RunBacktest() error {
 }
 
 type backtestPerformanceProvider struct {
-	spotters map[string]*sniper.Spotter
+	operations []sniper.Operation
 }
 
 func (p *backtestPerformanceProvider) GetPerformance(sniperID string) sniper.Performance {
-	for _, sp := range p.spotters {
-		perf := sp.GetPerformance(sniperID)
-		if perf.Trades > 0 || perf.RealizedPnL != 0 {
-			return perf
+	for _, op := range p.operations {
+		if op.HasSniper(sniperID) {
+			return op.GetPerformance(sniperID)
 		}
 	}
 	return sniper.Performance{}
 }
 
 func (p *backtestPerformanceProvider) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
-	for _, sp := range p.spotters {
-		// sniperIDが一致するSpotterを探して含み損益を計算
-		// バックテストでは銘柄ごとにSpotterが分かれている
-		unrealized := sp.GetUnrealizedPnL(sniperID, currentPrice)
-		if unrealized != 0 {
-			return unrealized
+	for _, op := range p.operations {
+		if op.HasSniper(sniperID) {
+			return op.GetUnrealizedPnL(sniperID, currentPrice)
 		}
 	}
 	return 0
@@ -340,4 +435,37 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 
 	close(tickChan)
 	return nil
+}
+
+type PairTradingParams struct {
+	Partner   string
+	Threshold float64
+	Qty       float64
+	IsPrimary bool
+}
+
+func parsePairTradingParams(params map[string]interface{}) (PairTradingParams, error) {
+	var p PairTradingParams
+	raw, ok := params["pair_trading"]
+	if !ok {
+		return p, fmt.Errorf("pair_trading params missing")
+	}
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return p, fmt.Errorf("pair_trading params is not a map")
+	}
+
+	if partner, ok := m["partner"].(string); ok {
+		p.Partner = partner
+	}
+	if threshold, ok := m["threshold"].(float64); ok {
+		p.Threshold = threshold
+	}
+	if qty, ok := m["qty"].(float64); ok {
+		p.Qty = qty
+	}
+	if isPrimary, ok := m["is_primary"].(bool); ok {
+		p.IsPrimary = isPrimary
+	}
+	return p, nil
 }

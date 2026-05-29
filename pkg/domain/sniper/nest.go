@@ -36,6 +36,11 @@ func NewSniperNest(code string, spotter *Spotter, snipers []*Sniper) *SniperNest
 	}
 }
 
+// GetSymbolCodes は対象の全銘柄コードのリストを返します（SniperNestでは1銘柄）。
+func (n *SniperNest) GetSymbolCodes() []string {
+	return []string{n.SymbolCode}
+}
+
 // HandleTick は時価（Tick）の更新を受け取り、配下の各スナイパーに Observation を配分して意思決定を促します。
 // アクション（発注・キャンセル）が必要な場合は FireAction を生成して返します。
 func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
