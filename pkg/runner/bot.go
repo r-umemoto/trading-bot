@@ -26,7 +26,7 @@ func RunBot() error {
 		return fmt.Errorf("設定の読み込みに失敗しました: %w", err)
 	}
 
-	// 2. ポートフォリオの読み込み
+	// 2. ポートフォリオおよび作戦設定の読み込み
 	portfolioPath := "configs/portfolio.json"
 	if p := os.Getenv("PORTFOLIO_PATH"); p != "" {
 		portfolioPath = p
@@ -36,8 +36,18 @@ func RunBot() error {
 		return fmt.Errorf("ポートフォリオの読み込みに失敗しました: %w", err)
 	}
 
+	operationsPath := "configs/operations.json"
+	if p := os.Getenv("OPERATIONS_PATH"); p != "" {
+		operationsPath = p
+	}
+	opTargets, err := portfolio.LoadOperationsFromJSON(operationsPath)
+	if err != nil {
+		// operations.json が存在しない場合は空としてフォールバック（下位互換性）
+		opTargets = nil
+	}
+
 	// 3. アプリケーションの組み立て
-	e, err := engine.BuildEngine(ctx, cfg, targets)
+	e, err := engine.BuildEngine(ctx, cfg, targets, opTargets)
 	if err != nil {
 		return fmt.Errorf("engineの組み立て失敗: %w", err)
 	}

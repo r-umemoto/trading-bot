@@ -23,15 +23,15 @@ import (
 )
 
 // BuildEngine は、システム全体を俯瞰する「目次」です
-func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio.SymbolTarget) (*Engine, error) {
+func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio.SymbolTarget, opTargets []portfolio.OperationTarget) (*Engine, error) {
 	// 1. インフラ層の構築（泥臭い設定はすべてここへ）
 	gateway, err := buildInfrastructure(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. 監視リストの構築 (ここでAPIを叩いて銘柄詳細を取得)
-	watchList, err := portfolio.BuildWatchList(ctx, gateway, targets)
+	// 2. 監視リスト (WatchTarget) の自動構築
+	watchList, err := buildWatchListFromOperations(ctx, gateway, targets, opTargets)
 	if err != nil {
 		return nil, err
 	}
@@ -42,85 +42,8 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
 	}
 
-	// 4. 狙撃陣地（SniperNest）および 作戦（Operation）の構築
-	var operations []sniper.Operation
-	snipersBySymbol := make(map[string][]*sniper.Sniper)
-	for _, s := range snipers {
-		snipersBySymbol[s.Detail.Code] = append(snipersBySymbol[s.Detail.Code], s)
-	}
-
-	// portfolio のパラメータ依存でペアトレードを構築する
-	for _, t := range targets {
-		hasPairTrading := false
-		for _, s := range t.Strategies {
-			if s == "pair_trading" {
-				hasPairTrading = true
-				break
-			}
-		}
-		if !hasPairTrading {
-			continue
-		}
-
-		p, err := parsePairTradingParams(t.Params)
-		if err != nil {
-			slog.Warn("ペアトレードパラメータのパースに失敗", slog.String("symbol", t.Symbol), slog.Any("error", err))
-			continue
-		}
-
-		// プライマリ側でのみ Operation を構築する
-		if !p.IsPrimary {
-			continue
-		}
-
-		symbolA := t.Symbol
-		symbolB := p.Partner
-
-		snipersA, okA := snipersBySymbol[symbolA]
-		snipersB, okB := snipersBySymbol[symbolB]
-
-		if okA && okB && len(snipersA) > 0 && len(snipersB) > 0 {
-			nestA := buildNestHelper(symbolA, snipersA)
-			nestB := buildNestHelper(symbolB, snipersB)
-
-			// 両スナイパーの戦略を InstructionStrategy にキャストして差し替え
-			var stratA *sniper.InstructionStrategy
-			var stratB *sniper.InstructionStrategy
-
-			if sa, ok := snipersA[0].Strategy.(*sniper.InstructionStrategy); ok {
-				stratA = sa
-			} else {
-				stratA = sniper.NewInstructionStrategy()
-				snipersA[0].Strategy = stratA
-			}
-
-			if sb, ok := snipersB[0].Strategy.(*sniper.InstructionStrategy); ok {
-				stratB = sb
-			} else {
-				stratB = sniper.NewInstructionStrategy()
-				snipersB[0].Strategy = stratB
-			}
-
-			opID := fmt.Sprintf("PairOp_%s_%s", symbolA, symbolB)
-			pairOp := sniper.NewPairTradingOperation(
-				opID, nestA, nestB, stratA, stratB, gateway.DataPool(), p.Threshold, p.Qty, snipersA[0].Logger,
-			)
-			operations = append(operations, pairOp)
-
-			slog.Info("ペアトレード作戦を構築しました", slog.String("opID", opID), slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
-
-			delete(snipersBySymbol, symbolA)
-			delete(snipersBySymbol, symbolB)
-		} else {
-			slog.Warn("ペアトレードに必要なスナイパーが不足しています", slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
-		}
-	}
-
-	for symbol, symSnipers := range snipersBySymbol {
-		nest := buildNestHelper(symbol, symSnipers)
-		opID := fmt.Sprintf("Op_%s", symbol)
-		operations = append(operations, sniper.NewDefaultOperation(opID, nest))
-	}
+	// 4. 作戦（Operation）の構築
+	operations := buildOperationsFromConfigs(gateway.DataPool(), snipers, opTargets)
 
 	tradeUC := usecase.NewTradeUseCase(operations, gateway)
 	systemUC := usecase.NewSystemUseCase(operations, gateway)
@@ -128,6 +51,167 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 
 	// 5. エンジンの完成
 	return NewEngine(handler), nil
+}
+
+// ---------------------------------------------------------
+// ▼ ここから下は「下請け工場（プライベート関数）」に押し込む
+// ---------------------------------------------------------
+
+// buildWatchListFromOperations はマスタ登録情報と作戦設定を突合し、監視すべき WatchTarget リストを自動構築します。
+func buildWatchListFromOperations(
+	ctx context.Context,
+	gateway market.MarketGateway,
+	targets []portfolio.SymbolTarget,
+	opTargets []portfolio.OperationTarget,
+) ([]symbol.WatchTarget, error) {
+	// 有効化されたマスタ銘柄マップの構築
+	enabledAssets := make(map[string]portfolio.SymbolTarget)
+	for _, t := range targets {
+		if t.Enabled {
+			enabledAssets[t.Symbol] = t
+		}
+	}
+
+	var watchList []symbol.WatchTarget
+
+	for _, op := range opTargets {
+		switch op.Type {
+		case "default":
+			symbolCode, _ := op.Params["symbol"].(string)
+			strategiesRaw, _ := op.Params["strategies"].([]interface{})
+			strategyParams, _ := op.Params["strategy_params"].(map[string]interface{})
+
+			asset, ok := enabledAssets[symbolCode]
+			if !ok {
+				slog.Warn("作戦で使用される銘柄が無効またはマスタ未登録です。作戦をスキップします", slog.String("opID", op.ID), slog.String("symbol", symbolCode))
+				continue
+			}
+
+			detail, err := gateway.GetSymbol(ctx, symbolCode, asset.Exchange)
+			if err != nil {
+				return nil, err
+			}
+
+			for _, stratRaw := range strategiesRaw {
+				stratName, _ := stratRaw.(string)
+				var params interface{}
+				if strategyParams != nil {
+					params = strategyParams[stratName]
+				}
+
+				watchList = append(watchList, symbol.WatchTarget{
+					Detail:       detail,
+					StrategyName: stratName,
+					Exchange:     asset.Exchange,
+					Params:       params,
+				})
+			}
+
+		case "pair_trading":
+			symbolA, _ := op.Params["symbol_a"].(string)
+			symbolB, _ := op.Params["symbol_b"].(string)
+
+			assetA, okA := enabledAssets[symbolA]
+			assetB, okB := enabledAssets[symbolB]
+			if !okA || !okB {
+				slog.Warn("ペアトレードに必要な銘柄が無効またはマスタ未登録です。作戦をスキップします", slog.String("opID", op.ID), slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
+				continue
+			}
+
+			detailA, err := gateway.GetSymbol(ctx, symbolA, assetA.Exchange)
+			if err != nil {
+				return nil, err
+			}
+			detailB, err := gateway.GetSymbol(ctx, symbolB, assetB.Exchange)
+			if err != nil {
+				return nil, err
+			}
+
+			watchList = append(watchList, symbol.WatchTarget{
+				Detail:       detailA,
+				StrategyName: "pair_trading",
+				Exchange:     assetA.Exchange,
+				Params:       op.Params,
+			})
+			watchList = append(watchList, symbol.WatchTarget{
+				Detail:       detailB,
+				StrategyName: "pair_trading",
+				Exchange:     assetB.Exchange,
+				Params:       op.Params,
+			})
+		}
+	}
+
+	return watchList, nil
+}
+
+// buildOperationsFromConfigs はデプロイされたスナイパーを作戦構成に従って適切にグループ化・割り当てし、Operation一覧を構築します。
+func buildOperationsFromConfigs(
+	dataPool tick.DataPool,
+	snipers []*sniper.Sniper,
+	opTargets []portfolio.OperationTarget,
+) []sniper.Operation {
+	var operations []sniper.Operation
+	snipersBySymbol := make(map[string][]*sniper.Sniper)
+	pairSnipersBySymbol := make(map[string]*sniper.Sniper)
+
+	for _, s := range snipers {
+		if s.Strategy.Name() == "InstructionStrategy" {
+			pairSnipersBySymbol[s.Detail.Code] = s
+		} else {
+			snipersBySymbol[s.Detail.Code] = append(snipersBySymbol[s.Detail.Code], s)
+		}
+	}
+
+	// operations.json から明示的に Operation を組み立てる
+	for _, op := range opTargets {
+		switch op.Type {
+		case "default":
+			symbolCode, _ := op.Params["symbol"].(string)
+			symSnipers, ok := snipersBySymbol[symbolCode]
+			if ok && len(symSnipers) > 0 {
+				nest := buildNestHelper(symbolCode, symSnipers)
+				operations = append(operations, sniper.NewDefaultOperation(op.ID, nest))
+				delete(snipersBySymbol, symbolCode)
+			}
+
+		case "pair_trading":
+			symbolA, _ := op.Params["symbol_a"].(string)
+			symbolB, _ := op.Params["symbol_b"].(string)
+			threshold, _ := op.Params["threshold"].(float64)
+			qty, _ := op.Params["qty"].(float64)
+
+			sniperA, okA := pairSnipersBySymbol[symbolA]
+			sniperB, okB := pairSnipersBySymbol[symbolB]
+
+			if okA && okB {
+				nestA := buildNestHelper(symbolA, []*sniper.Sniper{sniperA})
+				nestB := buildNestHelper(symbolB, []*sniper.Sniper{sniperB})
+
+				stratA := sniperA.Strategy.(*sniper.InstructionStrategy)
+				stratB := sniperB.Strategy.(*sniper.InstructionStrategy)
+
+				pairOp := sniper.NewPairTradingOperation(
+					op.ID, nestA, nestB, stratA, stratB, dataPool, threshold, qty, sniperA.Logger,
+				)
+				operations = append(operations, pairOp)
+
+				slog.Info("ペアトレード作戦を構築しました", slog.String("opID", op.ID), slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
+			} else {
+				slog.Warn("ペアトレードに必要なスナイパーが不足しています", slog.String("symbolA", symbolA), slog.String("symbolB", symbolB))
+			}
+		}
+	}
+
+	// 未配備の「はぐれスナイパー」を自動救済するフォールバック配備（セーフティネット）
+	for symbol, symSnipers := range snipersBySymbol {
+		nest := buildNestHelper(symbol, symSnipers)
+		opID := fmt.Sprintf("FallbackOp_%s", symbol)
+		operations = append(operations, sniper.NewDefaultOperation(opID, nest))
+		slog.Warn("作戦に未登録のスナイパーをフォールバック作戦として自動配備しました", slog.String("symbol", symbol))
+	}
+
+	return operations
 }
 
 // ---------------------------------------------------------
@@ -197,35 +281,4 @@ func buildNestHelper(symbol string, symSnipers []*sniper.Sniper) *sniper.SniperN
 	return sniper.NewSniperNest(symbol, spotter, symSnipers)
 }
 
-type PairTradingParams struct {
-	Partner   string
-	Threshold float64
-	Qty       float64
-	IsPrimary bool
-}
 
-func parsePairTradingParams(params map[string]interface{}) (PairTradingParams, error) {
-	var p PairTradingParams
-	raw, ok := params["pair_trading"]
-	if !ok {
-		return p, fmt.Errorf("pair_trading params missing")
-	}
-	m, ok := raw.(map[string]interface{})
-	if !ok {
-		return p, fmt.Errorf("pair_trading params is not a map")
-	}
-
-	if partner, ok := m["partner"].(string); ok {
-		p.Partner = partner
-	}
-	if threshold, ok := m["threshold"].(float64); ok {
-		p.Threshold = threshold
-	}
-	if qty, ok := m["qty"].(float64); ok {
-		p.Qty = qty
-	}
-	if isPrimary, ok := m["is_primary"].(bool); ok {
-		p.IsPrimary = isPrimary
-	}
-	return p, nil
-}
