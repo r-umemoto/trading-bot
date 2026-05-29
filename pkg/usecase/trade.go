@@ -10,6 +10,7 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/report"
 	"github.com/r-umemoto/trading-bot/pkg/domain/service"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
@@ -21,13 +22,15 @@ type TradeUseCase struct {
 	gateway             market.MarketGateway
 	lastZombieReconcile map[string]time.Time
 	zombieMu            sync.Mutex
+	reportRepo          report.Repository
 }
 
-func NewTradeUseCase(operations []sniper.Operation, gateway market.MarketGateway) *TradeUseCase {
+func NewTradeUseCase(operations []sniper.Operation, gateway market.MarketGateway, reportRepo report.Repository) *TradeUseCase {
 	return &TradeUseCase{
 		operations:          operations,
 		gateway:             gateway,
 		lastZombieReconcile: make(map[string]time.Time),
+		reportRepo:          reportRepo,
 	}
 }
 
@@ -162,9 +165,55 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 	for _, op := range u.operations {
 		targets = append(targets, op.GetReportableTargets()...)
 	}
-	report := service.GeneratePerformanceReport(u, targets, u.gateway.DataPool())
+	reportData := service.GeneratePerformanceReport(u, targets, u.gateway.DataPool())
 	presenter := NewReportPresenter()
-	presenter.PrintPerformanceReport(report, enableCSV)
+	presenter.PrintPerformanceReport(reportData, enableCSV)
+
+	// 自動保存ロジックの追加
+	var details []report.StrategyDetail
+	for _, p := range reportData.Combined {
+		details = append(details, report.StrategyDetail{
+			Name:          p.Name,
+			Trades:        p.Trades,
+			Wins:          p.Wins,
+			Losses:        p.Losses,
+			RealizedPnL:   p.RealizedPnL,
+			UnrealizedPnL: p.UnrealizedPnL,
+		})
+	}
+
+	// 日本時間 (JST) での日付文字列を取得
+	jst, err := time.LoadLocation("Asia/Tokyo")
+	var dateStr string
+	if err == nil {
+		dateStr = time.Now().In(jst).Format("2006-01-02")
+	} else {
+		dateStr = time.Now().Format("2006-01-02")
+	}
+
+	dailyReport := &report.DailyReport{
+		Date:          dateStr,
+		UpdatedAt:     time.Now(),
+		Trades:        reportData.Total.Trades,
+		Wins:          reportData.Total.Wins,
+		Losses:        reportData.Total.Losses,
+		WinRate:       0.0,
+		RealizedPnL:   reportData.Total.RealizedPnL,
+		UnrealizedPnL: reportData.Total.UnrealizedPnL,
+		TotalPnL:      reportData.Total.RealizedPnL + reportData.Total.UnrealizedPnL,
+		Details:       details,
+	}
+	if dailyReport.Trades > 0 {
+		dailyReport.WinRate = float64(dailyReport.Wins) / float64(dailyReport.Trades) * 100
+	}
+
+	if u.reportRepo != nil {
+		if err := u.reportRepo.Save(context.Background(), dailyReport); err != nil {
+			slog.Error("❌ 成績の自動保存に失敗しました", slog.Any("error", err))
+		} else {
+			slog.Info("💾 成績を自動保存しました", slog.String("date", dailyReport.Date))
+		}
+	}
 }
 
 func (u *TradeUseCase) GetPerformance(sniperID string) sniper.Performance {

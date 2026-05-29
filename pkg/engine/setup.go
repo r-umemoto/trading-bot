@@ -12,14 +12,18 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/config"
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
+	"github.com/r-umemoto/trading-bot/pkg/domain/report"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
+	reportinfra "github.com/r-umemoto/trading-bot/pkg/infra/report"
 	"github.com/r-umemoto/trading-bot/pkg/portfolio"
 	"github.com/r-umemoto/trading-bot/pkg/usecase"
+
+	"cloud.google.com/go/firestore"
 )
 
 // BuildEngine は、システム全体を俯瞰する「目次」です
@@ -45,12 +49,41 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	// 4. 作戦（Operation）の構築
 	operations := buildOperationsFromConfigs(gateway.DataPool(), snipers, opTargets)
 
-	tradeUC := usecase.NewTradeUseCase(operations, gateway)
+	reportRepo := buildReportRepository(ctx)
+
+	tradeUC := usecase.NewTradeUseCase(operations, gateway, reportRepo)
 	systemUC := usecase.NewSystemUseCase(operations, gateway)
 	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
 	// 5. エンジンの完成
 	return NewEngine(handler), nil
+}
+
+// buildReportRepository は環境変数に応じてFirestoreまたはローカルJSONの成績保存リポジトリを構築します。
+func buildReportRepository(ctx context.Context) report.Repository {
+	var reportRepo report.Repository
+	creds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	projectID := os.Getenv("GCP_PROJECT_ID")
+	if projectID == "" {
+		projectID = "trading-bot-project" // デフォルト値
+	}
+
+	if creds != "" {
+		fsClient, err := firestore.NewClient(ctx, projectID)
+		if err == nil {
+			reportRepo = reportinfra.NewFirestoreRepository(fsClient)
+			slog.Info("💾 [SETUP] Firestore成績保存リポジトリを初期化しました", slog.String("projectID", projectID))
+		} else {
+			slog.Error("❌ [SETUP] Firestoreクライアント初期化エラー。ローカル保存にフォールバックします", slog.Any("error", err))
+		}
+	}
+
+	if reportRepo == nil {
+		reportRepo = reportinfra.NewLocalRepository("./data/reports")
+		slog.Info("💾 [SETUP] ローカルJSON成績保存リポジトリを初期化しました (./data/reports)")
+	}
+
+	return reportRepo
 }
 
 // ---------------------------------------------------------

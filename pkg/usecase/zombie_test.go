@@ -26,7 +26,7 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 	op := sniper.NewDefaultOperation("Op_7201", nest)
 
 	// 3. TradeUseCase の生成
-	u := NewTradeUseCase([]sniper.Operation{op}, g)
+	u := NewTradeUseCase([]sniper.Operation{op}, g, nil)
 
 	// 4. ベース時刻の設定と注文の送信
 	baseTime := time.Date(2026, 5, 29, 10, 0, 0, 0, time.UTC)
