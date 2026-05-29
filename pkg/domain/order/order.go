@@ -2,6 +2,7 @@ package order
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -191,3 +192,14 @@ type SendOrderInput struct {
 	Order   *Order
 	Request OrderRequest
 }
+
+// GetCancelTimeout は注文の理由や重要度に応じて最適なキャンセルタイムアウト値を返します
+func (o *Order) GetCancelTimeout() time.Duration {
+	// 緊急決済（ForceExitやPairExitなど）の場合は非常に短い2秒タイムアウト
+	if strings.Contains(o.Reason, "Exit") || strings.Contains(o.Reason, "Force") {
+		return 2 * time.Second
+	}
+	// 通常の指値・ブレイクアウト注文キャンセルなどは標準の10秒タイムアウト
+	return 10 * time.Second
+}
+
