@@ -43,26 +43,38 @@ type SyncBacktestGateway struct {
 	initialDepths     map[string]float64
 	cumulativeVolumes map[string]float64
 	cancelRequested   map[string]bool
+
+	// 障害注入用のサイレントキャンセル用マップ
+	simulateCancelSilent map[string]bool
 }
 
 func NewSyncBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBacktestGateway {
 	g := &SyncBacktestGateway{
-		Model:             model,
-		Latency:           latency,
-		orders:            make(map[string]*order.Order),
-		orderTypes:        make(map[string]order.OrderType),
-		tickCh:            make(chan tick.Tick, 1000),
-		orderCh:           make(chan order.Orders, 1000),
-		lastTicks:         make(map[string]tick.Tick),
-		lastTotalVolumes:  make(map[string]float64),
-		activeAt:          make(map[string]time.Time),
-		cancelActiveAt:    make(map[string]time.Time),
-		initialDepths:     make(map[string]float64),
-		cumulativeVolumes: make(map[string]float64),
-		cancelRequested:   make(map[string]bool),
+		Model:                model,
+		Latency:              latency,
+		orders:               make(map[string]*order.Order),
+		orderTypes:           make(map[string]order.OrderType),
+		tickCh:               make(chan tick.Tick, 1000),
+		orderCh:              make(chan order.Orders, 1000),
+		lastTicks:            make(map[string]tick.Tick),
+		lastTotalVolumes:     make(map[string]float64),
+		activeAt:             make(map[string]time.Time),
+		cancelActiveAt:       make(map[string]time.Time),
+		initialDepths:        make(map[string]float64),
+		cumulativeVolumes:    make(map[string]float64),
+		cancelRequested:      make(map[string]bool),
+		simulateCancelSilent: make(map[string]bool),
 	}
 	g.dataPool = tick.NewDefaultDataPool(nil)
 	return g
+}
+
+// InjectCancelSilentFault は指定された注文IDに対してキャンセル成功通知を握りつぶす障害を注入します
+func (g *SyncBacktestGateway) InjectCancelSilentFault(orderID string) {
+	if g.simulateCancelSilent == nil {
+		g.simulateCancelSilent = make(map[string]bool)
+	}
+	g.simulateCancelSilent[orderID] = true
 }
 
 func NewBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBacktestGateway {
@@ -193,6 +205,10 @@ func (g *SyncBacktestGateway) ProcessTick(t tick.Tick) {
 		if g.cancelRequested[id] {
 			if cancelTime, ok := g.cancelActiveAt[id]; !ok || !g.currentTime.Before(cancelTime) {
 				ord.Status = order.ORDER_STATUS_CANCELED
+				if g.simulateCancelSilent != nil && g.simulateCancelSilent[id] {
+					// 障害注入: キャンセル成功をサイレント化（イベント通知を遮断）
+					continue
+				}
 				executed = true
 				continue
 			}
