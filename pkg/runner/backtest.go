@@ -367,7 +367,7 @@ func RunBacktest() error {
 	}
 	report := service.GeneratePerformanceReport(provider, reportTargets, gateway.DataPool())
 	presenter := usecase.NewReportPresenter()
-	presenter.PrintPerformanceReport(report, false)
+	presenter.PrintPerformanceReport(report)
 
 	return nil
 }

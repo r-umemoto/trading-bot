@@ -167,19 +167,40 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 	}
 	reportData := service.GeneratePerformanceReport(u, targets, u.gateway.DataPool())
 	presenter := NewReportPresenter()
-	presenter.PrintPerformanceReport(reportData, enableCSV)
+	presenter.PrintPerformanceReport(reportData)
 
 	// 自動保存ロジックの追加
-	var details []report.StrategyDetail
-	for _, p := range reportData.Combined {
-		details = append(details, report.StrategyDetail{
+	mapAggregated := func(p *service.AggregatedPerformance) report.AggregatedPerformance {
+		if p == nil {
+			return report.AggregatedPerformance{}
+		}
+		winRate := 0.0
+		if p.Trades > 0 {
+			winRate = float64(p.Wins) / float64(p.Trades) * 100
+		}
+		return report.AggregatedPerformance{
 			Name:          p.Name,
 			Trades:        p.Trades,
 			Wins:          p.Wins,
 			Losses:        p.Losses,
+			WinRate:       winRate,
 			RealizedPnL:   p.RealizedPnL,
 			UnrealizedPnL: p.UnrealizedPnL,
-		})
+			TotalPnL:      p.RealizedPnL + p.UnrealizedPnL,
+		}
+	}
+
+	var symbols []report.AggregatedPerformance
+	for _, p := range reportData.Symbols {
+		symbols = append(symbols, mapAggregated(p))
+	}
+	var strats []report.AggregatedPerformance
+	for _, p := range reportData.Strats {
+		strats = append(strats, mapAggregated(p))
+	}
+	var combined []report.AggregatedPerformance
+	for _, p := range reportData.Combined {
+		combined = append(combined, mapAggregated(p))
 	}
 
 	// 日本時間 (JST) での日付文字列を取得
@@ -192,19 +213,12 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 	}
 
 	dailyReport := &report.DailyReport{
-		Date:          dateStr,
-		UpdatedAt:     time.Now(),
-		Trades:        reportData.Total.Trades,
-		Wins:          reportData.Total.Wins,
-		Losses:        reportData.Total.Losses,
-		WinRate:       0.0,
-		RealizedPnL:   reportData.Total.RealizedPnL,
-		UnrealizedPnL: reportData.Total.UnrealizedPnL,
-		TotalPnL:      reportData.Total.RealizedPnL + reportData.Total.UnrealizedPnL,
-		Details:       details,
-	}
-	if dailyReport.Trades > 0 {
-		dailyReport.WinRate = float64(dailyReport.Wins) / float64(dailyReport.Trades) * 100
+		Date:      dateStr,
+		UpdatedAt: time.Now(),
+		Total:     mapAggregated(reportData.Total),
+		Symbols:   symbols,
+		Strats:    strats,
+		Combined:  combined,
 	}
 
 	if u.reportRepo != nil {
