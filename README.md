@@ -233,7 +233,7 @@ graph LR
     GO_Bot -->|環境変数にGCP認証情報がある場合| Firestore
     
     Firestore -->|ドキュメント作成/更新トリガー| Eventarc
-    Eventarc -->|イベント転送 (Protobufデシリアライズ)| CloudFunction
+    Eventarc -->|イベント転送 - Protobufデシリアライズ| CloudFunction
     CloudFunction -->|Tweepy経由でツイート投稿| X_API
 
     %% クラス割り当て
