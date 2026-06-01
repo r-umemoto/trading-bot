@@ -49,15 +49,17 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 		if curretPrice < s.highPrice*0.80 && avgPrice > curretPrice {
 			s.highPrice = 0
 			return brain.Signal{
-				Action:   brain.ACTION_SELL,
-				Quantity: holdQty,
+				Action:    brain.ACTION_SELL,
+				TradeType: brain.TradeExit,
+				Quantity:  holdQty,
 			}
 		}
 		if curretPrice < avgPrice*0.997 {
 			s.highPrice = 0
 			return brain.Signal{
-				Action:   brain.ACTION_SELL,
-				Quantity: holdQty,
+				Action:    brain.ACTION_SELL,
+				TradeType: brain.TradeExit,
+				Quantity:  holdQty,
 			}
 		}
 		if curretPrice > s.highPrice {
@@ -84,8 +86,9 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 	// 終値が3回連続で上昇しているかチェック
 	if bar1.Close < bar2.Close && bar2.Close < bar3.Close {
 		return brain.Signal{
-			Action:   brain.ACTION_BUY,
-			Quantity: 100,
+			Action:    brain.ACTION_BUY,
+			TradeType: brain.TradeEntry,
+			Quantity:  100,
 		}
 	}
 

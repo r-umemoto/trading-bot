@@ -14,9 +14,17 @@ const (
 	ACTION_HOLD Action = "HOLD"
 )
 
+type TradeType int
+
+const (
+	TradeEntry TradeType = iota // 新規建て
+	TradeExit                   // 返済決済
+)
+
 // Signal は戦略がスナイパーに返す「命令」です
 type Signal struct {
 	Action    Action
+	TradeType TradeType // 🌟 新規か決済か
 	Quantity  float64
 	Price     float64
 	OrderType order.OrderType

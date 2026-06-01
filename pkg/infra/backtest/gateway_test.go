@@ -2,10 +2,15 @@ package backtest
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
+	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
@@ -223,5 +228,169 @@ func TestGatewayLatency_VolumeModelDeferredDepth(t *testing.T) {
 	orders, _ := g.GetOrders(context.Background())
 	if orders.Orders[0].Status != order.ORDER_STATUS_FILLED {
 		t.Errorf("expected order to be filled via volume digest, got %v", orders.Orders[0].Status)
+	}
+}
+
+func TestGateway_ShortCoverReproduction(t *testing.T) {
+	// 遅延なし、価格モデル
+	g := NewBacktestGateway(ExecutionModelPrice, 0)
+	baseTime := time.Now()
+
+	// 1. 新規空売りを発注 (7201, 売り, 信用新規)
+	_, err := g.SendOrder(context.Background(), order.SendOrderInput{
+		Order: &order.Order{
+			Symbol:     "7201",
+			Action:     order.ACTION_SELL,
+			OrderQty:   100,
+			OrderPrice: 400.0,
+			CashMargin: order.CASH_MARGIN_MARGIN_ENTRY,
+		},
+		Request: order.OrderRequest{
+			OrderType: order.ORDER_TYPE_LIMIT,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendOrder failed: %v", err)
+	}
+
+	// 2. 約定させて「売り建玉」を持たせる
+	g.ProcessTick(tick.Tick{
+		Symbol:            "7201",
+		Price:             400.0,
+		CurrentPriceTime: baseTime,
+	})
+
+	positions, _ := g.GetPositions(context.Background(), order.PRODUCT_MARGIN)
+	if len(positions) != 1 || positions[0].Action != order.ACTION_SELL {
+		t.Fatalf("expected 1 short position, got %+v", positions)
+	}
+
+	// 3. すでに売り建玉がある状態で、新規買い注文（両建て）を送信しようとする
+	// 両建て規制によりエラーになるはず
+	_, err = g.SendOrder(context.Background(), order.SendOrderInput{
+		Order: &order.Order{
+			Symbol:     "7201",
+			Action:     order.ACTION_BUY,
+			OrderQty:   100,
+			OrderPrice: 395.0,
+			CashMargin: order.CASH_MARGIN_MARGIN_ENTRY,
+		},
+		Request: order.OrderRequest{
+			OrderType: order.ORDER_TYPE_LIMIT,
+		},
+	})
+	if err == nil {
+		t.Errorf("expected error due to double position restriction, but got nil")
+	}
+
+	// 4. 正しい返済注文（CashMargin: 3）を送信
+	// 口座に売り建玉があるため、これは成功するはず
+	_, err = g.SendOrder(context.Background(), order.SendOrderInput{
+		Order: &order.Order{
+			Symbol:     "7201",
+			Action:     order.ACTION_BUY,
+			OrderQty:   100,
+			OrderPrice: 395.0,
+			CashMargin: order.CASH_MARGIN_MARGIN_EXIT,
+		},
+		Request: order.OrderRequest{
+			OrderType: order.ORDER_TYPE_LIMIT,
+		},
+	})
+	if err != nil {
+		t.Errorf("expected success for correct exit order, but got error: %v", err)
+	}
+}
+
+type MockSniperStrategy struct {
+	hasPosition bool
+}
+
+func (m *MockSniperStrategy) Name() string { return "mock_sniper_strategy" }
+func (m *MockSniperStrategy) Evaluate(input strategy.StrategyInput) brain.Signal {
+	if !m.hasPosition {
+		// 最初は空売りエントリー
+		return brain.Signal{
+			Action:    brain.ACTION_SELL,
+			TradeType: brain.TradeEntry,
+			Price:     400.0,
+			Quantity:  100,
+			Reason:    "PairEntry_SellA",
+		}
+	} else {
+		// エントリー後は買い戻し決済
+		return brain.Signal{
+			Action:    brain.ACTION_BUY,
+			TradeType: brain.TradeExit,
+			Price:     395.0,
+			Quantity:  100,
+			Reason:    "PairExit_BuyA",
+		}
+	}
+}
+func (m *MockSniperStrategy) AnalysisLogger() *slog.Logger { return nil }
+func (m *MockSniperStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal {
+	return brain.Signal{Action: brain.ACTION_HOLD}
+}
+func (m *MockSniperStrategy) ShouldCancel(input strategy.StrategyInput, ord *order.Order) bool {
+	return false
+}
+
+func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
+	g := NewBacktestGateway(ExecutionModelPrice, 0)
+	detail := symbol.Symbol{Code: "7201"}
+	strat := &MockSniperStrategy{}
+	s := sniper.NewSniper("test-sniper", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	baseTime := time.Now()
+
+	// ---- 1. 最初のエントリー（新規空売り）の評価と発注 ----
+	obs1 := sniper.Observation{
+		Tick: tick.Tick{Price: 400.0, CurrentPriceTime: baseTime},
+	}
+	bullet1 := s.Tick(obs1)
+	if !bullet1.HasOrder() {
+		t.Fatalf("expected entry order to be generated")
+	}
+
+	// [バグの検証1]
+	// 新規空売り (ACTION_SELL) 注文のはずなので、CashMargin は CASH_MARGIN_MARGIN_ENTRY (2) であり、
+	// ClosePositions も空、ClosePositionOrder も NONE であるべきです。
+	// もしバグがあると、CashMargin が返済になってしまい、SendOrder がエラーになります。
+	_, err := g.SendOrder(context.Background(), order.SendOrderInput{Order: bullet1.Order, Request: *bullet1.Request})
+	if err != nil {
+		t.Fatalf("🚨 【バグ再現】新規空売りの発注に失敗しました。新規注文が返済注文に誤変換されています: %v", err)
+	}
+
+	// 注文約定（ポジション保有）
+	g.ProcessTick(tick.Tick{
+		Symbol:            "7201",
+		Price:             400.0,
+		CurrentPriceTime:  baseTime.Add(time.Second),
+		CurrentPriceStatus: 1,
+	})
+
+	// 戦略の状態を「ポジションあり」に更新
+	strat.hasPosition = true
+
+	// ---- 2. 決済（買い戻し）の評価と発注 ----
+	// ゲートウェイからポジションを取得してスナイパーに渡す
+	positions, _ := g.GetPositions(context.Background(), order.PRODUCT_MARGIN)
+	obs2 := sniper.Observation{
+		Tick:      tick.Tick{Price: 395.0, CurrentPriceTime: baseTime.Add(2 * time.Second)},
+		Positions: positions,
+	}
+
+	bullet2 := s.Tick(obs2)
+	if !bullet2.HasOrder() {
+		t.Fatalf("expected exit order to be generated")
+	}
+
+	// [バグの検証2]
+	// 買い戻し決済 (ACTION_BUY) 注文なので、正しく返済 (CashMargin: 3) としてカブコムに送られる必要があります。
+	// もしバグがあると、CashMargin: 2 (新規) のまま送られてしまい、両建て規制に引っかかってエラーになります。
+	_, err2 := g.SendOrder(context.Background(), order.SendOrderInput{Order: bullet2.Order, Request: *bullet2.Request})
+	if err2 != nil {
+		t.Fatalf("🚨 【バグ再現】買い戻し決済の発注に失敗しました。決済注文が新規注文に誤変換されています: %v", err2)
 	}
 }
