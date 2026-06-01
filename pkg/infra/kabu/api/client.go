@@ -44,13 +44,26 @@ func (c *KabuClient) doRequest(method, endpoint string, body io.Reader) (*http.R
 	return c.HTTPClient.Do(req)
 }
 
+// KabuAPIError はkabuステーションAPIが正常コード(200)以外を返した際のエラー情報です
+type KabuAPIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *KabuAPIError) Error() string {
+	return fmt.Sprintf("APIエラー (Status: %d): %s", e.StatusCode, e.Body)
+}
+
 // DecodeResponse はHTTPレスポンスのステータスコードをチェックし、正常であればJSONデコードを行います
 func (c *KabuClient) DecodeResponse(resp *http.Response, out interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("APIエラー (Status: %d): %s", resp.StatusCode, string(body))
+		return &KabuAPIError{
+			StatusCode: resp.StatusCode,
+			Body:       string(body),
+		}
 	}
 
 	if out == nil {

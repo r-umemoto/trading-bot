@@ -3,7 +3,6 @@ package usecase
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -145,7 +144,10 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 	if b.HasCancel() {
 		err := u.gateway.CancelOrder(ctx, b.CancelOrderID)
 		if err != nil {
-			fmt.Printf("キャンセル失敗 (ID: %s): %v\n", b.CancelOrderID, err)
+			slog.Error("❌ キャンセル注文の送信に失敗しました",
+				slog.String("orderID", b.CancelOrderID),
+				slog.Any("error", err),
+			)
 		}
 	}
 

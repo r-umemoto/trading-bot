@@ -57,7 +57,9 @@ func RunBacktest() error {
 	// 3. バックテスト用インフラ（Mock Gateway）の準備
 	gateway := backtest.NewSyncBacktestGateway(execModel, latency)
 	dataPool := gateway.DataPool()
-	_, _ = gateway.Listen(context.Background())
+	if _, err := gateway.Listen(context.Background()); err != nil {
+		return fmt.Errorf("バックテスト用ゲートウェイのListen開始に失敗: %w", err)
+	}
 	tickCh := gateway.TickCh()
 	orderReportCh := gateway.OrderCh()
 
@@ -247,7 +249,7 @@ func RunBacktest() error {
 	for i, s := range snipers {
 		cleanableTargets[i] = s
 	}
-	_ = usecase.NewPositionCleaner(cleanableTargets, gateway)
+	usecase.NewPositionCleaner(cleanableTargets, gateway)
 
 	// 5. Feederの準備
 	csvTickChan := make(chan tick.Tick, 1000)
@@ -314,7 +316,10 @@ func RunBacktest() error {
 	}
 
 	// 7. 取引終了後のクリーンアップ
-	ordersToMopUp, _ := gateway.GetOrders(context.Background())
+	ordersToMopUp, err := gateway.GetOrders(context.Background())
+	if err != nil {
+		return fmt.Errorf("クリーンアップ用注文情報の取得に失敗しました: %w", err)
+	}
 	fmt.Printf("クリーンアップ開始: 未約定の可能性がある注文数 %d件\n", len(ordersToMopUp.Orders))
 	for _, o := range ordersToMopUp.Orders {
 		if !o.IsCompleted() {
@@ -349,8 +354,14 @@ func RunBacktest() error {
 	fmt.Printf("バックテスト完了: 総処理Tick数 %d件\n", tickCount)
 
 	// 結果の出力
-	positions, _ := gateway.GetPositions(context.Background(), order.PRODICT_CASH)
-	ords, _ := gateway.GetOrders(context.Background())
+	positions, err := gateway.GetPositions(context.Background(), order.PRODICT_CASH)
+	if err != nil {
+		return fmt.Errorf("最終建玉情報の取得に失敗しました: %w", err)
+	}
+	ords, err := gateway.GetOrders(context.Background())
+	if err != nil {
+		return fmt.Errorf("総発注情報の取得に失敗しました: %w", err)
+	}
 	fmt.Println("\n=============================================")
 	fmt.Println("             バックテスト結果")
 	fmt.Println("=============================================")
