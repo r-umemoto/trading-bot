@@ -2,9 +2,11 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
@@ -89,5 +91,77 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 	// 自己修復により、ローカルステータスが CANCELED に更新されているはず
 	if ordInSniper.Status != order.ORDER_STATUS_CANCELED {
 		t.Errorf("expected zombie self-healing to resolve status to CANCELED, but got %v", ordInSniper.Status)
+	}
+}
+
+type faultInjectingGateway struct {
+	market.MarketGateway
+	failSend bool
+}
+
+func (f *faultInjectingGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
+	if f.failSend {
+		// input.Order のコピーを作成して渡すことで、バックテスト用ゲートウェイによるポインタ書き換えの影響を防ぎます
+		clonedOrd := *input.Order
+		clonedInput := order.SendOrderInput{
+			Order:   &clonedOrd,
+			Request: input.Request,
+		}
+		_, _ = f.MarketGateway.SendOrder(ctx, clonedInput)
+		return input.Order, fmt.Errorf("カブコムAPI発注失敗: タイムアウトエラー(5秒)")
+	}
+	return f.MarketGateway.SendOrder(ctx, input)
+}
+
+func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
+	// 1. バックテスト用ゲートウェイの生成 (遅延 100ms)
+	g := backtest.NewSyncBacktestGateway(backtest.ExecutionModelTouch, 100*time.Millisecond)
+
+	// 障害注入用のデコレータを用意
+	fg := &faultInjectingGateway{MarketGateway: g, failSend: true}
+
+	// 2. スナイパーと作戦の構築
+	detail := symbol.Symbol{Code: "7201"}
+	strategyA := sniper.NewInstructionStrategy()
+	policy := &strategy.TouchTTLPolicy{TTL: 2000 * time.Millisecond}
+	s := sniper.NewSniper("test_sniper_7201", detail, strategyA, policy, order.EXCHANGE_TOSHO, nil)
+	nest := sniper.NewSniperNest("7201", sniper.NewSpotter(detail, nil), []*sniper.Sniper{s})
+	op := sniper.NewDefaultOperation("Op_7201", nest)
+
+	// 3. TradeUseCase の生成
+	u := NewTradeUseCase([]sniper.Operation{op}, fg, nil)
+
+	// 4. ベース時刻の設定と注文の送信
+	baseTime := time.Date(2026, 5, 29, 10, 0, 0, 0, time.UTC)
+	g.SetTime(baseTime)
+
+	ord := order.NewOrder("local-123", "7201", order.ACTION_BUY, 1000.0, 100)
+
+	// スナイパーのActiveOrdersに仮の注文として追加 (火を入れる前の状態)
+	s.ActiveOrders = append(s.ActiveOrders, ord)
+
+	bullet := sniper.Bullet{
+		Order: ord,
+		Request: &order.OrderRequest{
+			OrderType: order.ORDER_TYPE_LIMIT,
+		},
+	}
+
+	// 5. fire を実行。SendOrder はエラーを返すが、証券会社側には受理され、GetOrders による自動照合で救出されるはず
+	u.fire(context.Background(), op, s.ID, bullet)
+
+	// s.ActiveOrders に注文が残っており、かつ ID がサーバー側 (bt_order_1) に書き換わっていることを確認
+	activeOrders := s.GetActiveOrders()
+	if len(activeOrders) != 1 {
+		t.Fatalf("expected 1 active order, got %d", len(activeOrders))
+	}
+
+	o := activeOrders[0]
+	if o.ID != "bt_order_1" {
+		t.Errorf("expected reconciled order ID to be updated to 'bt_order_1', got %s", o.ID)
+	}
+
+	if o.InternalState != order.STATE_ACTIVE {
+		t.Errorf("expected internal state to be STATE_ACTIVE, got %v", o.InternalState)
 	}
 }
