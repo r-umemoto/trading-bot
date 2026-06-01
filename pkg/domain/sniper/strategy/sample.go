@@ -36,9 +36,7 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 	avgPrice := input.AveragePrice()
 
 	if !input.LatestTick.IsExecution() {
-		return brain.Signal{
-			Action: brain.ACTION_HOLD,
-		}
+		return brain.NewHold()
 	}
 
 	if holdQty > 0 {
@@ -48,32 +46,22 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 		}
 		if curretPrice < s.highPrice*0.80 && avgPrice > curretPrice {
 			s.highPrice = 0
-			return brain.Signal{
-				Action:   brain.ACTION_SELL,
-				Quantity: holdQty,
-			}
+			return brain.NewSellExit(holdQty, 0, 0, "trailing stop")
 		}
 		if curretPrice < avgPrice*0.997 {
 			s.highPrice = 0
-			return brain.Signal{
-				Action:   brain.ACTION_SELL,
-				Quantity: holdQty,
-			}
+			return brain.NewSellExit(holdQty, 0, 0, "loss cut")
 		}
 		if curretPrice > s.highPrice {
 			s.highPrice = curretPrice
 		}
-		return brain.Signal{
-			Action: brain.ACTION_HOLD,
-		}
+		return brain.NewHold()
 	}
 
 	// 1分足の終値が3回連続で上昇したら買い
 	bars := s.oneMinBar.Bars()
 	if len(bars) < 3 {
-		return brain.Signal{
-			Action: brain.ACTION_HOLD,
-		}
+		return brain.NewHold()
 	}
 
 	// 過去3本のバーの終値を取得
@@ -83,17 +71,14 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 
 	// 終値が3回連続で上昇しているかチェック
 	if bar1.Close < bar2.Close && bar2.Close < bar3.Close {
-		return brain.Signal{
-			Action:   brain.ACTION_BUY,
-			Quantity: 100,
-		}
+		return brain.NewBuyEntry(100, 0, 0, "3 consecutive bars rise")
 	}
 
-	return brain.Signal{Action: brain.ACTION_HOLD}
+	return brain.NewHold()
 }
 
 func (s *SampleStrategy) IfDone(input StrategyInput, prevSignal brain.Signal) brain.Signal {
-	return brain.Signal{Action: brain.ACTION_HOLD}
+	return brain.NewHold()
 }
 
 func (s *SampleStrategy) ShouldCancel(input StrategyInput, ord *order.Order) bool {

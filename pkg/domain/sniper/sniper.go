@@ -213,12 +213,17 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 	marketAction, _ := signal.Action.ToMarketAction()
 
 	var closePositions []order.ClosePosition
-	if marketAction == order.ACTION_SELL {
-		closePositions, _ = s.matchPositionsToClose(obs, signal.Quantity)
+	isExit := (signal.TradeType == brain.TradeExit)
+
+	if isExit {
+		closePositions, _ = s.matchPositionsToClose(obs, marketAction, signal.Quantity)
 	}
 	entry := order.NewOrder(order.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
 	entry.InternalState = order.STATE_PENDING
-	entry.ClosePositions = closePositions
+	if isExit {
+		entry.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+		entry.ClosePositions = closePositions
+	}
 	entry.Reason = signal.Reason // 🌟 理由を記録
 
 	currentPos := s.calculatePosition(obs.Positions)
@@ -236,6 +241,7 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 			exitPrice = s.Detail.RoundPrice(exitPrice)
 		}
 		exit = order.NewOrder(order.GenerateLocalID(), s.Detail.Code, exitAction, exitPrice, signal.Quantity)
+		exit.CashMargin = order.CASH_MARGIN_MARGIN_EXIT // 🌟 IFD子注文は常に返済注文
 		exit.InternalState = order.STATE_PREPARING
 		exit.Reason = ifDoneSignal.Reason // 🌟 IFD注文の理由も記録
 	}
@@ -323,26 +329,35 @@ func (s *Sniper) wrapRequest(o *order.Order) (*order.Order, order.OrderRequest) 
 		reqType = order.ORDER_TYPE_LIMIT
 	}
 	closeOrder := order.CLOSE_POSITION_ORDER_NONE
-	if o.Action == order.ACTION_SELL && len(o.ClosePositions) == 0 {
+	if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && len(o.ClosePositions) == 0 {
 		closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
 	}
 	req := order.NewOrderRequest(s.Exchange, order.SECURITY_TYPE_STOCK, s.MarginTradeType, s.AccountType, closeOrder, o.ClosePositions, reqType)
 	return o, req
 }
 
-func (s *Sniper) matchPositionsToClose(obs Observation, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
+func (s *Sniper) matchPositionsToClose(obs Observation, action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
 	var closePositions []order.ClosePosition
-	remainingSellQty := qty
+	remainingQty := qty
+
+	targetAction := order.ACTION_BUY
+	if action == order.ACTION_BUY {
+		targetAction = order.ACTION_SELL
+	}
+
 	for _, p := range obs.Positions {
-		if remainingSellQty <= 0 {
+		if p.Action != targetAction {
+			continue
+		}
+		if remainingQty <= 0 {
 			break
 		}
 		closeQty := p.LeavesQty
-		if closeQty > remainingSellQty {
-			closeQty = remainingSellQty
+		if closeQty > remainingQty {
+			closeQty = remainingQty
 		}
 		closePositions = append(closePositions, order.ClosePosition{HoldID: p.ExecutionID, Qty: closeQty})
-		remainingSellQty -= closeQty
+		remainingQty -= closeQty
 	}
 	return closePositions, order.CLOSE_POSITION_ORDER_NONE
 }

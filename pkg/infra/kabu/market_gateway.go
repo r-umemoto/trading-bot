@@ -450,7 +450,7 @@ func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) 
 				}
 
 				closeOrder := order.CLOSE_POSITION_ORDER_NONE
-				if child.Action == order.ACTION_SELL {
+				if child.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
 					closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
 				}
 

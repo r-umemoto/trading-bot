@@ -46,6 +46,9 @@ type SyncBacktestGateway struct {
 
 	// 障害注入用のサイレントキャンセル用マップ
 	simulateCancelSilent map[string]bool
+
+	// 建玉管理
+	positions map[string][]position.Position
 }
 
 func NewSyncBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBacktestGateway {
@@ -64,6 +67,7 @@ func NewSyncBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBa
 		cumulativeVolumes:    make(map[string]float64),
 		cancelRequested:      make(map[string]bool),
 		simulateCancelSilent: make(map[string]bool),
+		positions:            make(map[string][]position.Position),
 	}
 	g.dataPool = tick.NewDefaultDataPool(nil)
 	return g
@@ -107,10 +111,55 @@ func (g *SyncBacktestGateway) DataPool() tick.DataPool {
 }
 
 func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
+	ord := input.Order
+
+	// 信用返済または決済順序が指定されている場合は返済注文と判定
+	isExit := ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT ||
+		input.Request.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE ||
+		len(input.Request.ClosePositions) > 0
+
+	if isExit {
+		// 返済注文の場合：口座に反対の建玉が存在するか検証
+		targetAction := order.ACTION_BUY
+		if ord.Action == order.ACTION_BUY {
+			targetAction = order.ACTION_SELL
+		}
+
+		var availableQty float64
+		for _, p := range g.positions[ord.Symbol] {
+			if p.Action == targetAction {
+				availableQty += p.LeavesQty
+			}
+		}
+
+		if availableQty < ord.OrderQty {
+			// 建玉不足エラー
+			return nil, fmt.Errorf("カブコムAPI発注失敗: 発注失敗: APIエラー (Status: 400): {\"Code\":1009001,\"Message\":\"建玉が選択されていません。\"}")
+		}
+	} else {
+		// 新規注文の場合：デイトレ両建て規制をシミュレート
+		// すでに反対の建玉を保有している場合、新規で両建てしようとするとエラーを返す
+		targetAction := order.ACTION_BUY
+		if ord.Action == order.ACTION_BUY {
+			targetAction = order.ACTION_SELL
+		}
+
+		var oppositeQty float64
+		for _, p := range g.positions[ord.Symbol] {
+			if p.Action == targetAction {
+				oppositeQty += p.LeavesQty
+			}
+		}
+
+		if oppositeQty > 0 {
+			// 両建て規制エラー
+			return nil, fmt.Errorf("カブコムAPI発注失敗: 発注失敗: APIエラー (Status: 400): {\"Code\":1009001,\"Message\":\"建玉が選択されていません。\"}")
+		}
+	}
+
 	g.orderIdx++
 	orderID := fmt.Sprintf("bt_order_%d", g.orderIdx)
 
-	ord := input.Order
 	ord.ID = orderID
 	ord.Status = order.ORDER_STATUS_WAITING
 	ord.InternalState = order.STATE_ACTIVE
@@ -159,7 +208,15 @@ func (g *SyncBacktestGateway) GetOrders(ctx context.Context) (order.Orders, erro
 }
 
 func (g *SyncBacktestGateway) GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error) {
-	return []position.Position{}, nil
+	var allPos []position.Position
+	for _, posList := range g.positions {
+		for _, p := range posList {
+			if p.LeavesQty > 0 {
+				allPos = append(allPos, p)
+			}
+		}
+	}
+	return allPos, nil
 }
 
 func (g *SyncBacktestGateway) RegisterSymbol(ctx context.Context, req market.ResisterSymbolRequest) error {
@@ -304,6 +361,51 @@ func (g *SyncBacktestGateway) executeAll(id string, price float64) {
 	}
 	ord.AddExecution(exec)
 	ord.Status = order.ORDER_STATUS_FILLED
+
+	// --- ポジション管理の更新 ---
+	isExit := ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT ||
+		len(ord.ClosePositions) > 0
+
+	if isExit {
+		// 返済処理：建玉を減らす
+		targetAction := order.ACTION_BUY
+		if ord.Action == order.ACTION_BUY {
+			targetAction = order.ACTION_SELL
+		}
+
+		remainingToClose := ord.OrderQty
+		var updatedPositions []position.Position
+		for _, p := range g.positions[ord.Symbol] {
+			if p.Action == targetAction && remainingToClose > 0 {
+				if p.LeavesQty > remainingToClose {
+					p.LeavesQty -= remainingToClose
+					remainingToClose = 0
+					updatedPositions = append(updatedPositions, p)
+				} else {
+					remainingToClose -= p.LeavesQty
+				}
+			} else {
+				updatedPositions = append(updatedPositions, p)
+			}
+		}
+		g.positions[ord.Symbol] = updatedPositions
+	} else {
+		// 新規建て：建玉を増やす
+		if g.positions == nil {
+			g.positions = make(map[string][]position.Position)
+		}
+		newPos := position.Position{
+			ExecutionID: fmt.Sprintf("pos_%s", id),
+			Symbol:      ord.Symbol,
+			Exchange:    order.EXCHANGE_TOSHO,
+			Action:      ord.Action,
+			TradeType:   order.TRADE_TYPE_GENERAL_DAY,
+			AccountType: order.ACCOUNT_SPECIAL,
+			LeavesQty:   ord.OrderQty,
+			Price:       price,
+		}
+		g.positions[ord.Symbol] = append(g.positions[ord.Symbol], newPos)
+	}
 
 	// 🌟 IFD自動発火ロジック (ゲートウェイ側での自動実行)
 	if ord.IfDone != nil {
