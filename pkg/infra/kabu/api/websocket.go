@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -27,22 +28,37 @@ type PushMessage BoardResponse
 
 // Listen はサーバーに接続し、受信したデータをチャネル(ch)に流し続けます。
 // この関数はGoroutineで非同期に実行されることを想定しています。
-func (w *WSClient) Listen(ch chan<- PushMessage) {
+func (w *WSClient) Listen(ctx context.Context, ch chan<- PushMessage) error {
 	// 1. サーバーへ接続
 	fmt.Printf("WebSocket接続開始: %s\n", w.URL)
 	conn, _, err := websocket.DefaultDialer.Dial(w.URL, nil)
 	if err != nil {
-		log.Fatalf("WebSocket接続エラー: %v", err)
+		return fmt.Errorf("WebSocket接続エラー: %w", err)
 	}
 	defer conn.Close()
 	fmt.Println("WebSocket接続成功！価格の監視をスタートします。")
+
+	// contextキャンセル時に接続を閉じるためのGoroutine
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
 
 	// 2. データの受信ループ（切断されるまで無限ループ）
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("WebSocket読み取りエラー (切断されました): %v", err)
-			return // ループを抜けてGoroutineを終了
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				return fmt.Errorf("WebSocket読み取りエラー (切断されました): %w", err)
+			}
 		}
 
 		// 3. 受け取ったJSONを構造体に変換
@@ -52,7 +68,11 @@ func (w *WSClient) Listen(ch chan<- PushMessage) {
 			continue // エラーが起きても止まらずに次のデータを待つ
 		}
 
-		// 4. 解析したデータをチャネルを通じてメインロジック（脳）へ送る
-		ch <- pushMsg
+		// 4. 解析したデータをチャネルを通じてメインロジックへ送る
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ch <- pushMsg:
+		}
 	}
 }

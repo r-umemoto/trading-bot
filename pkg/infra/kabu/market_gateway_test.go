@@ -2,9 +2,16 @@ package kabu
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
+	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 )
 
@@ -12,6 +19,15 @@ import (
 type MockKabuClient struct {
 	Orders          []api.Order
 	LastSendRequest *api.OrderRequest
+	GetTokenCount   int
+	RegisterCount   int
+	GetBoardCount   int
+	GetBoardFunc    func(symbol string) (*api.BoardResponse, error)
+}
+
+func (m *MockKabuClient) GetToken() error {
+	m.GetTokenCount++
+	return nil
 }
 
 func (m *MockKabuClient) GetOrders() ([]api.Order, error) {
@@ -29,6 +45,7 @@ func (m *MockKabuClient) GetPositions(product api.ProductType) ([]api.Position, 
 	return nil, nil
 }
 func (m *MockKabuClient) RegisterSymbol(req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error) {
+	m.RegisterCount++
 	return nil, nil
 }
 func (m *MockKabuClient) UnregisterSymbolAll() (*api.UnregisterSymbolAllResponse, error) {
@@ -38,7 +55,11 @@ func (m *MockKabuClient) GetSymbol(symbol string, exchange api.ExchageType) (*ap
 	return nil, nil
 }
 func (m *MockKabuClient) GetBoard(symbol string) (*api.BoardResponse, error) {
-	return nil, nil
+	m.GetBoardCount++
+	if m.GetBoardFunc != nil {
+		return m.GetBoardFunc(symbol)
+	}
+	return &api.BoardResponse{Symbol: symbol, CurrentPrice: 5000.0}, nil
 }
 
 func TestMarketGateway_GetOrders(t *testing.T) {
@@ -193,5 +214,77 @@ func TestMarketGateway_SendOrderRaw_DelivType(t *testing.T) {
 				t.Errorf("expected DelivType %d, got %d", tt.expectedDelivType, mockClient.LastSendRequest.DelivType)
 			}
 		})
+	}
+}
+
+func TestMarketGateway_StartWebSocketLoop(t *testing.T) {
+	// 1. WebSocketサーバの起動
+	upgrader := websocket.Upgrader{}
+	wsCh := make(chan string, 10)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// クライアントからの切断指示や接続終了を待つループ
+		for {
+			select {
+			case msg, ok := <-wsCh:
+				if !ok {
+					return
+				}
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(msg))
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}))
+	defer server.Close()
+	defer close(wsCh)
+
+	// 2. Gatewayの準備
+	mockClient := &MockKabuClient{}
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) + "/websocket"
+	wsClient := api.NewWSClient(wsURL)
+
+	gateway := NewMarketGateway(nil, wsClient)
+	gateway.client = mockClient
+
+	// 監視対象としてあらかじめ銘柄登録しておく
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := gateway.RegisterSymbols(ctx, []market.ResisterSymbolRequest{
+		{Symbol: "7201", Exchange: order.EXCHANGE_TOSHO},
+	})
+	if err != nil {
+		t.Fatalf("RegisterSymbols failed: %v", err)
+	}
+
+	// startWebSocketLoop を非同期起動
+	gateway.startWebSocketLoop(ctx)
+
+	// 3. 通常の WebSocket 受信テスト
+	// ダミー価格データをプッシュ
+	dummyMsg := `{"Symbol":"7201","CurrentPrice":3990.0,"CurrentPriceTime":"2026-06-01T09:00:00+09:00"}`
+	wsCh <- dummyMsg
+
+	// DataPool が更新されるのを待つ
+	tickCh := gateway.tickChannels["7201"]
+	select {
+	case tk := <-tickCh:
+		if tk.Symbol != "7201" || tk.Price != 3990.0 {
+			t.Errorf("Unexpected tick received: %+v", tk)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timeout waiting for WebSocket tick")
+	}
+
+	// 4. DataPool の検証
+	var state tick.MarketState = gateway.DataPool().GetState("7201")
+	if state.LatestTick.Price != 3990.0 {
+		t.Errorf("Expected LatestTick Price to be 3990.0, got %f", state.LatestTick.Price)
 	}
 }

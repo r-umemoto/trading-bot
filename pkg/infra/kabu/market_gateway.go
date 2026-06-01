@@ -21,12 +21,13 @@ import (
 
 func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
 	m := &MarketGateway{
-		client:         client,
-		wsClient:       wsClient,
-		tickChannels:   make(map[string]chan tick.Tick),
-		orderChannels:  make(map[string]chan order.Orders),
-		ifdTracker:     make(map[string]*order.Order),
-		parentRequests: make(map[string]order.OrderRequest),
+		client:            client,
+		wsClient:          wsClient,
+		tickChannels:      make(map[string]chan tick.Tick),
+		orderChannels:     make(map[string]chan order.Orders),
+		ifdTracker:        make(map[string]*order.Order),
+		parentRequests:    make(map[string]order.OrderRequest),
+		registeredSymbols: make(map[string]market.ResisterSymbolRequest),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
 	m.dataPool = tick.NewDefaultDataPool(kabuProvider)
@@ -35,6 +36,7 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 }
 
 type KabuClientInterface interface {
+	GetToken() error
 	GetOrders() ([]api.Order, error)
 	SendOrder(req api.OrderRequest) (*api.OrderResponse, error)
 	CancelOrder(req api.CancelRequest) (*api.CancelResponse, error)
@@ -57,6 +59,10 @@ type MarketGateway struct {
 	ifdMu          sync.Mutex
 	ifdTracker     map[string]*order.Order       // Key: Parent Order ID -> Value: Child Order
 	parentRequests map[string]order.OrderRequest // Key: Parent Order ID -> Value: Parent Request
+
+	// Registered symbols tracking for reconnection
+	regMu             sync.RWMutex
+	registeredSymbols map[string]market.ResisterSymbolRequest
 }
 
 var _ market.MarketGateway = (*MarketGateway)(nil)
@@ -485,9 +491,7 @@ func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) 
 }
 
 func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
-	// 既存のWebSocketクライアントを起動
 	rawCh := make(chan api.PushMessage)
-	go s.wsClient.Listen(rawCh)
 
 	today := time.Now().Format("20060102")
 	// "all" というプレフィックスで、./data ディレクトリに保存
@@ -498,69 +502,13 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
 
 	// 🔄 変換層（アダプター処理）
 	go func() {
-		// goroutine終了時（システム終了時など）にログファイルを閉じる
 		defer logger.Close()
 		for {
 			select {
 			case <-ctx.Done():
-				// システム終了時は安全にゴルーチンを抜ける
 				return
 			case msg := <-rawCh:
-				// 板情報を集約
-				sellBoard := []tick.Quote{
-					{Price: msg.Sell1.Price, Qty: msg.Sell1.Qty},
-					{Price: msg.Sell2.Price, Qty: msg.Sell2.Qty},
-					{Price: msg.Sell3.Price, Qty: msg.Sell3.Qty},
-					{Price: msg.Sell4.Price, Qty: msg.Sell4.Qty},
-					{Price: msg.Sell5.Price, Qty: msg.Sell5.Qty},
-					{Price: msg.Sell6.Price, Qty: msg.Sell6.Qty},
-					{Price: msg.Sell7.Price, Qty: msg.Sell7.Qty},
-					{Price: msg.Sell8.Price, Qty: msg.Sell8.Qty},
-					{Price: msg.Sell9.Price, Qty: msg.Sell9.Qty},
-					{Price: msg.Sell10.Price, Qty: msg.Sell10.Qty},
-				}
-				buyBoard := []tick.Quote{
-					{Price: msg.Buy1.Price, Qty: msg.Buy1.Qty},
-					{Price: msg.Buy2.Price, Qty: msg.Buy2.Qty},
-					{Price: msg.Buy3.Price, Qty: msg.Buy3.Qty},
-					{Price: msg.Buy4.Price, Qty: msg.Buy4.Qty},
-					{Price: msg.Buy5.Price, Qty: msg.Buy5.Qty},
-					{Price: msg.Buy6.Price, Qty: msg.Buy6.Qty},
-					{Price: msg.Buy7.Price, Qty: msg.Buy7.Qty},
-					{Price: msg.Buy8.Price, Qty: msg.Buy8.Qty},
-					{Price: msg.Buy9.Price, Qty: msg.Buy9.Qty},
-					{Price: msg.Buy10.Price, Qty: msg.Buy10.Qty},
-				}
-
-				t := tick.NewTick(
-					msg.Symbol,
-					msg.CurrentPrice,
-					msg.VWAP,
-					msg.TradingVolume,
-					msg.CurrentPriceTime,
-					tick.FirstQuote{
-						Price: msg.Sell1.Price,
-						Qty:   msg.Sell1.Qty,
-						Time:  msg.Sell1.Time,
-						Sign:  msg.Sell1.Sign,
-					},
-					tick.FirstQuote{
-						Price: msg.Buy1.Price,
-						Qty:   msg.Buy1.Qty,
-						Time:  msg.Buy1.Time,
-						Sign:  msg.Buy1.Sign,
-					},
-					sellBoard,
-					buyBoard,
-					s.toPriceStatus(msg.CurrentPriceStatus),
-					s.toPriceChangeStatus(msg.CurrentPriceChangeStatus),
-					msg.OpeningPrice,
-					msg.TradingValue,
-					msg.MarketOrderSellQty,
-					msg.MarketOrderBuyQty,
-					msg.OverSellQty,
-					msg.UnderBuyQty,
-				)
+				t := s.toTick(api.BoardResponse(msg))
 				logger.Log(t)
 
 				// 内部の DataPool を更新
@@ -577,6 +525,144 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
 			}
 		}
 	}()
+
+	// 🔄 WebSocketの切断監視＆再接続ループ
+	go func() {
+		isReconnect := false
+		backoff := 1 * time.Second
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			if isReconnect {
+				slog.Info("🔄 WebSocket disconnected. Attempting to reconnect...", slog.String("backoff", backoff.String()))
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+
+				// 指数関数的バックオフ (MAX 30秒)
+				backoff = backoff * 2
+				if backoff > 30*time.Second {
+					backoff = 30 * time.Second
+				}
+
+				// 1. トークンの再取得
+				slog.Info("🔄 Fetching new API Token...")
+				if err := s.client.GetToken(); err != nil {
+					slog.Error("❌ Failed to fetch new API token", slog.Any("error", err))
+					continue
+				}
+				slog.Info("🔑 API Token successfully refreshed.")
+
+				// 2. 登録済み銘柄の再取得・再登録
+				s.regMu.RLock()
+				var reqs []market.ResisterSymbolRequest
+				for _, req := range s.registeredSymbols {
+					reqs = append(reqs, req)
+				}
+				s.regMu.RUnlock()
+
+				if len(reqs) > 0 {
+					slog.Info("🔄 Re-registering symbols...", slog.Int("count", len(reqs)))
+					if err := s.RegisterSymbols(ctx, reqs); err != nil {
+						slog.Error("❌ Failed to re-register symbols", slog.Any("error", err))
+						continue
+					}
+					slog.Info("✅ Registered symbols re-subscribed.")
+
+					// 3. REST API経由での最新板情報強制取得＆DataPool再同期
+					slog.Info("🔄 Synchronizing DataPool via REST API...")
+					for _, req := range reqs {
+						board, err := s.client.GetBoard(req.Symbol)
+						if err != nil {
+							slog.Error("❌ Failed to fetch board via REST for sync", slog.String("symbol", req.Symbol), slog.Any("error", err))
+							continue
+						}
+						t := s.toTick(*board)
+						s.dataPool.PushTick(t)
+						slog.Info("✅ Synchronized DataPool for symbol", slog.String("symbol", req.Symbol))
+					}
+				}
+			}
+
+			// 初回の接続または再接続の実行
+			isReconnect = true
+			err := s.wsClient.Listen(ctx, rawCh)
+			if err != nil {
+				if ctx.Err() != nil {
+					// contextが終了した場合はループを抜ける
+					return
+				}
+				slog.Error("❌ WebSocket Listen returned error", slog.Any("error", err))
+			} else {
+				// 正常にListenが終了した場合（contextキャンセル等を除き通常はエラーで戻るはずだが）バックオフをリセット
+				backoff = 1 * time.Second
+			}
+		}
+	}()
+}
+
+func (s *MarketGateway) toTick(msg api.BoardResponse) tick.Tick {
+	sellBoard := []tick.Quote{
+		{Price: msg.Sell1.Price, Qty: msg.Sell1.Qty},
+		{Price: msg.Sell2.Price, Qty: msg.Sell2.Qty},
+		{Price: msg.Sell3.Price, Qty: msg.Sell3.Qty},
+		{Price: msg.Sell4.Price, Qty: msg.Sell4.Qty},
+		{Price: msg.Sell5.Price, Qty: msg.Sell5.Qty},
+		{Price: msg.Sell6.Price, Qty: msg.Sell6.Qty},
+		{Price: msg.Sell7.Price, Qty: msg.Sell7.Qty},
+		{Price: msg.Sell8.Price, Qty: msg.Sell8.Qty},
+		{Price: msg.Sell9.Price, Qty: msg.Sell9.Qty},
+		{Price: msg.Sell10.Price, Qty: msg.Sell10.Qty},
+	}
+	buyBoard := []tick.Quote{
+		{Price: msg.Buy1.Price, Qty: msg.Buy1.Qty},
+		{Price: msg.Buy2.Price, Qty: msg.Buy2.Qty},
+		{Price: msg.Buy3.Price, Qty: msg.Buy3.Qty},
+		{Price: msg.Buy4.Price, Qty: msg.Buy4.Qty},
+		{Price: msg.Buy5.Price, Qty: msg.Buy5.Qty},
+		{Price: msg.Buy6.Price, Qty: msg.Buy6.Qty},
+		{Price: msg.Buy7.Price, Qty: msg.Buy7.Qty},
+		{Price: msg.Buy8.Price, Qty: msg.Buy8.Qty},
+		{Price: msg.Buy9.Price, Qty: msg.Buy9.Qty},
+		{Price: msg.Buy10.Price, Qty: msg.Buy10.Qty},
+	}
+
+	return tick.NewTick(
+		msg.Symbol,
+		msg.CurrentPrice,
+		msg.VWAP,
+		msg.TradingVolume,
+		msg.CurrentPriceTime,
+		tick.FirstQuote{
+			Price: msg.Sell1.Price,
+			Qty:   msg.Sell1.Qty,
+			Time:  msg.Sell1.Time,
+			Sign:  msg.Sell1.Sign,
+		},
+		tick.FirstQuote{
+			Price: msg.Buy1.Price,
+			Qty:   msg.Buy1.Qty,
+			Time:  msg.Buy1.Time,
+			Sign:  msg.Buy1.Sign,
+		},
+		sellBoard,
+		buyBoard,
+		s.toPriceStatus(msg.CurrentPriceStatus),
+		s.toPriceChangeStatus(msg.CurrentPriceChangeStatus),
+		msg.OpeningPrice,
+		msg.TradingValue,
+		msg.MarketOrderSellQty,
+		msg.MarketOrderBuyQty,
+		msg.OverSellQty,
+		msg.UnderBuyQty,
+	)
 }
 
 func (m *MarketGateway) RegisterSymbol(ctx context.Context, req market.ResisterSymbolRequest) error {
@@ -587,6 +673,12 @@ func (m *MarketGateway) RegisterSymbols(ctx context.Context, reqs []market.Resis
 	if len(reqs) == 0 {
 		return nil
 	}
+
+	m.regMu.Lock()
+	for _, req := range reqs {
+		m.registeredSymbols[req.Symbol] = req
+	}
+	m.regMu.Unlock()
 
 	// 0. チャネルマップの初期化
 	for _, req := range reqs {
