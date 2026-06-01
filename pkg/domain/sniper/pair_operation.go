@@ -125,6 +125,23 @@ func (o *PairTradingOperation) GetExchanges() []order.ExchangeMarket {
 	return list
 }
 
+func (o *PairTradingOperation) isAllowedTimeForEntry(t time.Time) bool {
+	// 日本時間 (Asia/Tokyo) に統一して時間判定する
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err == nil {
+		t = t.In(loc)
+	}
+
+	hm := t.Hour()*100 + t.Minute()
+
+	// 前場安定期: 09:30 〜 11:30
+	// 後場安定期: 12:45 〜 14:45
+	if (hm >= 930 && hm < 1130) || (hm >= 1245 && hm < 1445) {
+		return true
+	}
+	return false
+}
+
 func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 	// 1. 最新価格の取得
 	stateA := o.dataPool.GetState(o.nestA.SymbolCode)
@@ -154,16 +171,26 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 	// 3. 取引シグナルの生成
 	if qtyA == 0 && qtyB == 0 {
 		// ノーポジションのとき、スプレッド乖離を判定してエントリー
-		if priceDiff > o.thresholdPriceDiff {
-			o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_positive_threshold"))
-			// 銘柄Aを売り、銘柄Bを買う
-			o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: priceA, Quantity: o.tradeQty, Reason: "PairEntry_SellA"})
-			o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: priceB, Quantity: o.tradeQty, Reason: "PairEntry_BuyB"})
-		} else if priceDiff < -o.thresholdPriceDiff {
-			o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_negative_threshold"))
-			// 銘柄Aを買い、銘柄Bを売る
-			o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: priceA, Quantity: o.tradeQty, Reason: "PairEntry_BuyA"})
-			o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: priceB, Quantity: o.tradeQty, Reason: "PairEntry_SellB"})
+		// 新規エントリー時のみ時間帯フィルターを適用する
+		if o.isAllowedTimeForEntry(stateA.LatestTick.CurrentPriceTime) {
+			if priceDiff > o.thresholdPriceDiff {
+				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_positive_threshold"))
+				// 銘柄Aを売り、銘柄Bを買う
+				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: priceA, Quantity: o.tradeQty, Reason: "PairEntry_SellA"})
+				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: priceB, Quantity: o.tradeQty, Reason: "PairEntry_BuyB"})
+			} else if priceDiff < -o.thresholdPriceDiff {
+				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_negative_threshold"))
+				// 銘柄Aを買い、銘柄Bを売る
+				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: priceA, Quantity: o.tradeQty, Reason: "PairEntry_BuyA"})
+				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: priceB, Quantity: o.tradeQty, Reason: "PairEntry_SellB"})
+			}
+		} else {
+			if math.Abs(priceDiff) > o.thresholdPriceDiff {
+				o.logger.Info("PAIR_ENTRY_SKIPPED_BY_TIME_FILTER",
+					slog.String("reason", "outside_golden_time_windows"),
+					slog.Time("tick_time", stateA.LatestTick.CurrentPriceTime),
+				)
+			}
 		}
 	} else {
 		// ポジションを保有している場合、平均回帰したら手仕舞い（利確/損切）
