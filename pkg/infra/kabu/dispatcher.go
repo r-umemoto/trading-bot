@@ -13,7 +13,6 @@ type OrderJob struct {
 	Symbol      string
 	OrderID     string // キャンセルの場合に使用
 	OrderPtr    *order.Order
-	OrderReq    *order.OrderRequest
 	Priority    int
 	UpdateCount int
 	RequestedAt time.Time
@@ -44,7 +43,7 @@ func (d *OrderDispatcher) Start(ctx context.Context) {
 	go d.dispatchWorker(ctx)
 }
 
-func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, req *order.OrderRequest, cancelID string) <-chan order.OrderResult {
+func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, cancelID string) <-chan order.OrderResult {
 	resCh := make(chan order.OrderResult, 1)
 	if ord == nil && cancelID == "" {
 		d.jobMu.Lock()
@@ -57,7 +56,7 @@ func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, req *order.Ord
 	priority := 1
 	if cancelID != "" {
 		priority = 10
-	} else if req != nil && (req.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(req.ClosePositions) > 0) {
+	} else if ord != nil && ord.Request != nil && (ord.Request.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(ord.Request.ClosePositions) > 0) {
 		priority = 20
 	}
 
@@ -66,7 +65,6 @@ func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, req *order.Ord
 		Symbol:      symbol,
 		OrderID:     cancelID,
 		OrderPtr:    ord,
-		OrderReq:    req,
 		Priority:    priority,
 		RequestedAt: time.Now(),
 		ResultChan:  resCh,
@@ -135,7 +133,7 @@ func (d *OrderDispatcher) executeJob(ctx context.Context, job *OrderJob) {
 	}
 
 	if job.OrderPtr != nil {
-		updatedOrder, err := d.sender.SendOrderRaw(apiCtx, order.SendOrderInput{Order: job.OrderPtr, Request: *job.OrderReq})
+		updatedOrder, err := d.sender.SendOrderRaw(apiCtx, order.SendOrderInput{Order: job.OrderPtr})
 		if err != nil {
 			job.ResultChan <- order.OrderResult{
 				Symbol: job.Symbol,

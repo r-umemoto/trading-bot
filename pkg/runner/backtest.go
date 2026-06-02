@@ -300,7 +300,7 @@ func RunBacktest() error {
 				}
 
 				if bullet.HasOrder() {
-					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: bullet.Order, Request: *bullet.Request})
+					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: bullet.Order})
 					if err != nil {
 						op.FailSendingOrder(act.SniperID, bullet.Order)
 					} else {

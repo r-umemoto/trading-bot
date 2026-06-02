@@ -37,11 +37,9 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 	ord := order.NewOrder("local-123", "7201", order.ACTION_BUY, 1000.0, 100)
 	ord.Reason = "EmergencyExit" // 緊急決済を模してタイムアウトを2秒に設定
 	
+	ord.Type = order.ORDER_TYPE_LIMIT
 	sendInput := order.SendOrderInput{
 		Order: ord,
-		Request: order.OrderRequest{
-			OrderType: order.ORDER_TYPE_LIMIT,
-		},
 	}
 	
 	_, err := g.SendOrder(context.Background(), sendInput)
@@ -104,8 +102,7 @@ func (f *faultInjectingGateway) SendOrder(ctx context.Context, input order.SendO
 		// input.Order のコピーを作成して渡すことで、バックテスト用ゲートウェイによるポインタ書き換えの影響を防ぎます
 		clonedOrd := *input.Order
 		clonedInput := order.SendOrderInput{
-			Order:   &clonedOrd,
-			Request: input.Request,
+			Order: &clonedOrd,
 		}
 		_, _ = f.MarketGateway.SendOrder(ctx, clonedInput)
 		return input.Order, fmt.Errorf("カブコムAPI発注失敗: タイムアウトエラー(5秒)")
@@ -140,11 +137,9 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 	// スナイパーのActiveOrdersに仮の注文として追加 (火を入れる前の状態)
 	s.ActiveOrders = append(s.ActiveOrders, ord)
 
+	ord.Type = order.ORDER_TYPE_LIMIT
 	bullet := sniper.Bullet{
 		Order: ord,
-		Request: &order.OrderRequest{
-			OrderType: order.ORDER_TYPE_LIMIT,
-		},
 	}
 
 	// 5. fire を実行。SendOrder はエラーを返すが、証券会社側には受理され、GetOrders による自動照合で救出されるはず

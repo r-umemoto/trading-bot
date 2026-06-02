@@ -152,7 +152,7 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 	}
 
 	if b.HasOrder() {
-		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: b.Order, Request: *b.Request})
+		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: b.Order})
 		if err != nil {
 			slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。Orphan Position防止のため即時状態照合(Reconciliation)を行います...",
 				slog.String("symbol", b.Order.Symbol),

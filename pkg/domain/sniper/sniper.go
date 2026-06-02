@@ -37,12 +37,11 @@ const (
 
 type Bullet struct {
 	Order         *order.Order
-	Request       *order.OrderRequest
 	CancelOrderID string
 }
 
 func (b Bullet) HasOrder() bool {
-	return b.Order != nil && b.Request != nil
+	return b.Order != nil
 }
 
 func (b Bullet) HasCancel() bool {
@@ -204,9 +203,8 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	}
 
 	entry.CreatedAt = now
-	_, req := s.wrapRequest(entry)
 
-	return Bullet{Order: entry, Request: &req}
+	return Bullet{Order: entry}
 }
 
 func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Order, *order.Order) {
@@ -218,14 +216,34 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 	if isExit {
 		closePositions, _ = s.matchPositionsToClose(obs, marketAction, signal.Quantity)
 	}
-	entry := order.NewOrder(order.GenerateLocalID(), s.Detail.Code, marketAction, signal.Price, signal.Quantity)
-	entry.Type = signal.OrderType // 🌟 シグナル側の意図（成行・指値）を正確に代入
-	entry.InternalState = order.STATE_PENDING
-	if isExit {
-		entry.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
-		entry.ClosePositions = closePositions
+
+	entryReq := &order.OrderRequest{
+		Exchange:        s.Exchange,
+		SecurityType:    order.SECURITY_TYPE_STOCK,
+		MarginTradeType: s.MarginTradeType,
+		AccountType:     s.AccountType,
 	}
-	entry.Reason = signal.Reason // 🌟 理由を記録
+	cashMargin := order.CASH_MARGIN_MARGIN_ENTRY
+	if isExit {
+		cashMargin = order.CASH_MARGIN_MARGIN_EXIT
+		entryReq.ClosePositions = closePositions
+		if len(closePositions) == 0 {
+			entryReq.ClosePositionOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
+		}
+	}
+
+	entry := order.NewOrder(
+		order.GenerateLocalID(),
+		s.Detail.Code,
+		marketAction,
+		signal.Price,
+		signal.Quantity,
+		order.WithType(signal.OrderType),
+		order.WithCashMargin(cashMargin),
+		order.WithRequest(entryReq),
+		order.WithReason(signal.Reason),
+	)
+	entry.InternalState = order.STATE_PENDING
 
 	currentPos := s.calculatePosition(obs.Positions)
 	simulatedInput := strategy.StrategyInput{
@@ -241,11 +259,27 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 		if exitPrice > 0 {
 			exitPrice = s.Detail.RoundPrice(exitPrice)
 		}
-		exit = order.NewOrder(order.GenerateLocalID(), s.Detail.Code, exitAction, exitPrice, signal.Quantity)
-		exit.Type = ifDoneSignal.OrderType // 🌟 シグナル側の意図（成行・指値）を正確に代入
-		exit.CashMargin = order.CASH_MARGIN_MARGIN_EXIT // 🌟 IFD子注文は常に返済注文
+
+		exitReq := &order.OrderRequest{
+			Exchange:           s.Exchange,
+			SecurityType:       order.SECURITY_TYPE_STOCK,
+			MarginTradeType:    s.MarginTradeType,
+			AccountType:        s.AccountType,
+			ClosePositionOrder: order.CLOSE_POSITION_ASC_DAY_DEC_PL,
+		}
+
+		exit = order.NewOrder(
+			order.GenerateLocalID(),
+			s.Detail.Code,
+			exitAction,
+			exitPrice,
+			signal.Quantity,
+			order.WithType(ifDoneSignal.OrderType),
+			order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+			order.WithRequest(exitReq),
+			order.WithReason(ifDoneSignal.Reason),
+		)
 		exit.InternalState = order.STATE_PREPARING
-		exit.Reason = ifDoneSignal.Reason // 🌟 IFD注文の理由も記録
 	}
 
 	return entry, exit
@@ -325,15 +359,7 @@ func (s *Sniper) calculatePosition(groundPositions []position.Position) strategy
 	return strategy.Position{Qty: totalQty, AveragePrice: avgPrice}
 }
 
-func (s *Sniper) wrapRequest(o *order.Order) (*order.Order, order.OrderRequest) {
-	reqType := o.Type // 🌟 戦略が意図した注文タイプをそのまま尊重
-	closeOrder := order.CLOSE_POSITION_ORDER_NONE
-	if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && len(o.ClosePositions) == 0 {
-		closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
-	}
-	req := order.NewOrderRequest(s.Exchange, order.SECURITY_TYPE_STOCK, s.MarginTradeType, s.AccountType, closeOrder, o.ClosePositions, reqType)
-	return o, req
-}
+
 
 func (s *Sniper) matchPositionsToClose(obs Observation, action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
 	var closePositions []order.ClosePosition

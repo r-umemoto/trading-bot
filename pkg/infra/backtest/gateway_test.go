@@ -34,9 +34,7 @@ func TestGatewayLatency_OrderMatchingDelay(t *testing.T) {
 			Action:     order.ACTION_BUY,
 			OrderQty:   100,
 			OrderPrice: 990,
-		},
-		Request: order.OrderRequest{
-			OrderType: order.ORDER_TYPE_LIMIT,
+			Type:       order.ORDER_TYPE_LIMIT,
 		},
 	})
 	if err != nil {
@@ -94,9 +92,7 @@ func TestGatewayLatency_CancelRace(t *testing.T) {
 			Action:     order.ACTION_BUY,
 			OrderQty:   100,
 			OrderPrice: 990,
-		},
-		Request: order.OrderRequest{
-			OrderType: order.ORDER_TYPE_LIMIT,
+			Type:       order.ORDER_TYPE_LIMIT,
 		},
 	})
 
@@ -178,9 +174,7 @@ func TestGatewayLatency_VolumeModelDeferredDepth(t *testing.T) {
 			Action:     order.ACTION_BUY,
 			OrderQty:   100,
 			OrderPrice: 990,
-		},
-		Request: order.OrderRequest{
-			OrderType: order.ORDER_TYPE_LIMIT,
+			Type:       order.ORDER_TYPE_LIMIT,
 		},
 	})
 
@@ -244,9 +238,7 @@ func TestGateway_ShortCoverReproduction(t *testing.T) {
 			OrderQty:   100,
 			OrderPrice: 400.0,
 			CashMargin: order.CASH_MARGIN_MARGIN_ENTRY,
-		},
-		Request: order.OrderRequest{
-			OrderType: order.ORDER_TYPE_LIMIT,
+			Type:       order.ORDER_TYPE_LIMIT,
 		},
 	})
 	if err != nil {
@@ -274,9 +266,7 @@ func TestGateway_ShortCoverReproduction(t *testing.T) {
 			OrderQty:   100,
 			OrderPrice: 395.0,
 			CashMargin: order.CASH_MARGIN_MARGIN_ENTRY,
-		},
-		Request: order.OrderRequest{
-			OrderType: order.ORDER_TYPE_LIMIT,
+			Type:       order.ORDER_TYPE_LIMIT,
 		},
 	})
 	if err == nil {
@@ -292,9 +282,7 @@ func TestGateway_ShortCoverReproduction(t *testing.T) {
 			OrderQty:   100,
 			OrderPrice: 395.0,
 			CashMargin: order.CASH_MARGIN_MARGIN_EXIT,
-		},
-		Request: order.OrderRequest{
-			OrderType: order.ORDER_TYPE_LIMIT,
+			Type:       order.ORDER_TYPE_LIMIT,
 		},
 	})
 	if err != nil {
@@ -357,7 +345,7 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	// 新規空売り (ACTION_SELL) 注文のはずなので、CashMargin は CASH_MARGIN_MARGIN_ENTRY (2) であり、
 	// ClosePositions も空、ClosePositionOrder も NONE であるべきです。
 	// もしバグがあると、CashMargin が返済になってしまい、SendOrder がエラーになります。
-	_, err := g.SendOrder(context.Background(), order.SendOrderInput{Order: bullet1.Order, Request: *bullet1.Request})
+	_, err := g.SendOrder(context.Background(), order.SendOrderInput{Order: bullet1.Order})
 	if err != nil {
 		t.Fatalf("🚨 【バグ再現】新規空売りの発注に失敗しました。新規注文が返済注文に誤変換されています: %v", err)
 	}
@@ -389,7 +377,7 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	// [バグの検証2]
 	// 買い戻し決済 (ACTION_BUY) 注文なので、正しく返済 (CashMargin: 3) としてカブコムに送られる必要があります。
 	// もしバグがあると、CashMargin: 2 (新規) のまま送られてしまい、両建て規制に引っかかってエラーになります。
-	_, err2 := g.SendOrder(context.Background(), order.SendOrderInput{Order: bullet2.Order, Request: *bullet2.Request})
+	_, err2 := g.SendOrder(context.Background(), order.SendOrderInput{Order: bullet2.Order})
 	if err2 != nil {
 		t.Fatalf("🚨 【バグ再現】買い戻し決済の発注に失敗しました。決済注文が新規注文に誤変換されています: %v", err2)
 	}
