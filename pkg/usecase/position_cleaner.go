@@ -123,6 +123,12 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 			}
 			for _, o := range ordersToCancel {
 				if o != nil && !o.IsCompleted() {
+					// 🌟 取引所にまだ送信されていない仮注文は、APIキャンセルを送らずにローカルでCANCELED状態にする
+					if o.IsPending() {
+						o.Status = order.ORDER_STATUS_CANCELED
+						o.InternalState = order.STATE_CLOSED
+						continue
+					}
 					fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", symbolCode, o.ID)
 					err := c.marketGateway.CancelOrder(ctx, o.ID)
 					if err != nil {
@@ -188,7 +194,11 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 				return nil
 			}
 
-			fmt.Printf("🚨 【緊急事態】未決済の建玉が %d 件残っています！\n", remainingCount)
+			if safety == 0 {
+				fmt.Printf("⏳ ポジション決済の発注が完了しました。約定の反映を待機しています... (残り %d 件)\n", remainingCount)
+			} else {
+				fmt.Printf("🚨 【緊急事態】未決済の建玉が %d 件残っています！ (リトライ %d 回目)\n", remainingCount, safety)
+			}
 		}
 
 		safety++
