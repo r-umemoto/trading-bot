@@ -291,12 +291,10 @@ func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*s
 		// 銘柄別のロガーを生成
 		logPath := filepath.Join(logDir, fmt.Sprintf("%s_%s.jsonl", t.Detail.Code, t.StrategyName))
 		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		var analysisLogger *slog.Logger
-		if err == nil {
-			analysisLogger = slog.New(slog.NewJSONHandler(f, nil))
-		} else {
-			slog.Error("ログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
+		if err != nil {
+			return nil, fmt.Errorf("取引ログファイル (%s) の作成に失敗しました: %w", logPath, err)
 		}
+		analysisLogger := slog.New(slog.NewJSONHandler(f, nil))
 
 		sniperID := fmt.Sprintf("%s_%s", t.StrategyName, t.Detail.Code)
 		s := sniper.NewSniper(sniperID, t.Detail, st, policy, t.Exchange, analysisLogger)
