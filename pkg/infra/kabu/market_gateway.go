@@ -173,6 +173,9 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 	switch req.OrderType {
 	case order.ORDER_TYPE_MARKET:
 		orderType = 10
+		if ord.OrderPrice > 0 {
+			return ord, fmt.Errorf("バリデーションエラー: 成行注文に価格が指定されています (Price: %f)", ord.OrderPrice)
+		}
 	case order.ORDER_TYPE_LIMIT:
 		orderType = 20
 	}
