@@ -58,8 +58,9 @@ type Order struct {
 	ID         string
 	Symbol     string
 	Action     Action
-	OrderPrice float64 // 発注時の指値（成行の場合は0など）
-	OrderQty   float64 // 発注した総数量
+	Type       OrderType // 🌟 注文種別 (指値・成行)
+	OrderPrice float64   // 発注時の指値（成行の場合は0など）
+	OrderQty   float64   // 発注した総数量
 	CashMargin CashMarginType
 
 	CreatedAt  time.Time   // 🌟 発注（オブジェクト作成）時刻
@@ -94,6 +95,7 @@ func NewOrder(id string, symbol string, action Action, price float64, qty float6
 		ID:            id,
 		Symbol:        symbol,
 		Action:        action,
+		Type:          ORDER_TYPE_LIMIT, // デフォルトは指値
 		OrderPrice:    price,
 		OrderQty:      qty,
 		Status:        ORDER_STATUS_WAITING,
