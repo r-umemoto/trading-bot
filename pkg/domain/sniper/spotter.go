@@ -204,7 +204,9 @@ func (s *Spotter) applyExecution(sniperID string, exec order.Execution, action o
 		var closePositions []order.ClosePosition
 		reason := ""
 		if parentOrder != nil {
-			closePositions = parentOrder.ClosePositions
+			if parentOrder.Request != nil {
+				closePositions = parentOrder.Request.ClosePositions
+			}
 			reason = parentOrder.Reason
 		}
 		s.reducePositions(sniperID, exec.Qty, exec.Price, exec.ExecutionTime, closePositions, reason)

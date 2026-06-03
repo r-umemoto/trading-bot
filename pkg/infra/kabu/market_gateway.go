@@ -26,7 +26,6 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		tickChannels:      make(map[string]chan tick.Tick),
 		orderChannels:     make(map[string]chan order.Orders),
 		ifdTracker:        make(map[string]*order.Order),
-		parentRequests:    make(map[string]order.OrderRequest),
 		registeredSymbols: make(map[string]market.ResisterSymbolRequest),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
@@ -58,7 +57,6 @@ type MarketGateway struct {
 	// IFD tracking fields
 	ifdMu          sync.Mutex
 	ifdTracker     map[string]*order.Order       // Key: Parent Order ID -> Value: Child Order
-	parentRequests map[string]order.OrderRequest // Key: Parent Order ID -> Value: Parent Request
 
 	// Registered symbols tracking for reconnection
 	regMu             sync.RWMutex
@@ -97,7 +95,7 @@ func (m *MarketGateway) DataPool() tick.DataPool {
 // SendOrder は market.MarketGateway (Orderer) の実装です。
 // 結果が出るまで内部的にブロックします（SniperNest等から非同期で呼ばれる想定）。
 func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
-	resCh := m.dispatcher.Submit(input.Order.Symbol, input.Order, &input.Request, "")
+	resCh := m.dispatcher.Submit(input.Order.Symbol, input.Order, "")
 	select {
 	case <-ctx.Done():
 		return input.Order, ctx.Err()
@@ -109,7 +107,6 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 			if res.Order.IfDone != nil {
 				m.ifdMu.Lock()
 				m.ifdTracker[res.Order.ID] = res.Order.IfDone
-				m.parentRequests[res.Order.ID] = input.Request
 				m.ifdMu.Unlock()
 			}
 			return res.Order, nil
@@ -121,7 +118,10 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 // SendOrderRaw は実際にAPIを叩く低レベルメソッドです
 func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
 	ord := input.Order
-	req := input.Request
+	req := ord.Request
+	if req == nil {
+		return ord, fmt.Errorf("注文リクエスト情報(Request)が指定されていません (Symbol: %s)", ord.Symbol)
+	}
 
 	side := api.SIDE_SELL
 	if ord.Action == order.ACTION_BUY {
@@ -170,7 +170,7 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 	}
 
 	orderType := 0
-	switch req.OrderType {
+	switch ord.Type {
 	case order.ORDER_TYPE_MARKET:
 		orderType = 10
 		if ord.OrderPrice > 0 {
@@ -246,7 +246,7 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 
 // CancelOrder は market.MarketGateway (Orderer) の実装です
 func (m *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
-	resCh := m.dispatcher.Submit("", nil, nil, orderID)
+	resCh := m.dispatcher.Submit("", nil, orderID)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -449,45 +449,22 @@ func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) 
 		if ord.Status == order.ORDER_STATUS_FILLED {
 			child, tracked := m.ifdTracker[ord.ID]
 			if tracked {
-				parentReq := m.parentRequests[ord.ID]
-
 				fmt.Printf("⚡ [MarketGateway] IFD発動: 親注文(%s)約定 -> 子注文(%s)を自動発注します\n", ord.ID, child.Action)
-
-				reqType := order.ORDER_TYPE_MARKET
-				if child.OrderPrice > 0 {
-					reqType = order.ORDER_TYPE_LIMIT
-				}
-
-				closeOrder := order.CLOSE_POSITION_ORDER_NONE
-				if child.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-					closeOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
-				}
-
-				childReq := order.NewOrderRequest(
-					parentReq.Exchange,
-					parentReq.SecurityType,
-					parentReq.MarginTradeType,
-					parentReq.AccountType,
-					closeOrder,
-					nil, // ClosePositions is dynamically handled by closeOrder
-					reqType,
-				)
 
 				child.CreatedAt = time.Now()
 				child.InternalState = order.STATE_PENDING
 
-				go func(c *order.Order, req order.OrderRequest) {
-					resCh := m.dispatcher.Submit(c.Symbol, c, &req, "")
+				go func(c *order.Order) {
+					resCh := m.dispatcher.Submit(c.Symbol, c, "")
 					res := <-resCh
 					if res.Error != nil {
 						fmt.Printf("⚠️ [MarketGateway] IFD子注文自動発注失敗 (Symbol: %s): %v\n", c.Symbol, res.Error)
 					} else {
 						fmt.Printf("✅ [MarketGateway] IFD子注文自動発注成功 (ID: %s)\n", res.OrderID)
 					}
-				}(child, childReq)
+				}(child)
 
 				delete(m.ifdTracker, ord.ID)
-				delete(m.parentRequests, ord.ID)
 			}
 		}
 	}

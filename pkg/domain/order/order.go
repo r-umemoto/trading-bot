@@ -43,25 +43,27 @@ type Execution struct {
 	ExecutionTime time.Time // 🌟 約定日時
 }
 
+
+
+// OrderRequest は新規発注時にのみ使用する、取引所固有・または一時的なパラメータです
 type OrderRequest struct {
 	Exchange           ExchangeMarket
 	SecurityType       SecurityType
 	MarginTradeType    MarginTradeType
 	AccountType        AccountType
 	ClosePositionOrder ClosePositionOrder
-	ClosePositions     []ClosePosition // 指定返済用
-	OrderType          OrderType
+	ClosePositions     []ClosePosition
 }
 
 // Order は注文全体を管理する集約ルート（エンティティ）です
 type Order struct {
-	ID         string
-	Symbol     string
-	Action     Action
-	Type       OrderType // 🌟 注文種別 (指値・成行)
-	OrderPrice float64   // 発注時の指値（成行の場合は0など）
-	OrderQty   float64   // 発注した総数量
-	CashMargin CashMarginType
+	ID                 string
+	Symbol             string
+	Action             Action
+	Type               OrderType // 🌟 注文種別 (指値・成行)
+	OrderPrice         float64   // 発注時の指値（成行の場合は0など）
+	OrderQty           float64   // 発注した総数量
+	CashMargin         CashMarginType
 
 	CreatedAt  time.Time   // 🌟 発注（オブジェクト作成）時刻
 	Executions []Execution // 🌟 約定のコレクション
@@ -69,7 +71,6 @@ type Order struct {
 	Status OrderStatus // 注文の状態
 	CumQty float64     // 🌟 APIが報告してきた累計約定数量
 
-	ClosePositions []ClosePosition // 🌟 指定返済用
 	IfDone         *Order          // 🌟 この注文が約定した後に有効になる注文
 
 	CancelSentAt time.Time // 🌟 キャンセル送信時刻（ゾンビ防止用）
@@ -79,6 +80,9 @@ type Order struct {
 	// 内部ステータスと疑似約定のトラッキング
 	InternalState InternalState
 	Synthetic     SyntheticFillState
+
+	// Request は新規発注時のリクエストパラメータです
+	Request *OrderRequest
 }
 
 // SyntheticFillState は疑似約定（Synthetic Fill）の追跡状態を保持します
@@ -90,40 +94,52 @@ type SyntheticFillState struct {
 	LastVolumeUpdate float64   // 前回のTick時の総出来高
 }
 
-func NewOrder(id string, symbol string, action Action, price float64, qty float64) *Order {
-	return &Order{
-		ID:            id,
-		Symbol:        symbol,
-		Action:        action,
-		Type:          ORDER_TYPE_LIMIT, // デフォルトは指値
-		OrderPrice:    price,
-		OrderQty:      qty,
-		Status:        ORDER_STATUS_WAITING,
-		CashMargin:    CASH_MARGIN_MARGIN_ENTRY, // デフォルトは信用新規
-		InternalState: STATE_PREPARING,
-		CreatedAt:     time.Now(),
+type OrderOption func(*Order)
+
+func WithType(t OrderType) OrderOption {
+	return func(o *Order) {
+		o.Type = t
 	}
 }
 
-func NewOrderRequest(
-	exchange ExchangeMarket,
-	securityType SecurityType,
-	marginTradeType MarginTradeType,
-	accountType AccountType,
-	closePositionOrder ClosePositionOrder,
-	closePositions []ClosePosition,
-	orderType OrderType,
-) OrderRequest {
-	return OrderRequest{
-		Exchange:           exchange,
-		SecurityType:       securityType,
-		MarginTradeType:    marginTradeType,
-		AccountType:        accountType,
-		ClosePositionOrder: closePositionOrder,
-		ClosePositions:     closePositions,
-		OrderType:          orderType,
+func WithCashMargin(cm CashMarginType) OrderOption {
+	return func(o *Order) {
+		o.CashMargin = cm
 	}
 }
+
+func WithRequest(req *OrderRequest) OrderOption {
+	return func(o *Order) {
+		o.Request = req
+	}
+}
+
+func WithReason(reason string) OrderOption {
+	return func(o *Order) {
+		o.Reason = reason
+	}
+}
+
+func NewOrder(id string, symbol string, action Action, price float64, qty float64, opts ...OrderOption) *Order {
+	ord := &Order{
+		ID:                 id,
+		Symbol:             symbol,
+		Action:             action,
+		Type:               ORDER_TYPE_LIMIT, // デフォルトは指値
+		OrderPrice:         price,
+		OrderQty:           qty,
+		Status:             ORDER_STATUS_WAITING,
+		CashMargin:         CASH_MARGIN_MARGIN_ENTRY, // デフォルトは信用新規
+		InternalState:      STATE_PREPARING,
+		CreatedAt:          time.Now(),
+	}
+	for _, opt := range opts {
+		opt(ord)
+	}
+	return ord
+}
+
+
 
 // FilledQty は現在までに約定した合計数量を返します
 func (o *Order) FilledQty() float64 {
@@ -191,8 +207,7 @@ type Orders struct {
 
 // SendOrderInput は新規発注に必要なパラメータを一括してまとめた構造体です
 type SendOrderInput struct {
-	Order   *Order
-	Request OrderRequest
+	Order *Order
 }
 
 // GetCancelTimeout は注文の理由や重要度に応じて最適なキャンセルタイムアウト値を返します

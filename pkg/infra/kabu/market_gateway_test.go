@@ -187,19 +187,18 @@ func TestMarketGateway_SendOrderRaw_DelivType(t *testing.T) {
 			ord := order.NewOrder("test-local-id", "8801", tt.action, 1000, 100)
 			ord.CashMargin = tt.cashMargin
 
-			req := order.NewOrderRequest(
-				order.EXCHANGE_TOSHO,
-				order.SECURITY_TYPE_STOCK,
-				order.TRADE_TYPE_SYSTEM,
-				order.ACCOUNT_SPECIAL,
-				tt.closePosOrder,
-				tt.closePos,
-				order.ORDER_TYPE_LIMIT,
-			)
+			ord.Request = &order.OrderRequest{
+				Exchange:           order.EXCHANGE_TOSHO,
+				SecurityType:       order.SECURITY_TYPE_STOCK,
+				MarginTradeType:    order.TRADE_TYPE_SYSTEM,
+				AccountType:        order.ACCOUNT_SPECIAL,
+				ClosePositionOrder: tt.closePosOrder,
+				ClosePositions:     tt.closePos,
+			}
+			ord.Type = order.ORDER_TYPE_LIMIT
 
 			_, err := gateway.SendOrderRaw(context.Background(), order.SendOrderInput{
 				Order:   ord,
-				Request: req,
 			})
 
 			if err != nil {

@@ -115,8 +115,8 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrd
 
 	// 信用返済または決済順序が指定されている場合は返済注文と判定
 	isExit := ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT ||
-		input.Request.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE ||
-		len(input.Request.ClosePositions) > 0
+		(ord.Request != nil && (ord.Request.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE ||
+		len(ord.Request.ClosePositions) > 0))
 
 	if isExit {
 		// 返済注文の場合：口座に反対の建玉が存在するか検証
@@ -167,7 +167,7 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrd
 
 	g.orders[orderID] = ord
 	g.orderKeys = append(g.orderKeys, orderID)
-	g.orderTypes[orderID] = input.Request.OrderType
+	g.orderTypes[orderID] = ord.Type
 
 	if g.Latency > 0 {
 		g.activeAt[orderID] = g.currentTime.Add(g.Latency)
@@ -364,7 +364,7 @@ func (g *SyncBacktestGateway) executeAll(id string, price float64) {
 
 	// --- ポジション管理の更新 ---
 	isExit := ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT ||
-		len(ord.ClosePositions) > 0
+		(ord.Request != nil && len(ord.Request.ClosePositions) > 0)
 
 	if isExit {
 		// 返済処理：建玉を減らす
@@ -410,15 +410,8 @@ func (g *SyncBacktestGateway) executeAll(id string, price float64) {
 	// 🌟 IFD自動発火ロジック (ゲートウェイ側での自動実行)
 	if ord.IfDone != nil {
 		fmt.Printf("⚡ [Backtest] IFD発動: 親注文(%s)約定 -> 子注文(%s)を即時発射します\n", ord.ID, ord.IfDone.Action)
-		reqType := order.ORDER_TYPE_MARKET
-		if ord.IfDone.OrderPrice > 0 {
-			reqType = order.ORDER_TYPE_LIMIT
-		}
 		_, _ = g.SendOrder(context.Background(), order.SendOrderInput{
 			Order: ord.IfDone,
-			Request: order.OrderRequest{
-				OrderType: reqType,
-			},
 		})
 	}
 }

@@ -66,17 +66,16 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 			}
 
 			ord := order.NewOrder(order.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
-			req := order.NewOrderRequest(
-				pos.Exchange,
-				order.SECURITY_TYPE_STOCK,
-				pos.TradeType,
-				pos.AccountType,
-				order.CLOSE_POSITION_ASC_DAY_DEC_PL,
-				nil,
-				order.ORDER_TYPE_MARKET,
-			)
+			ord.Type = order.ORDER_TYPE_MARKET
+			ord.Request = &order.OrderRequest{
+				Exchange:           pos.Exchange,
+				SecurityType:       order.SECURITY_TYPE_STOCK,
+				MarginTradeType:    pos.TradeType,
+				AccountType:        pos.AccountType,
+				ClosePositionOrder: order.CLOSE_POSITION_ASC_DAY_DEC_PL,
+			}
 
-			updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord, Request: req})
+			updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord})
 			if err != nil {
 				return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.Symbol, err)
 			}
@@ -168,17 +167,16 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 					fmt.Printf("🔥 成行で強制決済を試みます: %s (%s)\n", pos.Symbol, action)
 
 					ord := order.NewOrder(order.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
-					req := order.NewOrderRequest(
-						pos.Exchange,
-						order.SECURITY_TYPE_STOCK,
-						pos.TradeType,
-						pos.AccountType,
-						order.CLOSE_POSITION_ASC_DAY_DEC_PL,
-						nil,
-						order.ORDER_TYPE_MARKET,
-					)
+					ord.Type = order.ORDER_TYPE_MARKET
+					ord.Request = &order.OrderRequest{
+						Exchange:           pos.Exchange,
+						SecurityType:       order.SECURITY_TYPE_STOCK,
+						MarginTradeType:    pos.TradeType,
+						AccountType:        pos.AccountType,
+						ClosePositionOrder: order.CLOSE_POSITION_ASC_DAY_DEC_PL,
+					}
 
-					updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord, Request: req})
+					updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord})
 					if err != nil {
 						fmt.Printf("❌ [%s] 強送決済エラー: %v\n", pos.Symbol, err)
 					} else {
