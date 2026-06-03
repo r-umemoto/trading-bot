@@ -14,6 +14,31 @@ type Position struct {
 	AveragePrice float64 // 平均取得単価
 }
 
+// Simulate は、このポジションに対してシグナルが実行されたと仮定した新しいポジションを返します。
+func (p Position) Simulate(sig brain.Signal, tickPrice float64) Position {
+	if sig.Action == brain.ACTION_HOLD {
+		return p
+	}
+	newQty := p.Qty
+	newTotalCost := p.AveragePrice * p.Qty
+	execPrice := sig.Price
+	if execPrice <= 0 {
+		execPrice = tickPrice
+	}
+	switch sig.Action {
+	case brain.ACTION_BUY:
+		newQty += sig.Quantity
+		newTotalCost += execPrice * sig.Quantity
+	case brain.ACTION_SELL:
+		newQty -= sig.Quantity
+	}
+	newAvgPrice := 0.0
+	if newQty > 0 {
+		newAvgPrice = newTotalCost / newQty
+	}
+	return Position{Qty: newQty, AveragePrice: newAvgPrice}
+}
+
 // StrategyInput は、戦略が判断を下すための「情報のパケット」です
 // 内部に計算ロジック（知恵）を隠蔽し、戦略側にはシンプルなインターフェースを提供します。
 type StrategyInput struct {
