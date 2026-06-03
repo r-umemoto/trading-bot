@@ -126,10 +126,29 @@ func main() {
 
 		// 日本語ラベルへのマッピング
 		labelMap := map[string]string{
-			"TakeProfit": "(利確)",
-			"StopLoss":   "(損切)",
-			"TimeStop":   "(タイムストップ)",
-			"LunchNoise": "(昼跨ぎによるノイズ)",
+			"TakeProfit":        "(利確)",
+			"StopLoss":          "(損切)",
+			"TimeStop":          "(タイムストップ)",
+			"LunchNoise":        "(昼跨ぎによるノイズ)",
+			"EarlyExit":         "(早期撤退)",
+			"ProfitLock":        "(利益ロック)",
+			"BreakEven":         "(建値決済)",
+			"StopLoss_VWAP":     "(VWAP下抜け損切)",
+			"StopLoss_ORB_Low":  "(ORB安値損切)",
+			"StopLoss_Ratio":    "(比率損切)",
+			"IFD:TakeProfit":    "(利確)",
+			"IFD:ProfitLock":    "(利益ロック)",
+			"IFD:EarlyExit":     "(早期撤退)",
+			"BULL:TakeProfit":   "(利確)",
+			"BULL:EarlyExit":    "(早期撤退)",
+			"BULL:ProfitLock":   "(利益ロック)",
+			"BULL:StopLoss":     "(損切)",
+			"BULL:BreakEven":    "(建値決済)",
+			"FLAT:TakeProfit":   "(利確)",
+			"FLAT:EarlyExit":    "(早期撤退)",
+			"FLAT:ProfitLock":   "(利益ロック)",
+			"FLAT:StopLoss":     "(損切)",
+			"FLAT:BreakEven":    "(建値決済)",
 		}
 
 		for _, r := range reasons {
