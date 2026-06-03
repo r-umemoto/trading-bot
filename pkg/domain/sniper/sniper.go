@@ -229,7 +229,7 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 
 	currentPos := s.calculatePosition(obs.Positions)
 	simulatedInput := strategy.StrategyInput{
-		Position:   s.simulateSignal(currentPos, signal),
+		Position:   s.simulateSignal(currentPos, signal, obs.Tick.Price),
 		LatestTick: obs.Tick,
 	}
 	ifDoneSignal := s.Strategy.IfDone(simulatedInput, signal)
@@ -252,16 +252,20 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 }
 
 
-func (s *Sniper) simulateSignal(currentPos strategy.Position, sig brain.Signal) strategy.Position {
+func (s *Sniper) simulateSignal(currentPos strategy.Position, sig brain.Signal, tickPrice float64) strategy.Position {
 	if sig.Action == brain.ACTION_HOLD {
 		return currentPos
 	}
 	newQty := currentPos.Qty
 	newTotalCost := currentPos.AveragePrice * currentPos.Qty
+	execPrice := sig.Price
+	if execPrice <= 0 {
+		execPrice = tickPrice
+	}
 	switch sig.Action {
 	case brain.ACTION_BUY:
 		newQty += sig.Quantity
-		newTotalCost += sig.Price * sig.Quantity
+		newTotalCost += execPrice * sig.Quantity
 	case brain.ACTION_SELL:
 		newQty -= sig.Quantity
 	}
