@@ -268,7 +268,7 @@ func (m *MarketGateway) CancelOrderRaw(ctx context.Context, orderID string) erro
 func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 	ords, err := m.client.GetOrders()
 	if err != nil {
-		return order.Orders{}, fmt.Errorf("注文取得失敗)")
+		return order.Orders{}, fmt.Errorf("注文取得失敗: %w", err)
 	}
 
 	domainOrders := make([]order.Order, 0, len(ords))
