@@ -10,6 +10,7 @@ type AggregatedPerformance struct {
 	Trades        int     `json:"trades" firestore:"trades"`
 	Wins          int     `json:"wins" firestore:"wins"`
 	Losses        int     `json:"losses" firestore:"losses"`
+	Draws         int     `json:"draws" firestore:"draws"`
 	WinRate       float64 `json:"win_rate" firestore:"win_rate"`
 	RealizedPnL   float64 `json:"realized_pnl" firestore:"realized_pnl"`
 	UnrealizedPnL float64 `json:"unrealized_pnl" firestore:"unrealized_pnl"`

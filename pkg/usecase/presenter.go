@@ -19,8 +19,9 @@ func (rp *ReportPresenter) PrintPerformanceReport(report *service.PerformanceRep
 		if p.Trades > 0 {
 			winRate = float64(p.Wins) / float64(p.Trades) * 100
 		}
-		fmt.Printf("%-20s | 取引: %4d回 | 勝率: %5.1f%% (%4d勝 %4d敗) | 実現損益: %+10.0f 円 | 含み損益: %+10.0f 円 | 合計: %+10.0f 円\n",
-			name, p.Trades, winRate, p.Wins, p.Losses, p.RealizedPnL, p.UnrealizedPnL, p.RealizedPnL+p.UnrealizedPnL)
+		draws := p.Trades - p.Wins - p.Losses
+		fmt.Printf("%-20s | 取引: %4d回 | 勝率: %5.1f%% (%4d勝 %4d敗 %4d分) | 実現損益: %+10.0f 円 | 含み損益: %+10.0f 円 | 合計: %+10.0f 円\n",
+			name, p.Trades, winRate, p.Wins, p.Losses, draws, p.RealizedPnL, p.UnrealizedPnL, p.RealizedPnL+p.UnrealizedPnL)
 	}
 
 	fmt.Println("\n=============================================")
