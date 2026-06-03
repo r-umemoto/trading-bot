@@ -250,6 +250,7 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 			Trades:        p.Trades,
 			Wins:          p.Wins,
 			Losses:        p.Losses,
+			Draws:         p.Trades - p.Wins - p.Losses,
 			WinRate:       winRate,
 			RealizedPnL:   p.RealizedPnL,
 			UnrealizedPnL: p.UnrealizedPnL,
