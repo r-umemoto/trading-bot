@@ -176,13 +176,13 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 			if priceDiff > o.thresholdPriceDiff {
 				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_positive_threshold"))
 				// 銘柄Aを売り、銘柄Bを買う
-				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: priceA, Quantity: o.tradeQty, Reason: "PairEntry_SellA"})
-				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: priceB, Quantity: o.tradeQty, Reason: "PairEntry_BuyB"})
+				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: 0.0, Quantity: o.tradeQty, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellA"})
+				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: 0.0, Quantity: o.tradeQty, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyB"})
 			} else if priceDiff < -o.thresholdPriceDiff {
 				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_negative_threshold"))
 				// 銘柄Aを買い、銘柄Bを売る
-				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: priceA, Quantity: o.tradeQty, Reason: "PairEntry_BuyA"})
-				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: priceB, Quantity: o.tradeQty, Reason: "PairEntry_SellB"})
+				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: 0.0, Quantity: o.tradeQty, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyA"})
+				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: 0.0, Quantity: o.tradeQty, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellB"})
 			}
 		} else {
 			if math.Abs(priceDiff) > o.thresholdPriceDiff {
@@ -198,11 +198,11 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 		if math.Abs(priceDiff) < o.thresholdPriceDiff*0.1 {
 			o.logger.Warn("PAIR_EXIT_SIGNAL_DETECTED", slog.String("reason", "spread_reverted_to_mean"))
 			if qtyA > 0 {
-				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeExit, Price: priceA, Quantity: math.Abs(qtyA), Reason: "PairExit_SellA"})
-				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeExit, Price: priceB, Quantity: math.Abs(qtyB), Reason: "PairExit_BuyB"})
+				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeExit, Price: 0.0, Quantity: math.Abs(qtyA), OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_SellA"})
+				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeExit, Price: 0.0, Quantity: math.Abs(qtyB), OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_BuyB"})
 			} else {
-				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeExit, Price: priceA, Quantity: math.Abs(qtyA), Reason: "PairExit_BuyA"})
-				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeExit, Price: priceB, Quantity: math.Abs(qtyB), Reason: "PairExit_SellB"})
+				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeExit, Price: 0.0, Quantity: math.Abs(qtyA), OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_BuyA"})
+				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeExit, Price: 0.0, Quantity: math.Abs(qtyB), OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_SellB"})
 			}
 		}
 	}

@@ -278,7 +278,7 @@ func (s *Sniper) buildForceExitSignal(qty float64) brain.Signal {
 		action = brain.ACTION_BUY
 		qty = -qty
 	}
-	return brain.Signal{Action: action, Price: 0, Quantity: qty, Reason: "LIFECYCLE_FORCE_EXIT"}
+	return brain.Signal{Action: action, Price: 0, Quantity: qty, OrderType: order.ORDER_TYPE_MARKET, Reason: "LIFECYCLE_FORCE_EXIT"}
 }
 
 func (s *Sniper) logStatus(obs Observation, input strategy.StrategyInput) {
