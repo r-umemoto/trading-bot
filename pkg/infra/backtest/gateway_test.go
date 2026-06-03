@@ -315,6 +315,7 @@ func (m *MockSniperStrategy) Evaluate(input strategy.StrategyInput) brain.Signal
 			TradeType: brain.TradeEntry,
 			Price:     400.0,
 			Quantity:  100,
+			OrderType: order.ORDER_TYPE_LIMIT,
 			Reason:    "PairEntry_SellA",
 		}
 	} else {
@@ -324,6 +325,7 @@ func (m *MockSniperStrategy) Evaluate(input strategy.StrategyInput) brain.Signal
 			TradeType: brain.TradeExit,
 			Price:     395.0,
 			Quantity:  100,
+			OrderType: order.ORDER_TYPE_LIMIT,
 			Reason:    "PairExit_BuyA",
 		}
 	}
