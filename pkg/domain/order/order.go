@@ -327,7 +327,7 @@ func (o *Order) ToCancelSent() {
 	}
 	o.ensureNotTerminal()
 
-	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_IN_PROGRESS)
+	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_WAITING || from == ORDER_STATUS_IN_PROGRESS || from == ORDER_STATUS_FILL_EXPECTED)
 	if !valid {
 		o.panicInvalidTransition(from, ORDER_STATUS_CANCEL_SENT)
 	}
