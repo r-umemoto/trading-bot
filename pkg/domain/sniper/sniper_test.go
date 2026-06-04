@@ -35,8 +35,8 @@ func TestSniper_Tick_WithObservation(t *testing.T) {
 	}
 	bullet := s.Tick(obs)
 
-	if bullet.HasOrder() {
-		t.Error("expected no order for empty signal")
+	if bullet != nil {
+		t.Error("expected no bullet for empty signal")
 	}
 
 	// 2. 疑似約定(FILL_EXPECTED)がある場合のポジション計算テスト

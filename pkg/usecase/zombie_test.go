@@ -138,7 +138,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 	s.ActiveOrders = append(s.ActiveOrders, ord)
 
 	ord.Type = order.ORDER_TYPE_LIMIT
-	bullet := sniper.Bullet{
+	bullet := sniper.OrderBullet{
 		Order: ord,
 	}
 

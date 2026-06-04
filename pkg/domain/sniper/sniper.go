@@ -35,18 +35,21 @@ const (
 	LifecycleStopped
 )
 
-type Bullet struct {
-	Order         *order.Order
-	CancelOrderID string
+type Bullet interface {
+	isBullet()
 }
 
-func (b Bullet) HasOrder() bool {
-	return b.Order != nil
+type OrderBullet struct {
+	Order *order.Order
 }
 
-func (b Bullet) HasCancel() bool {
-	return b.CancelOrderID != ""
+func (OrderBullet) isBullet() {}
+
+type CancelBullet struct {
+	OrderID string
 }
+
+func (CancelBullet) isBullet() {}
 
 type Performance struct {
 	Trades        int
@@ -106,7 +109,7 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	}
 
 	if s.lifecycle == LifecycleStopped {
-		return Bullet{}
+		return nil
 	}
 
 	// --- 1. 管理対象の状態整理 ---
@@ -179,22 +182,22 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 				fmt.Printf("🔄 [%s] 戦略不整合により注文(%s)をキャンセルします [Status:%v]\n", s.Detail.Code, curr.ID, curr.Status)
 				curr.Status = order.ORDER_STATUS_CANCEL_SENT
 				curr.CancelSentAt = time.Now()
-				return Bullet{CancelOrderID: curr.ID, Order: curr}
+				return CancelBullet{OrderID: curr.ID}
 			}
 		}
 	}
 
 	// --- 4. 新規トレードの開始 ---
 	if signal.Action == brain.ACTION_HOLD || signal.Action == "" {
-		return Bullet{}
+		return nil
 	}
 
 	if blockingOrder != nil {
-		return Bullet{}
+		return nil
 	}
 
 	if hasProcessingTrade {
-		return Bullet{}
+		return nil
 	}
 
 	// 返済エラー直後は、建玉の反映を待つためにクールダウンを設ける（1秒）
@@ -203,7 +206,7 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 		s.Logger.Warn("⏳ 前回の返済エラーから1秒未満のため、返済注文の発注を一時見合わせます（建玉反映待ち）",
 			slog.String("symbol", s.Detail.Code),
 		)
-		return Bullet{}
+		return nil
 	}
 
 	entry, exit := s.buildOrderPair(obs, signal)
@@ -214,7 +217,7 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 
 	entry.CreatedAt = now
 
-	return Bullet{Order: entry}
+	return OrderBullet{Order: entry}
 }
 
 func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Order, *order.Order) {

@@ -102,7 +102,9 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 	} else {
 		actionMap := make(map[string]order.Action)
 		for _, act := range actions {
-			actionMap[act.SniperID] = act.Bullet.Order.Action
+			if b, ok := act.Bullet.(OrderBullet); ok {
+				actionMap[act.SniperID] = b.Order.Action
+			}
 		}
 		if actionMap["sniper-a"] != order.ACTION_SELL || actionMap["sniper-b"] != order.ACTION_BUY {
 			t.Errorf("Expected A to be SELL and B to be BUY, got A: %v, B: %v", actionMap["sniper-a"], actionMap["sniper-b"])
@@ -157,7 +159,9 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 	} else {
 		actionMap := make(map[string]order.Action)
 		for _, act := range actions {
-			actionMap[act.SniperID] = act.Bullet.Order.Action
+			if b, ok := act.Bullet.(OrderBullet); ok {
+				actionMap[act.SniperID] = b.Order.Action
+			}
 		}
 		if actionMap["sniper-a"] != order.ACTION_SELL || actionMap["sniper-b"] != order.ACTION_BUY {
 			t.Errorf("Expected exit A to be SELL and B to be BUY, got A: %v, B: %v", actionMap["sniper-a"], actionMap["sniper-b"])

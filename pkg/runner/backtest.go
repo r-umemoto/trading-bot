@@ -293,18 +293,19 @@ func RunBacktest() error {
 			actions := op.HandleTick(t)
 
 			for _, act := range actions {
-				bullet := act.Bullet
-				if bullet.HasCancel() {
-					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", bullet.CancelOrderID)
-					_ = gateway.CancelOrder(context.Background(), bullet.CancelOrderID)
+				if act.Bullet == nil {
+					continue
 				}
-
-				if bullet.HasOrder() {
-					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: bullet.Order})
+				switch b := act.Bullet.(type) {
+				case sniper.CancelBullet:
+					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", b.OrderID)
+					_ = gateway.CancelOrder(context.Background(), b.OrderID)
+				case sniper.OrderBullet:
+					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: b.Order})
 					if err != nil {
-						op.FailSendingOrder(act.SniperID, bullet.Order)
+						op.FailSendingOrder(act.SniperID, b.Order)
 					} else {
-						op.UpdateOrderID(act.SniperID, bullet.Order, updatedOrder.ID)
+						op.UpdateOrderID(act.SniperID, b.Order, updatedOrder.ID)
 					}
 				}
 			}

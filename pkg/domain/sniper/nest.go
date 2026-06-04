@@ -49,7 +49,7 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 		obs := n.spotter.PrepareObservation(s.ID, t)
 		bullet := s.Tick(obs)
 
-		if bullet.HasOrder() || bullet.HasCancel() {
+		if bullet != nil {
 			actions = append(actions, FireAction{
 				SniperID: s.ID,
 				Bullet:   bullet,
