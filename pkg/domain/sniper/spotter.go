@@ -24,7 +24,11 @@ type Observation struct {
 func (o Observation) HoldQty() float64 {
 	var total float64
 	for _, p := range o.Positions {
-		total += p.LeavesQty
+		if p.Action == order.ACTION_SELL {
+			total -= p.LeavesQty
+		} else {
+			total += p.LeavesQty
+		}
 	}
 	return total
 }
@@ -364,7 +368,11 @@ func (s *Spotter) HoldQty(sniperID string) float64 {
 	defer s.mu.Unlock()
 	var total float64
 	for _, p := range s.sniperPositions[sniperID] {
-		total += p.LeavesQty
+		if p.Action == order.ACTION_SELL {
+			total -= p.LeavesQty
+		} else {
+			total += p.LeavesQty
+		}
 	}
 	return total
 }

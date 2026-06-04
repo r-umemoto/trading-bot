@@ -329,8 +329,13 @@ func (s *Sniper) calculatePosition(groundPositions []position.Position) strategy
 	var totalQty float64
 	var totalCost float64
 	for _, p := range groundPositions {
-		totalQty += p.LeavesQty
-		totalCost += p.Price * p.LeavesQty
+		if p.Action == order.ACTION_SELL {
+			totalQty -= p.LeavesQty
+			totalCost -= p.Price * p.LeavesQty
+		} else {
+			totalQty += p.LeavesQty
+			totalCost += p.Price * p.LeavesQty
+		}
 	}
 	for _, curr := range s.ActiveOrders {
 		if curr != nil && curr.Status == order.ORDER_STATUS_FILL_EXPECTED {
