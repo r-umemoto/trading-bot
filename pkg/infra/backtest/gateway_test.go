@@ -54,7 +54,7 @@ func TestGatewayLatency_OrderMatchingDelay(t *testing.T) {
 	})
 
 	orders, _ := g.GetOrders(context.Background())
-	if orders.Orders[0].Status == order.ORDER_STATUS_FILLED {
+	if orders.Orders[0].Status() == order.ORDER_STATUS_FILLED {
 		t.Errorf("expected order not to be filled at 50ms (before latency delay)")
 	}
 
@@ -67,8 +67,8 @@ func TestGatewayLatency_OrderMatchingDelay(t *testing.T) {
 	})
 
 	orders, _ = g.GetOrders(context.Background())
-	if orders.Orders[0].Status != order.ORDER_STATUS_FILLED {
-		t.Errorf("expected order to be filled at 100ms, but got: %v", orders.Orders[0].Status)
+	if orders.Orders[0].Status() != order.ORDER_STATUS_FILLED {
+		t.Errorf("expected order to be filled at 100ms, but got: %v", orders.Orders[0].Status())
 	}
 }
 
@@ -118,8 +118,8 @@ func TestGatewayLatency_CancelRace(t *testing.T) {
 	}
 
 	orders, _ := g.GetOrders(context.Background())
-	if orders.Orders[0].Status != order.ORDER_STATUS_CANCEL_SENT {
-		t.Errorf("expected status ORDER_STATUS_CANCEL_SENT, got %v", orders.Orders[0].Status)
+	if orders.Orders[0].Status() != order.ORDER_STATUS_CANCEL_SENT {
+		t.Errorf("expected status ORDER_STATUS_CANCEL_SENT, got %v", orders.Orders[0].Status())
 	}
 
 	// 10:00:00.150 (キャンセル到達前の価格タッチ。約定が優先されるはず)
@@ -131,8 +131,8 @@ func TestGatewayLatency_CancelRace(t *testing.T) {
 	})
 
 	orders, _ = g.GetOrders(context.Background())
-	if orders.Orders[0].Status != order.ORDER_STATUS_FILLED {
-		t.Errorf("expected order to be filled before cancel reaches exchange, but got %v", orders.Orders[0].Status)
+	if orders.Orders[0].Status() != order.ORDER_STATUS_FILLED {
+		t.Errorf("expected order to be filled before cancel reaches exchange, but got %v", orders.Orders[0].Status())
 	}
 
 	// 10:00:00.220 (キャンセル到達予定時刻を過ぎたTick)
@@ -145,8 +145,8 @@ func TestGatewayLatency_CancelRace(t *testing.T) {
 
 	// 既に約定しているのでステータスはFILLEDのままであること
 	orders, _ = g.GetOrders(context.Background())
-	if orders.Orders[0].Status != order.ORDER_STATUS_FILLED {
-		t.Errorf("expected order to remain FILLED, but got %v", orders.Orders[0].Status)
+	if orders.Orders[0].Status() != order.ORDER_STATUS_FILLED {
+		t.Errorf("expected order to remain FILLED, but got %v", orders.Orders[0].Status())
 	}
 }
 
@@ -220,8 +220,8 @@ func TestGatewayLatency_VolumeModelDeferredDepth(t *testing.T) {
 	})
 
 	orders, _ := g.GetOrders(context.Background())
-	if orders.Orders[0].Status != order.ORDER_STATUS_FILLED {
-		t.Errorf("expected order to be filled via volume digest, got %v", orders.Orders[0].Status)
+	if orders.Orders[0].Status() != order.ORDER_STATUS_FILLED {
+		t.Errorf("expected order to be filled via volume digest, got %v", orders.Orders[0].Status())
 	}
 }
 

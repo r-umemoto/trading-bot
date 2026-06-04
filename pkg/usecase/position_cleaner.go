@@ -124,8 +124,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 				if o != nil && !o.IsCompleted() {
 					// 🌟 取引所にまだ送信されていない仮注文は、APIキャンセルを送らずにローカルでCANCELED状態にする
 					if o.IsPending() {
-						o.Status = order.ORDER_STATUS_CANCELED
-						o.InternalState = order.STATE_CLOSED
+						o.BypassTransition(order.ORDER_STATUS_CANCELED, order.STATE_CLOSED)
 						continue
 					}
 					fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", symbolCode, o.ID)
@@ -133,7 +132,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 					if err != nil {
 						fmt.Printf("❌ [%s] キャンセルエラー: %v\n", symbolCode, err)
 					} else {
-						o.Status = order.ORDER_STATUS_CANCELED
+						o.BypassTransition(order.ORDER_STATUS_CANCELED, order.STATE_CLOSED)
 					}
 					time.Sleep(200 * time.Millisecond)
 				}

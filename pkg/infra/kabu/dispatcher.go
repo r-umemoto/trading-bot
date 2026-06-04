@@ -2,6 +2,7 @@ package kabu
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -45,10 +46,29 @@ func (d *OrderDispatcher) Start(ctx context.Context) {
 
 func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, cancelID string) <-chan order.OrderResult {
 	resCh := make(chan order.OrderResult, 1)
-	if ord == nil && cancelID == "" {
-		d.jobMu.Lock()
+
+	d.jobMu.Lock()
+	defer d.jobMu.Unlock()
+
+	requestedAt := time.Now()
+	updateCount := 0
+
+	// 既存の同一 symbol に対するジョブがある場合は上書きキャンセルする（ResultChanリークを防ぐ）
+	if old, exists := d.pendingJobs[symbol]; exists {
+		// 古いジョブの RequestedAt と UpdateCount を引き継ぐ（優先度が下がるのを防ぐ）
+		requestedAt = old.RequestedAt
+		updateCount = old.UpdateCount + 1
+
+		old.ResultChan <- order.OrderResult{
+			Symbol: old.Symbol,
+			Order:  old.OrderPtr,
+			Error:  fmt.Errorf("order overwritten in dispatch queue"),
+		}
+		close(old.ResultChan)
 		delete(d.pendingJobs, symbol)
-		d.jobMu.Unlock()
+	}
+
+	if ord == nil && cancelID == "" {
 		close(resCh)
 		return resCh
 	}
@@ -60,16 +80,16 @@ func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, cancelID strin
 		priority = 20
 	}
 
-	d.jobMu.Lock()
+	// 既にロックを取得しているので直接登録する
 	d.pendingJobs[symbol] = &OrderJob{
 		Symbol:      symbol,
 		OrderID:     cancelID,
 		OrderPtr:    ord,
 		Priority:    priority,
-		RequestedAt: time.Now(),
+		UpdateCount: updateCount,
+		RequestedAt: requestedAt,
 		ResultChan:  resCh,
 	}
-	d.jobMu.Unlock()
 	return resCh
 }
 
@@ -150,4 +170,26 @@ func (d *OrderDispatcher) executeJob(ctx context.Context, job *OrderJob) {
 			Order:   job.OrderPtr,
 		}
 	}
+}
+
+// CancelPendingJob は指定された orderID を持つ送信前ジョブをキューから見つけて削除し、
+// そのジョブの ResultChan に上書きキャンセルエラーを送ってクローズします。
+// 削除に成功した場合は true を返します。
+func (d *OrderDispatcher) CancelPendingJob(orderID string) bool {
+	d.jobMu.Lock()
+	defer d.jobMu.Unlock()
+
+	for symbol, job := range d.pendingJobs {
+		if job.OrderPtr != nil && job.OrderPtr.ID == orderID {
+			job.ResultChan <- order.OrderResult{
+				Symbol: job.Symbol,
+				Order:  job.OrderPtr,
+				Error:  fmt.Errorf("order canceled in dispatch queue"),
+			}
+			close(job.ResultChan)
+			delete(d.pendingJobs, symbol)
+			return true
+		}
+	}
+	return false
 }

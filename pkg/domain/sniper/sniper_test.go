@@ -40,16 +40,15 @@ func TestSniper_Tick_WithObservation(t *testing.T) {
 	}
 
 	// 2. 疑似約定(FILL_EXPECTED)がある場合のポジション計算テスト
-	ord := &order.Order{
-		ID:         "test-order",
-		Action:     order.ACTION_BUY,
-		OrderPrice: 2000,
-		OrderQty:   100,
-		Status:     order.ORDER_STATUS_FILL_EXPECTED,
-	}
-	s.ActiveOrders = append(s.ActiveOrders, ord)
+	ord := order.NewOrder("test-order", "7203", order.ACTION_BUY, 2000, 100)
+	ord.BypassTransition(order.ORDER_STATUS_FILL_EXPECTED, ord.InternalState())
 
-	pos := s.calculatePosition(nil) // 確定ポジションはゼロ
+	obs2 := Observation{
+		Tick:         tick.Tick{Price: 2000, CurrentPriceTime: time.Now()},
+		ActiveOrders: []*order.Order{ord},
+	}
+
+	pos := s.calculatePosition(obs2) // 確定ポジションはゼロ
 	if pos.Qty != 100 {
 		t.Errorf("expected position 100 due to synthetic fill, got %f", pos.Qty)
 	}
@@ -62,28 +61,21 @@ func TestSpotter_UpdateAndObserve(t *testing.T) {
 
 	// 1. 注文の作成
 	ord := order.NewOrder("order-1", "9434", order.ACTION_BUY, 2000, 100)
-	activeOrders := map[string][]*order.Order{
-		sniperID: {ord},
-	}
+	sp.AddOrder(sniperID, ord)
 
 	// 2. 約定レポートの反映
+	o1 := order.NewOrder("order-1", "9434", order.ACTION_BUY, 2000, 100)
+	o1.BypassTransition(order.ORDER_STATUS_FILLED, order.STATE_CLOSED)
+	o1.CumQty = 100
+	o1.AddExecution(order.Execution{ID: "exec-1", Price: 2000, Qty: 100, ExecutionTime: time.Now()})
+
 	report := order.Orders{
-		Orders: []order.Order{
-			{
-				ID:     "order-1",
-				Symbol: "9434",
-				Status: order.ORDER_STATUS_FILLED,
-				CumQty: 100,
-				Executions: []order.Execution{
-					{ID: "exec-1", Price: 2000, Qty: 100, ExecutionTime: time.Now()},
-				},
-			},
-		},
+		Orders: []order.Order{*o1},
 	}
-	sp.Update(activeOrders, report, time.Now())
+	sp.Update(report, time.Now())
 
 	// 3. Observation の確認
-	obs := sp.PrepareObservation(sniperID, tick.Tick{Price: 2005})
+	obs := sp.PrepareObservation(sniperID, tick.Tick{Price: 2005}, &strategy.NoopPolicy{})
 	if len(obs.Positions) != 1 {
 		t.Fatalf("expected 1 position, got %d", len(obs.Positions))
 	}
@@ -92,71 +84,66 @@ func TestSpotter_UpdateAndObserve(t *testing.T) {
 	}
 }
 
-func TestSniper_Tick_Timeout(t *testing.T) {
+func TestSpotter_Tick_Timeout(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
-	policy := &strategy.NoopPolicy{}
-	s := NewSniper("test-sniper", detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
+	sp := NewSpotter(detail, nil)
+	policy := &strategy.TouchTTLPolicy{TTL: 2 * time.Second}
+	sniperID := "test-sniper"
 
-	ord := &order.Order{
-		Status: order.ORDER_STATUS_FILL_EXPECTED,
-		Synthetic: order.SyntheticFillState{
-			ExpectedAt: time.Now().Add(-30 * time.Second), // タイムアウト済み
-		},
+	ord := order.NewOrder("test-order", "9434", order.ACTION_BUY, 2000, 100)
+	ord.BypassTransition(order.ORDER_STATUS_FILL_EXPECTED, order.STATE_ACTIVE)
+	ord.Synthetic = order.SyntheticFillState{
+		ExpectedAt: time.Now().Add(-30 * time.Second), // タイムアウト済み
 	}
-	s.ActiveOrders = append(s.ActiveOrders, ord)
+	sp.AddOrder(sniperID, ord)
 
-	obs := Observation{
-		Tick: tick.Tick{CurrentPriceTime: time.Now()},
+	sp.PrepareObservation(sniperID, tick.Tick{Price: 2000, CurrentPriceTime: time.Now()}, policy)
+
+	if ord.Status() != order.ORDER_STATUS_WAITING {
+		t.Errorf("expected status to revert to WAITING, got %v", ord.Status())
 	}
-	// Note: CheckTimeout logic was removed from Tick temporarily or should be in Spotter.
-	// Current implementation in sniper.go removed it.
-	s.Tick(obs)
 }
 
-func TestSniper_FailSendingOrder(t *testing.T) {
+func TestSpotter_FailSendingOrder(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
-	s := NewSniper("test-sniper", detail, &MockStrategy{}, nil, order.EXCHANGE_TOSHO, nil)
+	sp := NewSpotter(detail, nil)
+	sniperID := "test-sniper"
 
 	entry := &order.Order{ID: "entry"}
 	exit := &order.Order{ID: "exit"}
-	s.ActiveOrders = append(s.ActiveOrders, entry)
-	s.ActiveOrders = append(s.ActiveOrders, exit)
+	sp.AddOrder(sniperID, entry)
+	sp.AddOrder(sniperID, exit)
 
 	// 1. 注文の失敗テスト
-	s.FailSendingOrder(exit)
-	if len(s.ActiveOrders) != 1 {
-		t.Errorf("expected 1 order left, but got %d", len(s.ActiveOrders))
+	sp.FailSendingOrder(sniperID, exit)
+	active := sp.GetSniperActiveOrders(sniperID)
+	if len(active) != 1 {
+		t.Errorf("expected 1 order left, but got %d", len(active))
 	}
 
-	s.FailSendingOrder(entry)
-	if len(s.ActiveOrders) != 0 {
-		t.Errorf("expected 0 orders left, but got %d", len(s.ActiveOrders))
+	sp.FailSendingOrder(sniperID, entry)
+	active = sp.GetSniperActiveOrders(sniperID)
+	if len(active) != 0 {
+		t.Errorf("expected 0 orders left, but got %d", len(active))
 	}
 }
-func TestSniper_Tick_NoSyntheticFillOnCancelSent(t *testing.T) {
+
+func TestSpotter_NoSyntheticFillOnCancelSent(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
-	// 貫通ポリシーを使用
+	sp := NewSpotter(detail, nil)
 	policy := &strategy.StrictPiercePolicy{}
-	s := NewSniper("test-sniper", detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
+	sniperID := "test-sniper"
 
 	// 1. すでにキャンセル送信済みの注文を用意
-	ord := &order.Order{
-		ID:         "test-order",
-		Action:     order.ACTION_BUY,
-		OrderPrice: 2000,
-		OrderQty:   100,
-		Status:     order.ORDER_STATUS_CANCEL_SENT, // ← これを維持したい
-	}
-	s.ActiveOrders = append(s.ActiveOrders, ord)
+	ord := order.NewOrder("test-order", "9434", order.ACTION_BUY, 2000, 100)
+	ord.BypassTransition(order.ORDER_STATUS_CANCEL_SENT, order.STATE_CANCELING)
+	sp.AddOrder(sniperID, ord)
 
 	// 2. 貫通する Tick を渡す（本来なら FILL_EXPECTED に上書きされる条件）
-	obs := Observation{
-		Tick: tick.Tick{Price: 1990, CurrentPriceTime: time.Now()},
-	}
-	s.Tick(obs)
+	sp.PrepareObservation(sniperID, tick.Tick{Price: 1990, CurrentPriceTime: time.Now()}, policy)
 
 	// 3. ステータスが上書きされていないことを確認
-	if ord.Status != order.ORDER_STATUS_CANCEL_SENT {
-		t.Errorf("expected status to remain CANCEL_SENT, but got %v", ord.Status)
+	if ord.Status() != order.ORDER_STATUS_CANCEL_SENT {
+		t.Errorf("expected status to remain CANCEL_SENT, but got %v", ord.Status())
 	}
 }

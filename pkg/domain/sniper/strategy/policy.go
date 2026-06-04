@@ -25,7 +25,7 @@ type TouchTTLPolicy struct {
 }
 
 func (p *TouchTTLPolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
-	if ord.Status == order.ORDER_STATUS_CANCEL_SENT || ord.IsCompleted() {
+	if ord.IsCancelSent() || ord.IsCompleted() {
 		return
 	}
 	if ord.OrderPrice > 0 && tick.Price > 0 { // 指値の場合
@@ -33,27 +33,29 @@ func (p *TouchTTLPolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
 			(ord.Action == order.ACTION_SELL && tick.Price >= ord.OrderPrice)
 
 		if isTouching {
-			if ord.Status != order.ORDER_STATUS_FILL_EXPECTED && !ord.Synthetic.TouchTimeout {
+			if !ord.IsFillExpected() && !ord.Synthetic.TouchTimeout {
 				// 初めてタッチした瞬間（フライング推測）
-				ord.Status = order.ORDER_STATUS_FILL_EXPECTED
+				ord.ToFillExpected()
 				ord.Synthetic.ExpectedAt = tick.CurrentPriceTime
 				if ord.Synthetic.ExpectedAt.IsZero() {
 					ord.Synthetic.ExpectedAt = time.Now()
 				}
 				fmt.Printf("⚡ [%s] 疑似約定を検知しました (TTL計測開始): %s (Price: %f, Tick: %f)\n", ord.Symbol, ord.ID, ord.OrderPrice, tick.Price)
-			} else if ord.Status == order.ORDER_STATUS_FILL_EXPECTED {
+			} else if ord.IsFillExpected() {
 				// すでに推測中：TTLの超過チェック
 				elapsed := tick.CurrentPriceTime.Sub(ord.Synthetic.ExpectedAt)
 				if elapsed > p.TTL {
-					ord.Status = order.ORDER_STATUS_WAITING
+					ord.ToWaiting()
 					ord.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
 					fmt.Printf("💔 [%s] 疑似約定がタイムアウトしました（キュー負け）: %s\n", ord.Symbol, ord.ID)
 				}
 			}
 		} else {
 			// 価格が離れた場合：すべての推測・タイムアウト状態をリセット
-			if ord.Status == order.ORDER_STATUS_FILL_EXPECTED || ord.Synthetic.TouchTimeout {
-				ord.Status = order.ORDER_STATUS_WAITING
+			if ord.IsFillExpected() || ord.Synthetic.TouchTimeout {
+				if ord.IsFillExpected() {
+					ord.ToWaiting()
+				}
 				ord.Synthetic.TouchTimeout = false
 				ord.Synthetic.ExpectedAt = time.Time{}
 				fmt.Printf("🔄 [%s] 価格が離れたため疑似約定ステータスをリセットしました: %s\n", ord.Symbol, ord.ID)
@@ -71,7 +73,7 @@ func (p *TouchTTLPolicy) IsOrderDesired(ord *order.Order, sig brain.Signal, symb
 type StrictPiercePolicy struct{}
 
 func (p *StrictPiercePolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
-	if ord.Status == order.ORDER_STATUS_CANCEL_SENT || ord.IsCompleted() {
+	if ord.IsCancelSent() || ord.IsCompleted() {
 		return
 	}
 	if ord.OrderPrice > 0 && tick.Price > 0 {
@@ -79,13 +81,13 @@ func (p *StrictPiercePolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick
 			(ord.Action == order.ACTION_SELL && tick.Price > ord.OrderPrice)
 
 		if isPierced {
-			if ord.Status != order.ORDER_STATUS_FILL_EXPECTED {
-				ord.Status = order.ORDER_STATUS_FILL_EXPECTED
+			if !ord.IsFillExpected() {
+				ord.ToFillExpected()
 				fmt.Printf("⚡ [%s] 貫通による確実な疑似約定を検知しました: %s (Price: %f, Tick: %f)\n", ord.Symbol, ord.ID, ord.OrderPrice, tick.Price)
 			}
 		} else {
-			if ord.Status == order.ORDER_STATUS_FILL_EXPECTED {
-				ord.Status = order.ORDER_STATUS_WAITING
+			if ord.IsFillExpected() {
+				ord.ToWaiting()
 				fmt.Printf("🔄 [%s] 価格が戻ったため貫通約定ステータスをリセットしました: %s\n", ord.Symbol, ord.ID)
 			}
 		}
@@ -105,7 +107,7 @@ type VolumeConsumptionPolicy struct {
 }
 
 func (p *VolumeConsumptionPolicy) ApplySyntheticFill(ord *order.Order, tick tick.Tick) {
-	if ord.Status == order.ORDER_STATUS_CANCEL_SENT || ord.IsCompleted() {
+	if ord.IsCancelSent() || ord.IsCompleted() {
 		return
 	}
 	if ord.OrderPrice <= 0 || tick.Price <= 0 {
@@ -117,8 +119,8 @@ func (p *VolumeConsumptionPolicy) ApplySyntheticFill(ord *order.Order, tick tick
 		(ord.Action == order.ACTION_SELL && tick.Price > ord.OrderPrice)
 
 	if isPierced {
-		if ord.Status != order.ORDER_STATUS_FILL_EXPECTED {
-			ord.Status = order.ORDER_STATUS_FILL_EXPECTED
+		if !ord.IsFillExpected() {
+			ord.ToFillExpected()
 			ord.Synthetic.ExpectedAt = tick.CurrentPriceTime
 			fmt.Printf("⚡ [%s] 疑似約定(貫通)を検知しました: %s\n", ord.Symbol, ord.ID)
 		}
@@ -150,10 +152,10 @@ func (p *VolumeConsumptionPolicy) ApplySyntheticFill(ord *order.Order, tick tick
 		ord.Synthetic.LastVolumeUpdate = tick.TradingVolume
 
 		// 消化量が閾値（自分の順番）を超えたかチェック
-		if ord.Status != order.ORDER_STATUS_FILL_EXPECTED {
+		if !ord.IsFillExpected() {
 			threshold := ord.Synthetic.InitialQueueQty * p.QueueOffsetRatio
 			if ord.Synthetic.ConsumedVolume >= threshold {
-				ord.Status = order.ORDER_STATUS_FILL_EXPECTED
+				ord.ToFillExpected()
 				ord.Synthetic.ExpectedAt = tick.CurrentPriceTime
 				if ord.Synthetic.ExpectedAt.IsZero() {
 					ord.Synthetic.ExpectedAt = time.Now()
@@ -165,7 +167,7 @@ func (p *VolumeConsumptionPolicy) ApplySyntheticFill(ord *order.Order, tick tick
 			// すでに疑似約定状態：安全のためのタイムアウト（2秒など）
 			elapsed := tick.CurrentPriceTime.Sub(ord.Synthetic.ExpectedAt)
 			if elapsed > 2*time.Second {
-				ord.Status = order.ORDER_STATUS_WAITING
+				ord.ToWaiting()
 				ord.Synthetic.TouchTimeout = true // これ以降、価格が離れるまでは再推測しない
 				fmt.Printf("💔 [%s] 疑似約定(出来高)がタイムアウトしました（幻の約定）: %s\n", ord.Symbol, ord.ID)
 			}

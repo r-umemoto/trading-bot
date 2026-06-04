@@ -161,8 +161,9 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrd
 	orderID := fmt.Sprintf("bt_order_%d", g.orderIdx)
 
 	ord.ID = orderID
-	ord.Status = order.ORDER_STATUS_WAITING
-	ord.InternalState = order.STATE_ACTIVE
+	ord.ToWaiting()
+	ord.ToPending()
+	ord.ToActive()
 	ord.CreatedAt = g.currentTime
 
 	g.orders[orderID] = ord
@@ -192,9 +193,9 @@ func (g *SyncBacktestGateway) CancelOrder(ctx context.Context, orderID string) e
 	g.cancelRequested[orderID] = true
 	if g.Latency > 0 {
 		g.cancelActiveAt[orderID] = g.currentTime.Add(g.Latency)
-		ord.Status = order.ORDER_STATUS_CANCEL_SENT
+		ord.BypassTransition(order.ORDER_STATUS_CANCEL_SENT, order.STATE_CANCELING)
 	} else {
-		ord.Status = order.ORDER_STATUS_CANCELED
+		ord.BypassTransition(order.ORDER_STATUS_CANCELED, order.STATE_CLOSED)
 	}
 	return nil
 }
@@ -261,7 +262,7 @@ func (g *SyncBacktestGateway) ProcessTick(t tick.Tick) {
 		// キャンセル到達チェック
 		if g.cancelRequested[id] {
 			if cancelTime, ok := g.cancelActiveAt[id]; !ok || !g.currentTime.Before(cancelTime) {
-				ord.Status = order.ORDER_STATUS_CANCELED
+				ord.BypassTransition(order.ORDER_STATUS_CANCELED, order.STATE_CLOSED)
 				if g.simulateCancelSilent != nil && g.simulateCancelSilent[id] {
 					// 障害注入: キャンセル成功をサイレント化（イベント通知を遮断）
 					continue
@@ -360,7 +361,7 @@ func (g *SyncBacktestGateway) executeAll(id string, price float64) {
 		ExecutionTime: g.currentTime,
 	}
 	ord.AddExecution(exec)
-	ord.Status = order.ORDER_STATUS_FILLED
+	ord.BypassTransition(order.ORDER_STATUS_FILLED, order.STATE_CLOSED)
 
 	// --- ポジション管理の更新 ---
 	isExit := ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT ||
