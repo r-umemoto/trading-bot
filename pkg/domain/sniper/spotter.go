@@ -2,12 +2,12 @@ package sniper
 
 import (
 	"log/slog"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/position"
+	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
@@ -15,9 +15,12 @@ import (
 // Observation は Spotter が観測し、整理した「現在の事実」です。
 // Sniper はこれを受け取って判断を下します。
 type Observation struct {
-	Tick        tick.Tick
-	Positions   []position.Position
-	Performance Performance
+	Tick               tick.Tick
+	Positions          []position.Position
+	Performance        Performance
+	ActiveOrders       []*order.Order
+	HasProcessingTrade bool
+	BlockingOrder      *order.Order
 }
 
 // HoldQty は現在の事実上の保有数量を返します
@@ -39,6 +42,7 @@ type Spotter struct {
 	sniperPositions     map[string][]position.Position
 	sniperPerformance   map[string]Performance
 	processedExecutions map[string]bool
+	sniperActiveOrders  map[string][]*order.Order
 	Logger              *slog.Logger
 	mu                  sync.Mutex
 }
@@ -52,107 +56,23 @@ func NewSpotter(detail symbol.Symbol, logger *slog.Logger) *Spotter {
 		sniperPositions:     make(map[string][]position.Position),
 		sniperPerformance:   make(map[string]Performance),
 		processedExecutions: make(map[string]bool),
+		sniperActiveOrders:  make(map[string][]*order.Order),
 		Logger:              logger,
 	}
 }
 
 // Update は API からの注文レポートを受け取り、内部の「事実」を更新します。
-func (s *Spotter) Update(sniperActiveOrders map[string][]*order.Order, report order.Orders, now time.Time) {
+func (s *Spotter) Update(report order.Orders, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 1. 各スナイパーごとに注文状態の整理（Reconciliation）
-	for sniperID, orders := range sniperActiveOrders {
-		var reconciledOrders []*order.Order
-		// 未完了注文の保持（APIへの反映待ち含む）
-		for _, o := range orders {
-			if o.IsPending() {
-				if now.Sub(o.CreatedAt) < 30*time.Second {
-					reconciledOrders = append(reconciledOrders, o)
-				}
-			} else if !o.IsCompleted() {
-				reconciledOrders = append(reconciledOrders, o)
-			}
-		}
+	for sniperID, orders := range s.sniperActiveOrders {
+		reconciled, newExecs := order.ReconcileOrders(orders, report, s.Detail.Code, s.processedExecutions, now)
+		s.sniperActiveOrders[sniperID] = reconciled
 
-		// APIレポートの反映
-		var pendingExecs []struct {
-			exec           order.Execution
-			action         order.Action
-			orderCreatedAt time.Time
-			parentOrder    *order.Order
-			sniperID       string
-		}
-
-		for _, ext := range report.Orders {
-			if ext.Symbol != s.Detail.Code {
-				continue
-			}
-
-			var matchedInternal *order.Order
-			// このスナイパーの注文リストから探す
-			for _, o := range reconciledOrders {
-				if o.ID == ext.ID {
-					matchedInternal = o
-					break
-				}
-			}
-			if matchedInternal == nil {
-				for _, o := range orders {
-					if o.ID == ext.ID {
-						matchedInternal = o
-						break
-					}
-				}
-			}
-
-			if matchedInternal == nil {
-				continue
-			}
-
-			// 状態同期
-			if matchedInternal.IsFillExpected() && !ext.IsCompleted() {
-				// 疑似約定状態を維持し、CumQtyのみ同期する
-				matchedInternal.CumQty = ext.CumQty
-			} else if matchedInternal.IsCancelSent() && !ext.IsCompleted() {
-				// キャンセル送信中状態を維持し、カブコム側の未完了状態（WAITING等）に引き戻されないようにする
-				matchedInternal.CumQty = ext.CumQty
-			} else {
-				matchedInternal.TransitionToStatus(ext.Status())
-				matchedInternal.CumQty = ext.CumQty
-			}
-			if matchedInternal.IsPending() {
-				matchedInternal.ToActive()
-			}
-
-			// 約定の抽出
-			for _, exec := range ext.Executions {
-				if !s.processedExecutions[exec.ID] {
-					pendingExecs = append(pendingExecs, struct {
-						exec           order.Execution
-						action         order.Action
-						orderCreatedAt time.Time
-						parentOrder    *order.Order
-						sniperID       string
-					}{
-						exec:           exec,
-						action:         matchedInternal.Action,
-						orderCreatedAt: matchedInternal.CreatedAt,
-						parentOrder:    matchedInternal,
-						sniperID:       sniperID,
-					})
-				}
-			}
-		}
-
-		// 2. 約定の反映（時系列順）
-		sort.Slice(pendingExecs, func(i, j int) bool {
-			return pendingExecs[i].exec.ExecutionTime.Before(pendingExecs[j].exec.ExecutionTime)
-		})
-
-		for _, pe := range pendingExecs {
-			s.applyExecution(pe.sniperID, pe.exec, pe.action, pe.orderCreatedAt, pe.parentOrder)
-			pe.parentOrder.AddExecution(pe.exec)
+		for _, pe := range newExecs {
+			s.applyExecution(sniperID, pe.Execution, pe.Action, pe.OrderCreatedAt, pe.ParentOrder)
+			pe.ParentOrder.AddExecution(pe.Execution)
 		}
 	}
 }
@@ -178,19 +98,123 @@ func (s *Spotter) GetUnrealizedPnL(sniperID string, currentPrice float64) float6
 	return unrealized
 }
 
+// AddOrder は新規注文を追跡対象に追加します
+func (s *Spotter) AddOrder(sniperID string, ord *order.Order) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sniperActiveOrders[sniperID] = append(s.sniperActiveOrders[sniperID], ord)
+}
+
+// GetActiveOrders はすべてのアクティブな注文のリストを返します
+func (s *Spotter) GetActiveOrders() []*order.Order {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var all []*order.Order
+	for _, orders := range s.sniperActiveOrders {
+		all = append(all, orders...)
+	}
+	return all
+}
+
+// GetSniperActiveOrders は特定のスナイパーのアクティブな注文リストを返します
+func (s *Spotter) GetSniperActiveOrders(sniperID string) []*order.Order {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	orders := s.sniperActiveOrders[sniperID]
+	ordersCopy := make([]*order.Order, len(orders))
+	copy(ordersCopy, orders)
+	return ordersCopy
+}
+
+// FailSendingOrder は発注失敗した注文をアクティブリストから除外します
+func (s *Spotter) FailSendingOrder(sniperID string, ord *order.Order) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	orders := s.sniperActiveOrders[sniperID]
+	for i, o := range orders {
+		if o == ord {
+			s.sniperActiveOrders[sniperID] = append(orders[:i], orders[i+1:]...)
+			break
+		}
+	}
+}
+
+// UpdateOrderID はローカルIDから確定した取引所IDへ注文IDを更新します
+func (s *Spotter) UpdateOrderID(sniperID string, ord *order.Order, newID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	orders := s.sniperActiveOrders[sniperID]
+	for _, o := range orders {
+		if o == ord || o.ID == ord.ID {
+			o.ID = newID
+			break
+		}
+	}
+}
+
+// RevertOrderStatus は注文ステータスを強制的にロールバックします（ゾンビ修復用）
+func (s *Spotter) RevertOrderStatus(sniperID string, ord *order.Order, status order.OrderStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	orders := s.sniperActiveOrders[sniperID]
+	for _, o := range orders {
+		if o == ord || o.ID == ord.ID {
+			o.BypassTransition(status, o.InternalState())
+			break
+		}
+	}
+}
+
 // PrepareObservation は最新の Tick をもとに、指定した Sniper に渡すためのスナップショットを作成します。
-func (s *Spotter) PrepareObservation(sniperID string, t tick.Tick) Observation {
+func (s *Spotter) PrepareObservation(sniperID string, t tick.Tick, policy strategy.ExecutionPolicy) Observation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// 1. アクティブ注文の状態クリーンアップと疑似約定の適用
+	var reconciled []*order.Order
+	var hasProcessingTrade bool
+	var blockingOrder *order.Order
+
+	orders := s.sniperActiveOrders[sniperID]
+	for _, curr := range orders {
+		if curr.IsCompleted() {
+			// 親注文が約定完了している場合、子注文(IfDone)があれば追跡を開始する
+			if curr.IsFilled() && curr.IfDone != nil {
+				child := curr.IfDone
+				curr.IfDone = nil
+				reconciled = append(reconciled, child)
+				hasProcessingTrade = true
+			}
+			continue
+		}
+
+		reconciled = append(reconciled, curr)
+		if curr.InternalState() != order.STATE_PREPARING {
+			hasProcessingTrade = true
+		}
+
+		if policy != nil && !curr.IsPending() && !curr.IsCancelSent() && !curr.IsCompleted() {
+			policy.ApplySyntheticFill(curr, t)
+		}
+
+		if !curr.IsCompleted() && curr.InternalState() != order.STATE_PREPARING {
+			blockingOrder = curr
+		}
+	}
+	s.sniperActiveOrders[sniperID] = reconciled
+
+	// 建玉のコピー
 	pos := s.sniperPositions[sniperID]
 	posCopy := make([]position.Position, len(pos))
 	copy(posCopy, pos)
 
 	return Observation{
-		Tick:        t,
-		Positions:   posCopy,
-		Performance: s.sniperPerformance[sniperID],
+		Tick:               t,
+		Positions:          posCopy,
+		Performance:        s.sniperPerformance[sniperID],
+		ActiveOrders:       reconciled,
+		HasProcessingTrade: hasProcessingTrade,
+		BlockingOrder:      blockingOrder,
 	}
 }
 

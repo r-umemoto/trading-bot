@@ -245,9 +245,9 @@ func RunBacktest() error {
 	}
 
 	// PositionCleaner の起動 (Gatewayに依存するため)
-	cleanableTargets := make([]usecase.CleanableTarget, len(snipers))
-	for i, s := range snipers {
-		cleanableTargets[i] = s
+	cleanableTargets := make([]usecase.CleanableTarget, len(operations))
+	for i, op := range operations {
+		cleanableTargets[i] = op
 	}
 	usecase.NewPositionCleaner(cleanableTargets, gateway)
 

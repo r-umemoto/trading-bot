@@ -52,7 +52,7 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 	ord.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
 
 	ordInSniper := *ord
-	s.ActiveOrders = append(s.ActiveOrders, &ordInSniper)
+	nest.Spotter().AddOrder(s.ID, &ordInSniper)
 
 	// 5. 注文キャンセル要求を送信
 	err = g.CancelOrder(context.Background(), "bt_order_1")
@@ -86,8 +86,10 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 
 	// 8. 照会（GetOrders）後のステータスを確認
 	// 自己修復により、ローカルステータスが CANCELED に更新されているはず
-	if ordInSniper.Status() != order.ORDER_STATUS_CANCELED {
-		t.Errorf("expected zombie self-healing to resolve status to CANCELED, but got %v", ordInSniper.Status())
+	// （※ Spotter内で更新されたはずの注文インスタンスを調べるため、Spotterから注文を取得する）
+	activeOrders := nest.Spotter().GetSniperActiveOrders(s.ID)
+	if len(activeOrders) != 0 {
+		t.Errorf("expected reconciled order to be completed and removed from active list, but got %d orders", len(activeOrders))
 	}
 }
 
@@ -134,7 +136,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 	ord := order.NewOrder("local-123", "7201", order.ACTION_BUY, 1000.0, 100)
 
 	// スナイパーのActiveOrdersに仮の注文として追加 (火を入れる前の状態)
-	s.ActiveOrders = append(s.ActiveOrders, ord)
+	nest.Spotter().AddOrder(s.ID, ord)
 
 	ord.Type = order.ORDER_TYPE_LIMIT
 	bullet := sniper.OrderBullet{
@@ -145,7 +147,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 	u.fire(context.Background(), op, s.ID, bullet)
 
 	// s.ActiveOrders に注文が残っており、かつ ID がサーバー側 (bt_order_1) に書き換わっていることを確認
-	activeOrders := s.GetActiveOrders()
+	activeOrders := nest.Spotter().GetSniperActiveOrders(s.ID)
 	if len(activeOrders) != 1 {
 		t.Fatalf("expected 1 active order, got %d", len(activeOrders))
 	}

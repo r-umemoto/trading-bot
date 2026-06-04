@@ -129,8 +129,8 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 
 	// 4. すでにポジションがある場合の決済判定 (14:50 JST - エントリー禁止時間だが決済は許可されるべき)
 	// 前のテストケースで作成された未完了の発注履歴(ActiveOrders)をクリアしてブロックを解除
-	sniperA.ActiveOrders = nil
-	sniperB.ActiveOrders = nil
+	nestA.spotter.sniperActiveOrders["sniper-a"] = nil
+	nestB.spotter.sniperActiveOrders["sniper-b"] = nil
 
 	// ポジションをセット (Hold Qty = 100)
 	nestA.spotter.sniperPositions["sniper-a"] = []position.Position{

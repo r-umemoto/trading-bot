@@ -46,7 +46,7 @@ func (n *SniperNest) GetSymbolCodes() []string {
 func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 	var actions []FireAction
 	for _, s := range n.snipers {
-		obs := n.spotter.PrepareObservation(s.ID, t)
+		obs := n.spotter.PrepareObservation(s.ID, t, s.ExecutionPolicy)
 		bullet := s.Tick(obs)
 
 		if bullet != nil {
@@ -54,6 +54,10 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 				SniperID: s.ID,
 				Bullet:   bullet,
 			})
+			// 新規発注なら、Spotter に注文を登録して追跡を開始する
+			if ordBullet, ok := bullet.(OrderBullet); ok {
+				n.spotter.AddOrder(s.ID, ordBullet.Order)
+			}
 		}
 	}
 	return actions
@@ -73,20 +77,12 @@ func (n *SniperNest) GetSymbolCode() string {
 
 // GetActiveOrders は配下の全スナイパーが追跡中の未完了注文を集約して返します。
 func (n *SniperNest) GetActiveOrders() []*order.Order {
-	var allOrders []*order.Order
-	for _, s := range n.snipers {
-		allOrders = append(allOrders, s.GetActiveOrders()...)
-	}
-	return allOrders
+	return n.spotter.GetActiveOrders()
 }
 
 // UpdateOrders は注文・約定レポートをもとに、内部の Spotter を更新します。
 func (n *SniperNest) UpdateOrders(report order.Orders) {
-	activeOrdersMap := make(map[string][]*order.Order)
-	for _, s := range n.snipers {
-		activeOrdersMap[s.ID] = s.GetActiveOrders()
-	}
-	n.spotter.Update(activeOrdersMap, report, time.Now())
+	n.spotter.Update(report, time.Now())
 }
 
 // GetPerformance は指定したスナイパーの成績を取得します。
@@ -133,21 +129,16 @@ func (n *SniperNest) HasSniper(sniperID string) bool {
 
 // FailSendingOrder は対象のスナイパーに発注失敗を通知します。
 func (n *SniperNest) FailSendingOrder(sniperID string, ord *order.Order) {
-	for _, s := range n.snipers {
-		if s.ID == sniperID {
-			s.FailSendingOrder(ord)
-			break
-		}
-	}
+	n.spotter.FailSendingOrder(sniperID, ord)
 }
 
 // UpdateOrderID は対象のスナイパーが持つ注文IDを最新に更新します。
 func (n *SniperNest) UpdateOrderID(sniperID string, ord *order.Order, newID string) {
-	for _, s := range n.snipers {
-		if s.ID == sniperID {
-			s.UpdateOrderID(ord, newID)
-			break
-		}
-	}
+	n.spotter.UpdateOrderID(sniperID, ord, newID)
+}
+
+// Spotter はネスト内の Spotter を返します（主にテスト用）。
+func (n *SniperNest) Spotter() *Spotter {
+	return n.spotter
 }
 

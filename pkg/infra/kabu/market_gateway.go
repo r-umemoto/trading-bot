@@ -26,6 +26,7 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		tickChannels:      make(map[string]chan tick.Tick),
 		orderChannels:     make(map[string]chan order.Orders),
 		ifdTracker:        make(map[string]*order.Order),
+		firedExecutions:   make(map[string]bool),
 		registeredSymbols: make(map[string]market.ResisterSymbolRequest),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
@@ -55,8 +56,9 @@ type MarketGateway struct {
 	dispatcher    *OrderDispatcher
 
 	// IFD tracking fields
-	ifdMu          sync.Mutex
-	ifdTracker     map[string]*order.Order       // Key: Parent Order ID -> Value: Child Order
+	ifdMu           sync.Mutex
+	ifdTracker      map[string]*order.Order       // Key: Parent Order ID -> Value: Child Order
+	firedExecutions map[string]bool               // Key: Execution ID -> Value: Fired child order
 
 	// Registered symbols tracking for reconnection
 	regMu             sync.RWMutex
@@ -261,6 +263,12 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 
 // CancelOrder は market.MarketGateway (Orderer) の実装です
 func (m *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
+	// 1. 送信前のキュー（Dispatcher）に存在するか確認し、あれば削除して終了する
+	if m.dispatcher.CancelPendingJob(orderID) {
+		return nil
+	}
+
+	// 2. なければ、取引所に対して実際にキャンセルを送信する
 	resCh := m.dispatcher.Submit("", nil, orderID)
 	select {
 	case <-ctx.Done():
@@ -465,28 +473,87 @@ func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) 
 	}
 
 	for _, ord := range ords.Orders {
-		if ord.IsFilled() {
-			child, tracked := m.ifdTracker[ord.ID]
-			if tracked {
-				fmt.Printf("⚡ [MarketGateway] IFD発動: 親注文(%s)約定 -> 子注文(%s)を自動発注します\n", ord.ID, child.Action)
+		childTemplate, tracked := m.ifdTracker[ord.ID]
+		if !tracked {
+			continue
+		}
 
-				child.CreatedAt = time.Now()
-				child.ToPending()
-
-				go func(c *order.Order) {
-					resCh := m.dispatcher.Submit(c.Symbol, c, "")
-					res := <-resCh
-					if res.Error != nil {
-						fmt.Printf("⚠️ [MarketGateway] IFD子注文自動発注失敗 (Symbol: %s): %v\n", c.Symbol, res.Error)
-					} else {
-						fmt.Printf("✅ [MarketGateway] IFD子注文自動発注成功 (ID: %s)\n", res.OrderID)
-					}
-				}(child)
-
-				delete(m.ifdTracker, ord.ID)
+		// 親注文に紐づく約定をすべてチェック
+		for _, exec := range ord.Executions {
+			// すでにこの約定に対して決済注文を発注済みならスキップ
+			if m.firedExecutions[exec.ID] {
+				continue
 			}
+
+			fmt.Printf("⚡ [MarketGateway] IFD部分約定を検知: 親注文(%s) 約定ID(%s) %.0f株 -> 子注文を即時発注します\n",
+				ord.ID, exec.ID, exec.Qty)
+
+			// 発注済みマーク
+			m.firedExecutions[exec.ID] = true
+
+			// この部分約定専用の決済注文をクローンして作成
+			execChild := m.cloneChildOrderForExecution(childTemplate, exec)
+
+			go func(c *order.Order) {
+				resCh := m.dispatcher.Submit(c.Symbol, c, "")
+				res := <-resCh
+				if res.Error != nil {
+					fmt.Printf("⚠️ [MarketGateway] 部分決済自動発注失敗 (Symbol: %s, ExecID: %s): %v\n",
+						c.Symbol, exec.ID, res.Error)
+				} else {
+					fmt.Printf("✅ [MarketGateway] 部分決済自動発注成功 (ID: %s, ExecID: %s)\n",
+						res.OrderID, exec.ID)
+				}
+			}(execChild)
+		}
+
+		// 親注文が完全に終了（完全約定、キャンセル、失効）し、
+		// かつすべての約定に対して決済を発注し終えたら、トラッカーから削除する
+		if ord.IsCompleted() && m.allExecutionsFired(ord) {
+			delete(m.ifdTracker, ord.ID)
 		}
 	}
+}
+
+// allExecutionsFired は親注文のすべての約定に対して、決済注文が発注されたかを判定します
+func (m *MarketGateway) allExecutionsFired(ord order.Order) bool {
+	for _, exec := range ord.Executions {
+		if !m.firedExecutions[exec.ID] {
+			return false
+		}
+	}
+	return true
+}
+
+// cloneChildOrderForExecution は子注文のテンプレートから特定の約定用の決済注文を作成します
+func (m *MarketGateway) cloneChildOrderForExecution(template *order.Order, exec order.Execution) *order.Order {
+	child := order.NewOrder(
+		order.GenerateLocalID(),
+		template.Symbol,
+		template.Action,
+		template.OrderPrice,
+		exec.Qty, // 部分約定した数量と同じにする
+		order.WithType(template.Type),
+		order.WithCashMargin(template.CashMargin),
+		order.WithReason(template.Reason),
+	)
+
+	// 決済指定（ClosePositions）をピンポイントで構築
+	child.Request = &order.OrderRequest{
+		Exchange:           template.Request.Exchange,
+		SecurityType:       template.Request.SecurityType,
+		MarginTradeType:    template.Request.MarginTradeType,
+		AccountType:        template.Request.AccountType,
+		ClosePositions: []order.ClosePosition{
+			{
+				HoldID: exec.ID, // 取引所から届いた本物の約定ID
+				Qty:    exec.Qty,
+			},
+		},
+		ClosePositionOrder: order.CLOSE_POSITION_ORDER_NONE,
+	}
+
+	return child
 }
 
 func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {

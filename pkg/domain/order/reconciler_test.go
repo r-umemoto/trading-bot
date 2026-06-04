@@ -1,0 +1,132 @@
+package order
+
+import (
+	"testing"
+	"time"
+)
+
+func TestReconcileOrders_PendingOrdersTimeout(t *testing.T) {
+	now := time.Now()
+
+	// 30秒未満の Pending 注文
+	o1 := NewOrder("local-1", "7203", ACTION_BUY, 2000, 100)
+	o1.CreatedAt = now.Add(-10 * time.Second)
+
+	// 30秒以上の Pending 注文 (タイムアウトで除外されるべき)
+	o2 := NewOrder("local-2", "7203", ACTION_BUY, 2000, 100)
+	o2.CreatedAt = now.Add(-40 * time.Second)
+
+	// アクティブ（送信完了・執行中）な注文
+	o3 := NewOrder("api-3", "7203", ACTION_BUY, 2000, 100)
+	o3.BypassTransition(ORDER_STATUS_IN_PROGRESS, STATE_ACTIVE)
+
+	localOrders := []*Order{o1, o2, o3}
+	apiOrders := Orders{Orders: []Order{}}
+	processedExecs := make(map[string]bool)
+
+	reconciled, execs := ReconcileOrders(localOrders, apiOrders, "7203", processedExecs, now)
+
+	if len(execs) != 0 {
+		t.Errorf("expected 0 executions, got %d", len(execs))
+	}
+
+	// o2 がタイムアウトし、o1 と o3 が残るはず
+	if len(reconciled) != 2 {
+		t.Fatalf("expected 2 reconciled orders, got %d", len(reconciled))
+	}
+
+	if reconciled[0].ID != "local-1" || reconciled[1].ID != "api-3" {
+		t.Errorf("unexpected reconciled orders order or IDs: %+v", reconciled)
+	}
+}
+
+func TestReconcileOrders_SyncStatusAndExecutions(t *testing.T) {
+	now := time.Now()
+
+	// ローカルのアクティブ注文
+	o1 := NewOrder("order-1", "7203", ACTION_BUY, 2000, 100)
+	o1.BypassTransition(ORDER_STATUS_IN_PROGRESS, STATE_ACTIVE)
+
+	localOrders := []*Order{o1}
+
+	// APIからの更新レポート（部分約定と新規約定が発生）
+	apiOrder := Order{
+		ID:         "order-1",
+		Symbol:     "7203",
+		Action:     ACTION_BUY,
+		OrderPrice: 2000,
+		OrderQty:   100,
+		status:     ORDER_STATUS_IN_PROGRESS,
+		CumQty:     40,
+		Executions: []Execution{
+			{ID: "exec-2", Price: 2000, Qty: 10, ExecutionTime: now.Add(-1 * time.Minute)},
+			{ID: "exec-1", Price: 2000, Qty: 30, ExecutionTime: now.Add(-2 * time.Minute)}, // 時系列でこちらが先
+		},
+	}
+
+	apiOrders := Orders{Orders: []Order{apiOrder}}
+
+	// すでに "exec-1" は処理済みと仮定
+	processedExecs := map[string]bool{
+		"exec-1": true,
+	}
+
+	reconciled, execs := ReconcileOrders(localOrders, apiOrders, "7203", processedExecs, now)
+
+	// ステータスと約定数量が同期されていること
+	if o1.CumQty != 40 {
+		t.Errorf("expected CumQty 40, got %f", o1.CumQty)
+	}
+	if o1.Status() != ORDER_STATUS_IN_PROGRESS {
+		t.Errorf("expected status IN_PROGRESS, got %v", o1.Status())
+	}
+
+	// 保持されていること
+	if len(reconciled) != 1 || reconciled[0].ID != "order-1" {
+		t.Errorf("expected order-1 to be reconciled")
+	}
+
+	// 未処理の "exec-2" のみが抽出されていること
+	if len(execs) != 1 {
+		t.Fatalf("expected 1 execution, got %d", len(execs))
+	}
+	if execs[0].Execution.ID != "exec-2" {
+		t.Errorf("expected execution exec-2, got %s", execs[0].Execution.ID)
+	}
+}
+
+func TestReconcileOrders_ExecutionSorting(t *testing.T) {
+	now := time.Now()
+
+	o1 := NewOrder("order-1", "7203", ACTION_BUY, 2000, 100)
+	o1.BypassTransition(ORDER_STATUS_IN_PROGRESS, STATE_ACTIVE)
+
+	localOrders := []*Order{o1}
+
+	apiOrder := Order{
+		ID:         "order-1",
+		Symbol:     "7203",
+		Action:     ACTION_BUY,
+		status:     ORDER_STATUS_FILLED,
+		CumQty:     100,
+		Executions: []Execution{
+			{ID: "exec-c", Price: 2000, Qty: 30, ExecutionTime: now.Add(-10 * time.Second)}, // 3番目
+			{ID: "exec-a", Price: 2000, Qty: 40, ExecutionTime: now.Add(-30 * time.Second)}, // 1番目
+			{ID: "exec-b", Price: 2000, Qty: 30, ExecutionTime: now.Add(-20 * time.Second)}, // 2番目
+		},
+	}
+
+	apiOrders := Orders{Orders: []Order{apiOrder}}
+	processedExecs := make(map[string]bool)
+
+	_, execs := ReconcileOrders(localOrders, apiOrders, "7203", processedExecs, now)
+
+	if len(execs) != 3 {
+		t.Fatalf("expected 3 executions, got %d", len(execs))
+	}
+
+	// 時系列順 (a -> b -> c) にソートされていること
+	if execs[0].Execution.ID != "exec-a" || execs[1].Execution.ID != "exec-b" || execs[2].Execution.ID != "exec-c" {
+		t.Errorf("executions are not sorted by execution time: %+v", execs)
+	}
+}

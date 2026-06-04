@@ -287,3 +287,110 @@ func TestMarketGateway_StartWebSocketLoop(t *testing.T) {
 		t.Errorf("Expected LatestTick Price to be 3990.0, got %f", state.LatestTick.Price)
 	}
 }
+
+func TestMarketGateway_CheckAndFireIFD_PartialFill(t *testing.T) {
+	mockClient := &MockKabuClient{}
+	gateway := NewMarketGateway(nil, nil)
+	gateway.client = mockClient
+
+	// 親注文と子注文テンプレートの作成
+	parentID := "parent-1"
+	parent := order.NewOrder(parentID, "7203", order.ACTION_BUY, 2000, 100)
+	
+	childTemplate := order.NewOrder("child-local-id", "7203", order.ACTION_SELL, 2005, 100)
+	childTemplate.Request = &order.OrderRequest{
+		Exchange:        order.EXCHANGE_TOSHO,
+		SecurityType:    order.SECURITY_TYPE_STOCK,
+		MarginTradeType: order.TRADE_TYPE_GENERAL_DAY,
+		AccountType:     order.ACCOUNT_SPECIAL,
+	}
+
+	gateway.ifdTracker[parentID] = childTemplate
+
+	// 1. 部分約定 (30株) の発生
+	exec1 := order.Execution{
+		ID:            "exec-1",
+		Price:         2000,
+		Qty:           30,
+		ExecutionTime: time.Now(),
+	}
+	parent.AddExecution(exec1)
+	parent.CumQty = 30
+	parent.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+
+	report := order.Orders{
+		Orders: []order.Order{*parent},
+	}
+
+	gateway.checkAndFireIFD(context.Background(), report)
+
+	// 非同期の Submit を少し待つ
+	time.Sleep(10 * time.Millisecond)
+
+	// Dispatcher から送信されたジョブを取得して検証
+	job := gateway.dispatcher.pickBestJob()
+	if job == nil {
+		t.Fatal("expected a child order job to be submitted to dispatcher")
+	}
+
+	if job.OrderPtr == nil {
+		t.Fatal("expected order pointer in job")
+	}
+
+	if job.OrderPtr.OrderQty != 30 {
+		t.Errorf("expected child order qty 30, got %f", job.OrderPtr.OrderQty)
+	}
+
+	if len(job.OrderPtr.Request.ClosePositions) != 1 {
+		t.Fatalf("expected 1 close position, got %d", len(job.OrderPtr.Request.ClosePositions))
+	}
+
+	if job.OrderPtr.Request.ClosePositions[0].HoldID != "exec-1" {
+		t.Errorf("expected HoldID exec-1, got %s", job.OrderPtr.Request.ClosePositions[0].HoldID)
+	}
+
+	if !gateway.firedExecutions["exec-1"] {
+		t.Error("expected exec-1 to be marked as fired")
+	}
+
+	// 2. 重複チェック（再度 checkAndFireIFD を呼んでも exec-1 に対して重複発注されないこと）
+	gateway.checkAndFireIFD(context.Background(), report)
+	
+	time.Sleep(10 * time.Millisecond)
+	
+	job2 := gateway.dispatcher.pickBestJob()
+	if job2 != nil {
+		t.Error("expected no duplicate order job to be submitted")
+	}
+
+	// 3. 追加の部分約定 (50株) の発生
+	exec2 := order.Execution{
+		ID:            "exec-2",
+		Price:         2000,
+		Qty:           50,
+		ExecutionTime: time.Now(),
+	}
+	parent.AddExecution(exec2)
+	parent.CumQty = 80
+
+	report2 := order.Orders{
+		Orders: []order.Order{*parent},
+	}
+
+	gateway.checkAndFireIFD(context.Background(), report2)
+
+	time.Sleep(10 * time.Millisecond)
+
+	job3 := gateway.dispatcher.pickBestJob()
+	if job3 == nil {
+		t.Fatal("expected a child order job for exec-2 to be submitted")
+	}
+
+	if job3.OrderPtr.OrderQty != 50 {
+		t.Errorf("expected child order qty 50, got %f", job3.OrderPtr.OrderQty)
+	}
+
+	if job3.OrderPtr.Request.ClosePositions[0].HoldID != "exec-2" {
+		t.Errorf("expected HoldID exec-2, got %s", job3.OrderPtr.Request.ClosePositions[0].HoldID)
+	}
+}

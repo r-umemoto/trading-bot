@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
-	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
@@ -65,7 +64,6 @@ type Sniper struct {
 	Strategy          Strategy
 	State             strategy.StrategyState
 	ExecutionPolicy   strategy.ExecutionPolicy
-	ActiveOrders      []*order.Order
 	Logger            *slog.Logger
 	mu                sync.Mutex
 	lifecycle         LifecycleState
@@ -90,7 +88,6 @@ func NewSniper(id string, detail symbol.Symbol, strategy Strategy, policy strate
 		Detail:              detail,
 		Strategy:            strategy,
 		ExecutionPolicy:     policy,
-		ActiveOrders:        make([]*order.Order, 0),
 		AccountType:         order.ACCOUNT_SPECIAL,
 		Exchange:            exchange,
 		MarginTradeType:     order.TRADE_TYPE_GENERAL_DAY,
@@ -113,38 +110,11 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	}
 
 	// --- 1. 管理対象の状態整理 ---
-	var reconciled []*order.Order
-	var hasProcessingTrade bool
-	var blockingOrder *order.Order
-
-	for _, curr := range s.ActiveOrders {
-		if curr.IsCompleted() {
-			// 🌟 親注文が約定完了している場合、子注文(IfDone)があれば追跡を開始する
-			if curr.IsFilled() && curr.IfDone != nil {
-				fmt.Printf("🎯 [%s] 子注文(IFD)の追跡を開始します: %s\n", s.Detail.Code, curr.IfDone.ID)
-				// 子注文を管理対象に加える（IfDoneポインタを消すことで二重追加を防止）
-				child := curr.IfDone
-				curr.IfDone = nil 
-				reconciled = append(reconciled, child)
-				hasProcessingTrade = true
-			}
-			continue
-		}
-		reconciled = append(reconciled, curr)
-		hasProcessingTrade = true
-
-		if s.ExecutionPolicy != nil && !curr.IsPending() && !curr.IsCancelSent() && !curr.IsCompleted() {
-			s.ExecutionPolicy.ApplySyntheticFill(curr, obs.Tick)
-		}
-
-		if !curr.IsCompleted() {
-			blockingOrder = curr
-		}
-	}
-	s.ActiveOrders = reconciled
+	hasProcessingTrade := obs.HasProcessingTrade
+	blockingOrder := obs.BlockingOrder
 
 	// --- 2. 戦略判断の取得 ---
-	currentPos := s.calculatePosition(obs.Positions)
+	currentPos := s.calculatePosition(obs)
 	input := strategy.StrategyInput{
 		Position:   currentPos,
 		LatestTick: obs.Tick,
@@ -172,23 +142,37 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	s.logStatus(obs, input)
 
 	// --- 3. 整合性チェック（Reconciliation） ---
-	for _, curr := range s.ActiveOrders {
+	for _, curr := range obs.ActiveOrders {
 		if curr == nil || curr.IsPending() || curr.IsCancelSent() {
 			continue
 		}
 
 		if s.Strategy.ShouldCancel(input, curr) {
-			if curr.IsInProgress() {
+			if !curr.IsCompleted() {
 				fmt.Printf("🔄 [%s] 戦略不整合により注文(%s)をキャンセルします [Status:%v]\n", s.Detail.Code, curr.ID, curr.Status())
 				curr.ToCancelSent()
-				curr.CancelSentAt = time.Now()
+				curr.CancelSentAt = now
 				return CancelBullet{OrderID: curr.ID}
 			}
 		}
 	}
 
+	// 送信キュー滞留中（PREPARING）の注文を探す
+	var preparingOrder *order.Order
+	for _, o := range obs.ActiveOrders {
+		if o != nil && o.InternalState() == order.STATE_PREPARING {
+			preparingOrder = o
+			break
+		}
+	}
+
 	// --- 4. 新規トレードの開始 ---
 	if signal.Action == brain.ACTION_HOLD || signal.Action == "" {
+		// もし送信キューに古い注文があり、最新シグナルが HOLD（不要）になったなら、古い注文をキャンセル（キューから削除）する
+		if preparingOrder != nil {
+			fmt.Printf("🔄 [%s] シグナル消滅により送信待ち注文(%s)を上書きキャンセルします\n", s.Detail.Code, preparingOrder.ID)
+			return CancelBullet{OrderID: preparingOrder.ID}
+		}
 		return nil
 	}
 
@@ -198,6 +182,23 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 
 	if hasProcessingTrade {
 		return nil
+	}
+
+	// すでに送信待ち（PREPARING）の注文がある場合
+	if preparingOrder != nil {
+		marketAction, _ := signal.Action.ToMarketAction()
+		roundedPrice := s.Detail.RoundPrice(signal.Price)
+		// 最新のシグナルとキューの注文内容が完全に同じであれば、そのまま送信させるために何もしない（ブロック）
+		if preparingOrder.Action == marketAction &&
+			preparingOrder.OrderPrice == roundedPrice &&
+			preparingOrder.OrderQty == signal.Quantity {
+			return nil
+		}
+		
+		// 内容が異なる場合は、古い注文を明示的にキャンセルするのではなく、
+		// 直接新しい注文を生成して返すことで、インフラ層（Dispatcher）の Submit 上書き処理に委ねる
+		fmt.Printf("🔄 [%s] シグナル変更により送信待ち注文(%s)を上書きします (旧: Price %.1f/Qty %.0f -> 新: Price %.1f/Qty %.0f)\n",
+			s.Detail.Code, preparingOrder.ID, preparingOrder.OrderPrice, preparingOrder.OrderQty, roundedPrice, signal.Quantity)
 	}
 
 	// 返済エラー直後は、建玉の反映を待つためにクールダウンを設ける（1秒）
@@ -210,7 +211,6 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	}
 
 	entry, exit := s.buildOrderPair(obs, signal)
-	s.ActiveOrders = append(s.ActiveOrders, entry)
 	if exit != nil {
 		entry.IfDone = exit
 	}
@@ -258,7 +258,7 @@ func (s *Sniper) buildOrderPair(obs Observation, signal brain.Signal) (*order.Or
 	)
 	entry.ToPending()
 
-	currentPos := s.calculatePosition(obs.Positions)
+	currentPos := s.calculatePosition(obs)
 	simulatedInput := strategy.StrategyInput{
 		Position:   currentPos.Simulate(signal, obs.Tick.Price),
 		LatestTick: obs.Tick,
@@ -313,7 +313,7 @@ func (s *Sniper) logStatus(obs Observation, input strategy.StrategyInput) {
 		return
 	}
 	var orderDetails []string
-	for _, curr := range s.ActiveOrders {
+	for _, curr := range obs.ActiveOrders {
 		if curr != nil {
 			orderDetails = append(orderDetails, fmt.Sprintf("%s:%s Status:%d", curr.ID, curr.Action, curr.Status()))
 		}
@@ -327,10 +327,10 @@ func (s *Sniper) logStatus(obs Observation, input strategy.StrategyInput) {
 	s.lastStatusLogAt = time.Now()
 }
 
-func (s *Sniper) calculatePosition(groundPositions []position.Position) strategy.Position {
+func (s *Sniper) calculatePosition(obs Observation) strategy.Position {
 	var totalQty float64
 	var totalCost float64
-	for _, p := range groundPositions {
+	for _, p := range obs.Positions {
 		if p.Action == order.ACTION_SELL {
 			totalQty -= p.LeavesQty
 			totalCost -= p.Price * p.LeavesQty
@@ -339,7 +339,7 @@ func (s *Sniper) calculatePosition(groundPositions []position.Position) strategy
 			totalCost += p.Price * p.LeavesQty
 		}
 	}
-	for _, curr := range s.ActiveOrders {
+	for _, curr := range obs.ActiveOrders {
 		if curr != nil && curr.IsFillExpected() {
 			switch curr.Action {
 			case order.ACTION_BUY:
@@ -385,44 +385,6 @@ func (s *Sniper) matchPositionsToClose(obs Observation, action order.Action, qty
 	return closePositions, order.CLOSE_POSITION_ORDER_NONE
 }
 
-func (s *Sniper) FailSendingOrder(ord *order.Order) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-		s.lastCloseErrorAt = time.Now()
-	}
-
-	for i, o := range s.ActiveOrders {
-		if o == ord {
-			s.ActiveOrders = append(s.ActiveOrders[:i], s.ActiveOrders[i+1:]...)
-			break
-		}
-	}
-}
-
-func (s *Sniper) UpdateOrderID(ord *order.Order, newID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, o := range s.ActiveOrders {
-		if o == ord || o.ID == ord.ID {
-			o.ID = newID
-			break
-		}
-	}
-}
-
-func (s *Sniper) RevertOrderStatus(ord *order.Order, status order.OrderStatus) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, o := range s.ActiveOrders {
-		if o == ord || o.ID == ord.ID {
-			o.BypassTransition(status, o.InternalState()) // Revert 時は一時的なバイパスを行う
-			break
-		}
-	}
-}
-
 func (s *Sniper) OrderlyExit() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -450,12 +412,6 @@ func (s *Sniper) ForceExit() {
 
 func (s *Sniper) GetSymbolCode() string {
 	return s.Detail.Code
-}
-
-func (s *Sniper) GetActiveOrders() []*order.Order {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ActiveOrders
 }
 
 func (s *Sniper) GetID() string {
