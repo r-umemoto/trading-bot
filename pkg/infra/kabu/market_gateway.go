@@ -252,8 +252,9 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 	}
 
 	ord.ID = resp.OrderId
-	ord.Status = order.ORDER_STATUS_WAITING
-	ord.InternalState = order.STATE_ACTIVE // API送信成功・受付完了としてACTIVEへ遷移
+	ord.ToWaiting()
+	ord.ToPending()
+	ord.ToActive() // API送信成功・受付完了としてACTIVEへ遷移
 
 	return ord, nil
 }
@@ -324,7 +325,11 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 		}
 
 		o := order.NewOrder(ord.ID, ord.Symbol, action, ord.Price, ord.OrderQty)
-		o.Status = status
+		internalState := order.STATE_ACTIVE
+		if status == order.ORDER_STATUS_FILLED || status == order.ORDER_STATUS_CANCELED || status == order.ORDER_STATUS_EXPIRED {
+			internalState = order.STATE_CLOSED
+		}
+		o.BypassTransition(status, internalState)
 		o.CumQty = ord.CumQty
 		o.CashMargin = order.CashMarginType(ord.CashMargin)
 
@@ -460,13 +465,13 @@ func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) 
 	}
 
 	for _, ord := range ords.Orders {
-		if ord.Status == order.ORDER_STATUS_FILLED {
+		if ord.IsFilled() {
 			child, tracked := m.ifdTracker[ord.ID]
 			if tracked {
 				fmt.Printf("⚡ [MarketGateway] IFD発動: 親注文(%s)約定 -> 子注文(%s)を自動発注します\n", ord.ID, child.Action)
 
 				child.CreatedAt = time.Now()
-				child.InternalState = order.STATE_PENDING
+				child.ToPending()
 
 				go func(c *order.Order) {
 					resCh := m.dispatcher.Submit(c.Symbol, c, "")

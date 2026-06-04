@@ -111,18 +111,18 @@ func (s *Spotter) Update(sniperActiveOrders map[string][]*order.Order, report or
 			}
 
 			// 状態同期
-			if matchedInternal.Status == order.ORDER_STATUS_FILL_EXPECTED && !ext.IsCompleted() {
+			if matchedInternal.IsFillExpected() && !ext.IsCompleted() {
 				// 疑似約定状態を維持し、CumQtyのみ同期する
 				matchedInternal.CumQty = ext.CumQty
-			} else if matchedInternal.Status == order.ORDER_STATUS_CANCEL_SENT && !ext.IsCompleted() {
+			} else if matchedInternal.IsCancelSent() && !ext.IsCompleted() {
 				// キャンセル送信中状態を維持し、カブコム側の未完了状態（WAITING等）に引き戻されないようにする
 				matchedInternal.CumQty = ext.CumQty
 			} else {
-				matchedInternal.Status = ext.Status
+				matchedInternal.TransitionToStatus(ext.Status())
 				matchedInternal.CumQty = ext.CumQty
 			}
 			if matchedInternal.IsPending() {
-				matchedInternal.InternalState = order.STATE_ACTIVE
+				matchedInternal.ToActive()
 			}
 
 			// 約定の抽出

@@ -99,7 +99,7 @@ func (u *TradeUseCase) checkZombieOrders(ctx context.Context, op sniper.Operatio
 	var hasZombie bool
 
 	for _, ord := range op.GetActiveOrders() {
-		if ord.Status == order.ORDER_STATUS_CANCEL_SENT && !ord.CancelSentAt.IsZero() {
+		if ord.IsCancelSent() && !ord.CancelSentAt.IsZero() {
 			timeout := ord.GetCancelTimeout()
 			if now.Sub(ord.CancelSentAt) > timeout {
 				hasZombie = true

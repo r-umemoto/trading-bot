@@ -49,8 +49,7 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 
 	// 注文IDの更新と管理登録
 	ord.ID = "bt_order_1"
-	ord.InternalState = order.STATE_ACTIVE
-	ord.Status = order.ORDER_STATUS_IN_PROGRESS
+	ord.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
 
 	ordInSniper := *ord
 	s.ActiveOrders = append(s.ActiveOrders, &ordInSniper)
@@ -62,7 +61,7 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 	}
 
 	// キャンセル送信中ステータスにして、送信時刻を記録
-	ordInSniper.Status = order.ORDER_STATUS_CANCEL_SENT
+	ordInSniper.BypassTransition(order.ORDER_STATUS_CANCEL_SENT, ordInSniper.InternalState())
 	ordInSniper.CancelSentAt = baseTime
 
 	// 🌟 【障害注入（Fault Injection）】: キャンセル完了通知（イベント）をロストさせる
@@ -78,8 +77,8 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 
 	// この時点で、取引所（gateway内部）では注文はCANCELEDになっているが、
 	// イベント通知が障害注入によりロストしたため、ボットのローカルステータスは依然として CANCEL_SENT のまま（膠着状態＝ゾンビ化）
-	if ordInSniper.Status != order.ORDER_STATUS_CANCEL_SENT {
-		t.Errorf("expected local status to remain CANCEL_SENT, got %v", ordInSniper.Status)
+	if ordInSniper.Status() != order.ORDER_STATUS_CANCEL_SENT {
+		t.Errorf("expected local status to remain CANCEL_SENT, got %v", ordInSniper.Status())
 	}
 
 	// 7. 照会同期（GetOrders）を手動で呼び出して自己修復を即時実行
@@ -87,8 +86,8 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 
 	// 8. 照会（GetOrders）後のステータスを確認
 	// 自己修復により、ローカルステータスが CANCELED に更新されているはず
-	if ordInSniper.Status != order.ORDER_STATUS_CANCELED {
-		t.Errorf("expected zombie self-healing to resolve status to CANCELED, but got %v", ordInSniper.Status)
+	if ordInSniper.Status() != order.ORDER_STATUS_CANCELED {
+		t.Errorf("expected zombie self-healing to resolve status to CANCELED, but got %v", ordInSniper.Status())
 	}
 }
 
@@ -156,7 +155,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 		t.Errorf("expected reconciled order ID to be updated to 'bt_order_1', got %s", o.ID)
 	}
 
-	if o.InternalState != order.STATE_ACTIVE {
-		t.Errorf("expected internal state to be STATE_ACTIVE, got %v", o.InternalState)
+	if o.InternalState() != order.STATE_ACTIVE {
+		t.Errorf("expected internal state to be STATE_ACTIVE, got %v", o.InternalState())
 	}
 }

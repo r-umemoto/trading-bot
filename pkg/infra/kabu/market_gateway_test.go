@@ -128,8 +128,8 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 				t.Fatalf("expected 1 order, got %d", len(ords.Orders))
 			}
 
-			if ords.Orders[0].Status != tt.expected {
-				t.Errorf("expected status %d, got %d", tt.expected, ords.Orders[0].Status)
+			if ords.Orders[0].Status() != tt.expected {
+				t.Errorf("expected status %d, got %d", tt.expected, ords.Orders[0].Status())
 			}
 		})
 	}

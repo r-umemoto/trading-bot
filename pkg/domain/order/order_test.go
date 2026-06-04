@@ -27,11 +27,11 @@ func TestNewOrder(t *testing.T) {
 	if o.OrderQty != 100 {
 		t.Errorf("expected OrderQty 100, got %f", o.OrderQty)
 	}
-	if o.Status != order.ORDER_STATUS_WAITING {
-		t.Errorf("expected Status ORDER_STATUS_WAITING, got %v", o.Status)
+	if o.Status() != order.ORDER_STATUS_WAITING {
+		t.Errorf("expected Status ORDER_STATUS_WAITING, got %v", o.Status())
 	}
-	if o.InternalState != order.STATE_PREPARING {
-		t.Errorf("expected InternalState STATE_PREPARING, got %v", o.InternalState)
+	if o.InternalState() != order.STATE_PREPARING {
+		t.Errorf("expected InternalState STATE_PREPARING, got %v", o.InternalState())
 	}
 }
 
@@ -49,7 +49,8 @@ func TestOrder_IsPending(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(rune(tt.state)), func(t *testing.T) {
-			o := &order.Order{InternalState: tt.state}
+			o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
+			o.BypassTransition(o.Status(), tt.state)
 			if got := o.IsPending(); got != tt.expected {
 				t.Errorf("IsPending() for state %v = %v, expected %v", tt.state, got, tt.expected)
 			}
@@ -127,7 +128,8 @@ func TestOrder_IsCompleted(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(rune(tt.status)), func(t *testing.T) {
-			o := &order.Order{Status: tt.status}
+			o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
+			o.BypassTransition(tt.status, o.InternalState())
 			if got := o.IsCompleted(); got != tt.expected {
 				t.Errorf("IsCompleted() for status %v = %v, expected %v", tt.status, got, tt.expected)
 			}

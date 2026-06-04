@@ -19,7 +19,7 @@ const (
 
 // IsPending は注文がまだ取引所に到達していない（API受付前）状態かどうかを返します
 func (o *Order) IsPending() bool {
-	return o.InternalState == STATE_PREPARING || o.InternalState == STATE_PENDING
+	return o.internalState == STATE_PREPARING || o.internalState == STATE_PENDING
 }
 
 type OrderStatus uint32
@@ -68,7 +68,7 @@ type Order struct {
 	CreatedAt  time.Time   // 🌟 発注（オブジェクト作成）時刻
 	Executions []Execution // 🌟 約定のコレクション
 
-	Status OrderStatus // 注文の状態
+	status OrderStatus // 注文の状態
 	CumQty float64     // 🌟 APIが報告してきた累計約定数量
 
 	IfDone         *Order          // 🌟 この注文が約定した後に有効になる注文
@@ -78,7 +78,7 @@ type Order struct {
 	Reason string // 🌟 戦略がこの注文を出した理由（子戦略名など）
 
 	// 内部ステータスと疑似約定のトラッキング
-	InternalState InternalState
+	internalState InternalState
 	Synthetic     SyntheticFillState
 
 	// Request は新規発注時のリクエストパラメータです
@@ -128,9 +128,9 @@ func NewOrder(id string, symbol string, action Action, price float64, qty float6
 		Type:               ORDER_TYPE_LIMIT, // デフォルトは指値
 		OrderPrice:         price,
 		OrderQty:           qty,
-		Status:             ORDER_STATUS_WAITING,
+		status:             ORDER_STATUS_WAITING,
 		CashMargin:         CASH_MARGIN_MARGIN_ENTRY, // デフォルトは信用新規
-		InternalState:      STATE_PREPARING,
+		internalState:      STATE_PREPARING,
 		CreatedAt:          time.Now(),
 	}
 	for _, opt := range opts {
@@ -169,7 +169,7 @@ func (o *Order) AveragePrice() float64 {
 
 // IsCompleted は注文が完全に終了したか（全約定 or キャンセル or 期限切れ）を判定します
 func (o *Order) IsCompleted() bool {
-	return o.Status == ORDER_STATUS_FILLED || o.Status == ORDER_STATUS_CANCELED || o.Status == ORDER_STATUS_EXPIRED
+	return o.status == ORDER_STATUS_FILLED || o.status == ORDER_STATUS_CANCELED || o.status == ORDER_STATUS_EXPIRED
 }
 
 // HasExecution は指定された約定IDが既に存在するかを判定します
@@ -218,5 +218,253 @@ func (o *Order) GetCancelTimeout() time.Duration {
 	}
 	// 通常の指値・ブレイクアウト注文キャンセルなどは標準の10秒タイムアウト
 	return 10 * time.Second
+}
+
+func (o *Order) Status() OrderStatus {
+	return o.status
+}
+
+func (o *Order) InternalState() InternalState {
+	return o.internalState
+}
+
+// IsWaiting は注文が待機中かどうかを返します
+func (o *Order) IsWaiting() bool {
+	return o.status == ORDER_STATUS_WAITING
+}
+
+// IsInProgress は注文が執行中かどうかを返します
+func (o *Order) IsInProgress() bool {
+	return o.status == ORDER_STATUS_IN_PROGRESS
+}
+
+// IsFilled は注文が完全約定済かどうかを返します
+func (o *Order) IsFilled() bool {
+	return o.status == ORDER_STATUS_FILLED
+}
+
+// IsCanceled は注文が取消済かどうかを返します
+func (o *Order) IsCanceled() bool {
+	return o.status == ORDER_STATUS_CANCELED
+}
+
+// IsExpired は注文が期限切れ失効したかどうかを返します
+func (o *Order) IsExpired() bool {
+	return o.status == ORDER_STATUS_EXPIRED
+}
+
+// IsCancelSent はキャンセル要求が送信済かどうかを返します
+func (o *Order) IsCancelSent() bool {
+	return o.status == ORDER_STATUS_CANCEL_SENT
+}
+
+// IsFillExpected は疑似約定状態かどうかを返します
+func (o *Order) IsFillExpected() bool {
+	return o.status == ORDER_STATUS_FILL_EXPECTED
+}
+
+// BypassTransition はテストや初期モック設定のために、状態遷移チェックをバイパスして状態を強制セットします
+func (o *Order) BypassTransition(status OrderStatus, internalState InternalState) {
+	o.status = status
+	o.internalState = internalState
+}
+
+func (o *Order) ensureNotTerminal() {
+	if o.status == ORDER_STATUS_FILLED || o.status == ORDER_STATUS_CANCELED || o.status == ORDER_STATUS_EXPIRED {
+		panic(fmt.Sprintf("🚨 [FATAL_STATE_TRANSITION] Cannot transition out of terminal state: %v (OrderID: %s)", o.status, o.ID))
+	}
+}
+
+func (o *Order) panicInvalidTransition(from, to OrderStatus) {
+	panic(fmt.Sprintf("🚨 [INVALID_STATE_TRANSITION] Illegal order status change: %v -> %v (OrderID: %s)", from, to, o.ID))
+}
+
+func (o *Order) ensureNotClosed() {
+	if o.internalState == STATE_CLOSED {
+		panic(fmt.Sprintf("🚨 [FATAL_STATE_TRANSITION] Cannot transition out of closed internal state: %v (OrderID: %s)", o.internalState, o.ID))
+	}
+}
+
+func (o *Order) panicInvalidInternalTransition(from, to InternalState) {
+	panic(fmt.Sprintf("🚨 [INVALID_STATE_TRANSITION] Illegal internal state change: %v -> %v (OrderID: %s)", from, to, o.ID))
+}
+
+// ToWaiting は注文ステータスを WAITING に遷移させます
+func (o *Order) ToWaiting() {
+	from := o.status
+	if from == ORDER_STATUS_WAITING {
+		return
+	}
+	o.ensureNotTerminal()
+
+	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_FILL_EXPECTED)
+	if !valid {
+		o.panicInvalidTransition(from, ORDER_STATUS_WAITING)
+	}
+	o.status = ORDER_STATUS_WAITING
+}
+
+// ToInProgress は注文ステータスを IN_PROGRESS に遷移させます
+func (o *Order) ToInProgress() {
+	from := o.status
+	if from == ORDER_STATUS_IN_PROGRESS {
+		return
+	}
+	o.ensureNotTerminal()
+
+	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_WAITING)
+	if !valid {
+		o.panicInvalidTransition(from, ORDER_STATUS_IN_PROGRESS)
+	}
+	o.status = ORDER_STATUS_IN_PROGRESS
+}
+
+// ToCancelSent は注文ステータスを CANCEL_SENT に遷移させます
+func (o *Order) ToCancelSent() {
+	from := o.status
+	if from == ORDER_STATUS_CANCEL_SENT {
+		return
+	}
+	o.ensureNotTerminal()
+
+	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_IN_PROGRESS)
+	if !valid {
+		o.panicInvalidTransition(from, ORDER_STATUS_CANCEL_SENT)
+	}
+	o.status = ORDER_STATUS_CANCEL_SENT
+}
+
+// ToFillExpected は注文ステータスを FILL_EXPECTED に遷移させます
+func (o *Order) ToFillExpected() {
+	from := o.status
+	if from == ORDER_STATUS_FILL_EXPECTED {
+		return
+	}
+	o.ensureNotTerminal()
+
+	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_WAITING || from == ORDER_STATUS_IN_PROGRESS)
+	if !valid {
+		o.panicInvalidTransition(from, ORDER_STATUS_FILL_EXPECTED)
+	}
+	o.status = ORDER_STATUS_FILL_EXPECTED
+}
+
+// ToFilled は注文ステータスを FILLED に遷移させます
+func (o *Order) ToFilled() {
+	from := o.status
+	if from == ORDER_STATUS_FILLED {
+		return
+	}
+	o.ensureNotTerminal()
+	o.status = ORDER_STATUS_FILLED
+}
+
+// ToCanceled は注文ステータスを CANCELED に遷移させます
+func (o *Order) ToCanceled() {
+	from := o.status
+	if from == ORDER_STATUS_CANCELED {
+		return
+	}
+	o.ensureNotTerminal()
+	o.status = ORDER_STATUS_CANCELED
+}
+
+// ToExpired は注文ステータスを EXPIRED に遷移させます
+func (o *Order) ToExpired() {
+	from := o.status
+	if from == ORDER_STATUS_EXPIRED {
+		return
+	}
+	o.ensureNotTerminal()
+	o.status = ORDER_STATUS_EXPIRED
+}
+
+// ToPending は内部状態を PENDING に遷移させます
+func (o *Order) ToPending() {
+	from := o.internalState
+	if from == STATE_PENDING {
+		return
+	}
+	o.ensureNotClosed()
+
+	valid := (from == STATE_PREPARING)
+	if !valid {
+		o.panicInvalidInternalTransition(from, STATE_PENDING)
+	}
+	o.internalState = STATE_PENDING
+}
+
+// ToActive は内部状態を ACTIVE に遷移させます
+func (o *Order) ToActive() {
+	from := o.internalState
+	if from == STATE_ACTIVE {
+		return
+	}
+	o.ensureNotClosed()
+
+	valid := (from == STATE_PREPARING || from == STATE_PENDING)
+	if !valid {
+		o.panicInvalidInternalTransition(from, STATE_ACTIVE)
+	}
+	o.internalState = STATE_ACTIVE
+}
+
+// ToCanceling は内部状態を CANCELING に遷移させます
+func (o *Order) ToCanceling() {
+	from := o.internalState
+	if from == STATE_CANCELING {
+		return
+	}
+	o.ensureNotClosed()
+
+	valid := (from == STATE_ACTIVE)
+	if !valid {
+		o.panicInvalidInternalTransition(from, STATE_CANCELING)
+	}
+	o.internalState = STATE_CANCELING
+}
+
+// ToClosed は内部状態を CLOSED に遷移させます
+func (o *Order) ToClosed() {
+	from := o.internalState
+	if from == STATE_CLOSED {
+		return
+	}
+	o.ensureNotClosed()
+	o.internalState = STATE_CLOSED
+}
+
+// TransitionToStatus は指定されたステータスへの遷移を実行します（動的な状態同期用）
+func (o *Order) TransitionToStatus(to OrderStatus) {
+	switch to {
+	case ORDER_STATUS_WAITING:
+		o.ToWaiting()
+	case ORDER_STATUS_IN_PROGRESS:
+		o.ToInProgress()
+	case ORDER_STATUS_FILLED:
+		o.ToFilled()
+	case ORDER_STATUS_CANCELED:
+		o.ToCanceled()
+	case ORDER_STATUS_EXPIRED:
+		o.ToExpired()
+	case ORDER_STATUS_CANCEL_SENT:
+		o.ToCancelSent()
+	case ORDER_STATUS_FILL_EXPECTED:
+		o.ToFillExpected()
+	}
+}
+
+// TransitionToInternalState は指定された内部状態への遷移を実行します（動的な状態同期用）
+func (o *Order) TransitionToInternalState(to InternalState) {
+	switch to {
+	case STATE_PENDING:
+		o.ToPending()
+	case STATE_ACTIVE:
+		o.ToActive()
+	case STATE_CANCELING:
+		o.ToCanceling()
+	case STATE_CLOSED:
+		o.ToClosed()
+	}
 }
 
