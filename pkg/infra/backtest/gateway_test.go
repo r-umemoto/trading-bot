@@ -339,7 +339,8 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 		Tick: tick.Tick{Price: 400.0, CurrentPriceTime: baseTime},
 	}
 	bullet1 := s.Tick(obs1)
-	if !bullet1.HasOrder() {
+	ordBullet1, ok1 := bullet1.(sniper.OrderBullet)
+	if !ok1 {
 		t.Fatalf("expected entry order to be generated")
 	}
 
@@ -347,7 +348,7 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	// 新規空売り (ACTION_SELL) 注文のはずなので、CashMargin は CASH_MARGIN_MARGIN_ENTRY (2) であり、
 	// ClosePositions も空、ClosePositionOrder も NONE であるべきです。
 	// もしバグがあると、CashMargin が返済になってしまい、SendOrder がエラーになります。
-	_, err := g.SendOrder(context.Background(), order.SendOrderInput{Order: bullet1.Order})
+	_, err := g.SendOrder(context.Background(), order.SendOrderInput{Order: ordBullet1.Order})
 	if err != nil {
 		t.Fatalf("🚨 【バグ再現】新規空売りの発注に失敗しました。新規注文が返済注文に誤変換されています: %v", err)
 	}
@@ -372,14 +373,15 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	}
 
 	bullet2 := s.Tick(obs2)
-	if !bullet2.HasOrder() {
+	ordBullet2, ok2 := bullet2.(sniper.OrderBullet)
+	if !ok2 {
 		t.Fatalf("expected exit order to be generated")
 	}
 
 	// [バグの検証2]
 	// 買い戻し決済 (ACTION_BUY) 注文なので、正しく返済 (CashMargin: 3) としてカブコムに送られる必要があります。
 	// もしバグがあると、CashMargin: 2 (新規) のまま送られてしまい、両建て規制に引っかかってエラーになります。
-	_, err2 := g.SendOrder(context.Background(), order.SendOrderInput{Order: bullet2.Order})
+	_, err2 := g.SendOrder(context.Background(), order.SendOrderInput{Order: ordBullet2.Order})
 	if err2 != nil {
 		t.Fatalf("🚨 【バグ再現】買い戻し決済の発注に失敗しました。決済注文が新規注文に誤変換されています: %v", err2)
 	}

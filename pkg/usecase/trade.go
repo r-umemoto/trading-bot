@@ -142,22 +142,25 @@ func (u *TradeUseCase) reconcileZombieOrder(ctx context.Context, op sniper.Opera
 
 // fire は実際の発注・キャンセル処理を API ゲートウェイに対して非同期に実行します
 func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID string, b sniper.Bullet) {
-	if b.HasCancel() {
-		err := u.gateway.CancelOrder(ctx, b.CancelOrderID)
+	if b == nil {
+		return
+	}
+
+	switch act := b.(type) {
+	case sniper.CancelBullet:
+		err := u.gateway.CancelOrder(ctx, act.OrderID)
 		if err != nil {
 			slog.Error("❌ キャンセル注文の送信に失敗しました",
-				slog.String("orderID", b.CancelOrderID),
+				slog.String("orderID", act.OrderID),
 				slog.Any("error", err),
 			)
 		}
-	}
-
-	if b.HasOrder() {
-		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: b.Order})
+	case sniper.OrderBullet:
+		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: act.Order})
 		if err != nil {
 			slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。",
-				slog.String("symbol", b.Order.Symbol),
-				slog.String("localID", b.Order.ID),
+				slog.String("symbol", act.Order.Symbol),
+				slog.String("localID", act.Order.ID),
 				slog.Any("error", err),
 			)
 
@@ -172,16 +175,16 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 
 			if isClientError {
 				slog.Warn("🚫 [SendOrder_CLIENT_ERROR] 明確なAPIクライアントエラー（HTTP 400等）またはレート制限を検知したため、状態照合をスキップし即座に注文失敗とします",
-					slog.String("symbol", b.Order.Symbol),
-					slog.String("localID", b.Order.ID),
+					slog.String("symbol", act.Order.Symbol),
+					slog.String("localID", act.Order.ID),
 				)
-				op.FailSendingOrder(sniperID, b.Order)
+				op.FailSendingOrder(sniperID, act.Order)
 				return
 			}
 
 			slog.Warn("⚠️ [SendOrder_RECONCILING] Orphan Position防止のため即時状態照合(Reconciliation)を行います...",
-				slog.String("symbol", b.Order.Symbol),
-				slog.String("localID", b.Order.ID),
+				slog.String("symbol", act.Order.Symbol),
+				slog.String("localID", act.Order.ID),
 			)
 
 			// タイムアウトやネットワークエラーによる Orphan Position を防ぐため、即時 GetOrders で証券会社側の状態を能動取得
@@ -191,20 +194,20 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 
 			if recErr != nil {
 				slog.Error("❌ [SendOrder_RECONCILIATION_FAILED] 状態照合のための GetOrders に失敗しました。安全のため注文失敗として扱います",
-					slog.String("symbol", b.Order.Symbol),
+					slog.String("symbol", act.Order.Symbol),
 					slog.Any("error", recErr),
 				)
-				op.FailSendingOrder(sniperID, b.Order)
+				op.FailSendingOrder(sniperID, act.Order)
 				return
 			}
 
 			// GetOrders の結果から、同一銘柄・同一売買区分・同一数量・同一価格の未登録な注文が存在するか確認
 			var matchedOrder *order.Order
 			for _, ext := range ords.Orders {
-				if ext.Symbol == b.Order.Symbol &&
-					ext.Action == b.Order.Action &&
-					ext.OrderQty == b.Order.OrderQty &&
-					ext.OrderPrice == b.Order.OrderPrice {
+				if ext.Symbol == act.Order.Symbol &&
+					ext.Action == act.Order.Action &&
+					ext.OrderQty == act.Order.OrderQty &&
+					ext.OrderPrice == act.Order.OrderPrice {
 
 					// このスナイパーまたは他のスナイパーが既に追跡している注文IDは除外
 					alreadyTracked := false
@@ -229,25 +232,25 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 
 			if matchedOrder != nil {
 				slog.Info("🎯 [SendOrder_RECONCILED] タイムアウトした注文が証券会社側で受理されていることを確認しました！注文IDを更新して追跡します",
-					slog.String("symbol", b.Order.Symbol),
-					slog.String("localID", b.Order.ID),
+					slog.String("symbol", act.Order.Symbol),
+					slog.String("localID", act.Order.ID),
 					slog.String("serverID", matchedOrder.ID),
 				)
 				// 注文IDをサーバー発行のものに更新してActiveOrdersで生存させる
-				op.UpdateOrderID(sniperID, b.Order, matchedOrder.ID)
+				op.UpdateOrderID(sniperID, act.Order, matchedOrder.ID)
 				// 状態も同期
 				op.UpdateOrders(ords)
 				return
 			}
 
 			slog.Warn("🚫 [SendOrder_NOT_ACCEPTED] 状態照合の結果、証券会社側に該当する注文が見つかりませんでした。発注は実際に行われなかったと判断します",
-				slog.String("symbol", b.Order.Symbol),
-				slog.String("localID", b.Order.ID),
+				slog.String("symbol", act.Order.Symbol),
+				slog.String("localID", act.Order.ID),
 			)
-			op.FailSendingOrder(sniperID, b.Order)
+			op.FailSendingOrder(sniperID, act.Order)
 			return
 		}
-		op.UpdateOrderID(sniperID, b.Order, updatedOrder.ID)
+		op.UpdateOrderID(sniperID, act.Order, updatedOrder.ID)
 	}
 }
 
