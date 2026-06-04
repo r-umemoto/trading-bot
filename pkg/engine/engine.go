@@ -27,25 +27,35 @@ func NewEngine(usecase UseCaseHandler) *Engine {
 
 // Run はシステムの起動を行い、時刻監視とメインスレッド待機を開始します
 func (e *Engine) Run(ctx context.Context) error {
-	// 1. システムの起動（残存クリーンアップ、銘柄登録、ディスパッチャ起動、ストリーミング開始）
-	if err := e.usecase.Start(ctx); err != nil {
+	// 1. バックグラウンドワーカー（ディスパッチャ、WebSocket、ポーリング等）用のコンテキストを準備します。
+	// これらは OS シグナル（Ctrl+C）受信時も即座に停止せず、シャットダウン処理完了後に安全に停止するようにライフサイクルを分離します。
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+
+	// 2. システムの起動
+	if err := e.usecase.Start(bgCtx); err != nil {
 		return err
 	}
 
-	// 2. 時刻監視用のキルスイッチコンテキストを構築（15:15で自動キャンセル）
+	// 3. 時刻監視用のキルスイッチコンテキストを構築（15:15で自動キャンセル）
 	killCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go e.monitorKillSwitch(killCtx, cancel)
 
-	// 3. メインスレッドの待機（Ctrl+Cによる強制終了、または15:15のキルスイッチによるキャンセルまでここでブロック）
+	// 4. メインスレッドの待機（Ctrl+Cによる強制終了、または15:15のキルスイッチによるキャンセルまでここでブロック）
 	fmt.Println("🚀 リアルタイム監視ストリームを監視中...")
 	<-killCtx.Done()
 
-	// 4. システムのシャットダウンプロセス（全ポジションクローズ、登録解除など）
+	// 5. システムのシャットダウンプロセス（全ポジションクローズ、登録解除など）
 	fmt.Println("🏁 システムのシャットダウンプロセスを開始します...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer shutdownCancel()
-	return e.usecase.Shutdown(shutdownCtx)
+	err := e.usecase.Shutdown(shutdownCtx)
+
+	// 6. シャットダウン完了後にバックグラウンドワーカーを安全に停止します
+	bgCancel()
+
+	return err
 }
 
 // monitorKillSwitch は取引終了時刻（15:15）を監視し、到達時にコンテキストをキャンセルします
