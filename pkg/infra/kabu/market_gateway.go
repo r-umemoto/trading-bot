@@ -209,8 +209,22 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 
 	var closePositionOrder *int32
 	if len(closePositions) == 0 && req.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE {
-		val := int32(req.ClosePositionOrder)
+		var val int32
+		switch req.ClosePositionOrder {
+		case order.CLOSE_POSITION_ASC_DAY_DEC_PL:
+			val = 0 // カブコムAPI仕様: 0 = 日付（古い順）、損益（高い順）
+		default:
+			val = 0
+		}
 		closePositionOrder = &val
+	}
+
+	// 信用返済（CASH_MARGIN_MARGIN_EXIT）の場合、決済指定（ClosePositions または ClosePositionOrder）が必須。
+	// どちらも指定されていない場合は、不正なパラメータとして発注前にバリデーションエラーにします。
+	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+		if len(closePositions) == 0 && closePositionOrder == nil {
+			return ord, fmt.Errorf("返済注文バリデーションエラー: 信用返済ですが決済指定(ClosePositions または ClosePositionOrder)がありません (Symbol: %s)", ord.Symbol)
+		}
 	}
 
 	kabReq := api.OrderRequest{
