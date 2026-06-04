@@ -364,7 +364,8 @@ func (g *SyncBacktestGateway) executeAll(id string, price float64) {
 
 	// --- ポジション管理の更新 ---
 	isExit := ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT ||
-		(ord.Request != nil && len(ord.Request.ClosePositions) > 0)
+		(ord.Request != nil && (ord.Request.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE ||
+		len(ord.Request.ClosePositions) > 0))
 
 	if isExit {
 		// 返済処理：建玉を減らす

@@ -24,7 +24,11 @@ type Observation struct {
 func (o Observation) HoldQty() float64 {
 	var total float64
 	for _, p := range o.Positions {
-		total += p.LeavesQty
+		if p.Action == order.ACTION_SELL {
+			total -= p.LeavesQty
+		} else {
+			total += p.LeavesQty
+		}
 	}
 	return total
 }
@@ -165,7 +169,11 @@ func (s *Spotter) GetUnrealizedPnL(sniperID string, currentPrice float64) float6
 
 	var unrealized float64
 	for _, p := range s.sniperPositions[sniperID] {
-		unrealized += (currentPrice - p.Price) * p.LeavesQty
+		pnlFactor := 1.0
+		if p.Action == order.ACTION_SELL {
+			pnlFactor = -1.0
+		}
+		unrealized += (currentPrice - p.Price) * p.LeavesQty * pnlFactor
 	}
 	return unrealized
 }
@@ -192,11 +200,29 @@ func (s *Spotter) applyExecution(sniperID string, exec order.Execution, action o
 	}
 	s.processedExecutions[exec.ID] = true
 
-	switch action {
-	case order.ACTION_BUY:
+	isExit := false
+	exchange := order.EXCHANGE_TOSHO
+	tradeType := order.TRADE_TYPE_GENERAL_DAY // 🌟 安全なデフォルト値（一般信用デイトレ）
+	accountType := order.ACCOUNT_SPECIAL      // 🌟 安全なデフォルト値（特定口座）
+
+	if parentOrder != nil {
+		isExit = (parentOrder.CashMargin == order.CASH_MARGIN_MARGIN_EXIT)
+		if parentOrder.Request != nil {
+			exchange = parentOrder.Request.Exchange
+			tradeType = parentOrder.Request.MarginTradeType
+			accountType = parentOrder.Request.AccountType
+		}
+	}
+
+	if !isExit {
+		// 新規建てエントリー（信用新規買い、または信用新規売り）
 		s.sniperPositions[sniperID] = append(s.sniperPositions[sniperID], position.Position{
 			ExecutionID: exec.ID,
 			Symbol:      s.Detail.Code,
+			Exchange:    exchange,
+			Action:      action,
+			TradeType:   tradeType,
+			AccountType: accountType,
 			LeavesQty:   exec.Qty,
 			Price:       exec.Price,
 			Meta:        position.PositionMeta{EntryTime: exec.ExecutionTime},
@@ -204,11 +230,18 @@ func (s *Spotter) applyExecution(sniperID string, exec order.Execution, action o
 		s.Logger.Info("FILLED",
 			slog.String("sniper", sniperID),
 			slog.String("symbol", s.Detail.Code),
+			slog.String("action", string(action)),
 			slog.Float64("qty", exec.Qty),
 			slog.Float64("price", exec.Price),
-			slog.String("exit_reason", parentOrder.Reason), // 🌟 理由を記録
+			slog.String("exit_reason", func() string {
+				if parentOrder != nil {
+					return parentOrder.Reason
+				}
+				return ""
+			}()), // 🌟 理由を記録
 		)
-	case order.ACTION_SELL:
+	} else {
+		// 返済決済（信用返済売り、または信用返済買い）
 		var closePositions []order.ClosePosition
 		reason := ""
 		if parentOrder != nil {
@@ -247,7 +280,11 @@ func (s *Spotter) reducePositions(sniperID string, sellQty float64, sellPrice fl
 					earliestEntryTime = p.Meta.EntryTime
 				}
 
-				tradePnL := (sellPrice - p.Price) * closeQty
+				pnlFactor := 1.0
+				if p.Action == order.ACTION_SELL {
+					pnlFactor = -1.0
+				}
+				tradePnL := (sellPrice - p.Price) * closeQty * pnlFactor
 				totalTradePnL += tradePnL
 				s.updatePerformance(sniperID, tradePnL)
 
@@ -279,7 +316,11 @@ func (s *Spotter) reducePositions(sniperID string, sellQty float64, sellPrice fl
 				earliestEntryTime = p.Meta.EntryTime
 			}
 
-			tradePnL := (sellPrice - p.Price) * closeQty
+			pnlFactor := 1.0
+			if p.Action == order.ACTION_SELL {
+				pnlFactor = -1.0
+			}
+			tradePnL := (sellPrice - p.Price) * closeQty * pnlFactor
 			totalTradePnL += tradePnL
 			s.updatePerformance(sniperID, tradePnL)
 
@@ -327,7 +368,11 @@ func (s *Spotter) HoldQty(sniperID string) float64 {
 	defer s.mu.Unlock()
 	var total float64
 	for _, p := range s.sniperPositions[sniperID] {
-		total += p.LeavesQty
+		if p.Action == order.ACTION_SELL {
+			total -= p.LeavesQty
+		} else {
+			total += p.LeavesQty
+		}
 	}
 	return total
 }
