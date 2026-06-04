@@ -110,6 +110,9 @@ func (s *Spotter) Update(sniperActiveOrders map[string][]*order.Order, report or
 			if matchedInternal.Status == order.ORDER_STATUS_FILL_EXPECTED && !ext.IsCompleted() {
 				// 疑似約定状態を維持し、CumQtyのみ同期する
 				matchedInternal.CumQty = ext.CumQty
+			} else if matchedInternal.Status == order.ORDER_STATUS_CANCEL_SENT && !ext.IsCompleted() {
+				// キャンセル送信中状態を維持し、カブコム側の未完了状態（WAITING等）に引き戻されないようにする
+				matchedInternal.CumQty = ext.CumQty
 			} else {
 				matchedInternal.Status = ext.Status
 				matchedInternal.CumQty = ext.CumQty

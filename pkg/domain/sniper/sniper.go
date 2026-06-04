@@ -72,6 +72,7 @@ type Sniper struct {
 
 	lastSignalReason string
 	lastStatusLogAt  time.Time
+	lastCloseErrorAt time.Time
 }
 
 func NewSniper(id string, detail symbol.Symbol, strategy Strategy, policy strategy.ExecutionPolicy, exchange order.ExchangeMarket, logger *slog.Logger) *Sniper {
@@ -193,6 +194,15 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 	}
 
 	if hasProcessingTrade {
+		return Bullet{}
+	}
+
+	// 返済エラー直後は、建玉の反映を待つためにクールダウンを設ける（1秒）
+	isExit := (signal.TradeType == brain.TradeExit)
+	if isExit && time.Since(s.lastCloseErrorAt) < 1*time.Second {
+		s.Logger.Warn("⏳ 前回の返済エラーから1秒未満のため、返済注文の発注を一時見合わせます（建玉反映待ち）",
+			slog.String("symbol", s.Detail.Code),
+		)
 		return Bullet{}
 	}
 
@@ -371,6 +381,11 @@ func (s *Sniper) matchPositionsToClose(obs Observation, action order.Action, qty
 func (s *Sniper) FailSendingOrder(ord *order.Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+		s.lastCloseErrorAt = time.Now()
+	}
+
 	for i, o := range s.ActiveOrders {
 		if o == ord {
 			s.ActiveOrders = append(s.ActiveOrders[:i], s.ActiveOrders[i+1:]...)

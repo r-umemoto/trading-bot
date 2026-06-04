@@ -4,6 +4,7 @@ package usecase
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -154,10 +155,33 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 	if b.HasOrder() {
 		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: b.Order})
 		if err != nil {
-			slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。Orphan Position防止のため即時状態照合(Reconciliation)を行います...",
+			slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。",
 				slog.String("symbol", b.Order.Symbol),
 				slog.String("localID", b.Order.ID),
 				slog.Any("error", err),
+			)
+
+			// APIが明確にエラーを返した場合（Status 400などのクライアントエラーや429レート制限など）は、
+			// 注文が受理されていないことが明らかであるため、GetOrdersによる状態照合をスキップして即失敗とする
+			errStr := err.Error()
+			isClientError := strings.Contains(errStr, "Status: 400") ||
+				strings.Contains(errStr, "Status: 422") ||
+				strings.Contains(errStr, "Status: 401") ||
+				strings.Contains(errStr, "Status: 403") ||
+				strings.Contains(errStr, "Status: 429")
+
+			if isClientError {
+				slog.Warn("🚫 [SendOrder_CLIENT_ERROR] 明確なAPIクライアントエラー（HTTP 400等）またはレート制限を検知したため、状態照合をスキップし即座に注文失敗とします",
+					slog.String("symbol", b.Order.Symbol),
+					slog.String("localID", b.Order.ID),
+				)
+				op.FailSendingOrder(sniperID, b.Order)
+				return
+			}
+
+			slog.Warn("⚠️ [SendOrder_RECONCILING] Orphan Position防止のため即時状態照合(Reconciliation)を行います...",
+				slog.String("symbol", b.Order.Symbol),
+				slog.String("localID", b.Order.ID),
 			)
 
 			// タイムアウトやネットワークエラーによる Orphan Position を防ぐため、即時 GetOrders で証券会社側の状態を能動取得
