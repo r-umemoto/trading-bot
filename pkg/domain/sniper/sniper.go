@@ -179,7 +179,7 @@ func (s *Sniper) Tick(obs Observation) Bullet {
 				fmt.Printf("🔄 [%s] 戦略不整合により注文(%s)をキャンセルします [Status:%v]\n", s.Detail.Code, curr.ID, curr.Status)
 				curr.Status = order.ORDER_STATUS_CANCEL_SENT
 				curr.CancelSentAt = time.Now()
-				return Bullet{CancelOrderID: curr.ID, Order: curr}
+				return Bullet{CancelOrderID: curr.ID}
 			}
 		}
 	}
