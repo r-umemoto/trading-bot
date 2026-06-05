@@ -1,6 +1,7 @@
 package sniper
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -36,6 +37,11 @@ func (o Observation) HoldQty() float64 {
 	return total
 }
 
+type tombstoneEntry struct {
+	ord       *order.Order
+	deletedAt time.Time
+}
+
 // Spotter は特定の銘柄の「現実の状態（事実）」を監視・維持する役割を担います。
 type Spotter struct {
 	Detail              symbol.Symbol
@@ -43,6 +49,7 @@ type Spotter struct {
 	sniperPerformance   map[string]Performance
 	processedExecutions map[string]bool
 	sniperActiveOrders  map[string][]*order.Order
+	tombstones          map[string][]tombstoneEntry // 墓標リスト
 	Logger              *slog.Logger
 	mu                  sync.Mutex
 }
@@ -57,8 +64,18 @@ func NewSpotter(detail symbol.Symbol, logger *slog.Logger) *Spotter {
 		sniperPerformance:   make(map[string]Performance),
 		processedExecutions: make(map[string]bool),
 		sniperActiveOrders:  make(map[string][]*order.Order),
+		tombstones:          make(map[string][]tombstoneEntry),
 		Logger:              logger,
 	}
+}
+
+func reportContainsID(report order.Orders, id string) bool {
+	for _, ext := range report.Orders {
+		if ext.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Update は API からの注文レポートを受け取り、内部の「事実」を更新します。
@@ -66,9 +83,103 @@ func (s *Spotter) Update(report order.Orders, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// ボット全体（すべてのスナイパー）で追跡されているすべての注文IDの集合を事前に作成する
+	allTrackedIDs := make(map[string]bool)
+	for _, orders := range s.sniperActiveOrders {
+		for _, o := range orders {
+			allTrackedIDs[o.ID] = true
+		}
+	}
+	for _, tombstones := range s.tombstones {
+		for _, t := range tombstones {
+			allTrackedIDs[t.ord.ID] = true
+		}
+	}
+
 	for sniperID, orders := range s.sniperActiveOrders {
-		reconciled, newExecs := order.ReconcileOrders(orders, report, s.Detail.Code, s.processedExecutions, now)
-		s.sniperActiveOrders[sniperID] = reconciled
+		// 取引所レポートの中から、まだどのスナイパーにも追跡されていない該当銘柄の注文を探す
+		var untrackedAPIOrders []*order.Order
+		for i := range report.Orders {
+			ext := &report.Orders[i]
+			if ext.Symbol == s.Detail.Code && !allTrackedIDs[ext.ID] {
+				untrackedAPIOrders = append(untrackedAPIOrders, ext)
+			}
+		}
+
+		// 墓標（tombstones）にある注文のうち、IDが取引所レポートに存在しないものを対象に、
+		// 未トラッキングの取引所注文とのファジーマッチを行う
+		for _, t := range s.tombstones[sniperID] {
+			if !reportContainsID(report, t.ord.ID) {
+				for i, ext := range untrackedAPIOrders {
+					if ext != nil &&
+						t.ord.Symbol == ext.Symbol &&
+						t.ord.Action == ext.Action &&
+						t.ord.OrderQty == ext.OrderQty &&
+						t.ord.OrderPrice == ext.OrderPrice {
+
+						s.Logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が取引所注文と一致しました。IDを更新します",
+							slog.String("sniper", sniperID),
+							slog.String("localID", t.ord.ID),
+							slog.String("serverID", ext.ID),
+						)
+						t.ord.ID = ext.ID
+						untrackedAPIOrders[i] = nil // 使用済みマーク
+						// 新しく紐付いたIDを追跡済みに追加して、他のマッチングでの重複を防ぐ
+						allTrackedIDs[ext.ID] = true
+						break
+					}
+				}
+			}
+		}
+
+		// activeOrders に tombstones をマージして Reconcile を行います
+		combined := make([]*order.Order, len(orders))
+		copy(combined, orders)
+
+		tombMap := make(map[string]bool)
+		for _, t := range s.tombstones[sniperID] {
+			combined = append(combined, t.ord)
+			tombMap[t.ord.ID] = true
+		}
+
+		reconciled, newExecs := order.ReconcileOrders(combined, report, s.Detail.Code, s.processedExecutions, now)
+
+		// 突き合わせた結果をアクティブと墓標に再分配します
+		var nextActive []*order.Order
+		var nextTombstones []tombstoneEntry
+
+		// 元の墓標のうち、期限切れになっていないものを一時保持
+		for _, t := range s.tombstones[sniperID] {
+			if now.Sub(t.deletedAt) < 30*time.Second {
+				nextTombstones = append(nextTombstones, t)
+			}
+		}
+
+		for _, o := range reconciled {
+			if tombMap[o.ID] {
+				// 墓標にいた注文が取引所レポートに掲載されていた（または約定が走った）場合 -> 復活！
+				s.Logger.Info("🎯 [TOMBSTONE_RESURRECTED] 一時削除された注文が取引所レポートで検知されたため、アクティブに復活させます",
+					slog.String("sniper", sniperID),
+					slog.String("orderID", o.ID),
+					slog.String("status", fmt.Sprintf("%v", o.Status())),
+				)
+				nextActive = append(nextActive, o)
+				// 復活したので墓標リストから削除
+				var cleanedTomb []tombstoneEntry
+				for _, t := range nextTombstones {
+					if t.ord.ID != o.ID {
+						cleanedTomb = append(cleanedTomb, t)
+					}
+				}
+				nextTombstones = cleanedTomb
+			} else {
+				// 通常のアクティブ注文
+				nextActive = append(nextActive, o)
+			}
+		}
+
+		s.sniperActiveOrders[sniperID] = nextActive
+		s.tombstones[sniperID] = nextTombstones
 
 		for _, pe := range newExecs {
 			s.applyExecution(sniperID, pe.Execution, pe.Action, pe.OrderCreatedAt, pe.ParentOrder)
@@ -126,7 +237,8 @@ func (s *Spotter) GetSniperActiveOrders(sniperID string) []*order.Order {
 	return ordersCopy
 }
 
-// FailSendingOrder は発注失敗した注文をアクティブリストから除外します
+// FailSendingOrder は発注失敗した注文をアクティブリストから除外しますが、
+// 証券会社側の遅延反映を考慮し、一時的に墓標（tombstone）リストに30秒間退避させます。
 func (s *Spotter) FailSendingOrder(sniperID string, ord *order.Order) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -134,6 +246,10 @@ func (s *Spotter) FailSendingOrder(sniperID string, ord *order.Order) {
 	for i, o := range orders {
 		if o == ord {
 			s.sniperActiveOrders[sniperID] = append(orders[:i], orders[i+1:]...)
+			s.tombstones[sniperID] = append(s.tombstones[sniperID], tombstoneEntry{
+				ord:       o,
+				deletedAt: time.Now(),
+			})
 			break
 		}
 	}

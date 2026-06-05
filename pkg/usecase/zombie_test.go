@@ -13,6 +13,7 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/backtest"
+	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
 )
 
 func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
@@ -96,6 +97,7 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 type faultInjectingGateway struct {
 	market.MarketGateway
 	failSend bool
+	err      error
 }
 
 func (f *faultInjectingGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
@@ -106,6 +108,9 @@ func (f *faultInjectingGateway) SendOrder(ctx context.Context, input order.SendO
 			Order: &clonedOrd,
 		}
 		_, _ = f.MarketGateway.SendOrder(ctx, clonedInput)
+		if f.err != nil {
+			return input.Order, f.err
+		}
 		return input.Order, fmt.Errorf("カブコムAPI発注失敗: タイムアウトエラー(5秒)")
 	}
 	return f.MarketGateway.SendOrder(ctx, input)
@@ -143,13 +148,28 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 		Order: ord,
 	}
 
-	// 5. fire を実行。SendOrder はエラーを返すが、証券会社側には受理され、GetOrders による自動照合で救出されるはず
+	// 5. fire を実行。SendOrder はエラーを返し、注文は一時的に墓標（Tombstone）に入るため、アクティブ注文からは消えるはず
 	u.fire(context.Background(), op, s.ID, bullet)
 
-	// s.ActiveOrders に注文が残っており、かつ ID がサーバー側 (bt_order_1) に書き換わっていることを確認
+	// s.ActiveOrders が一旦空になっていることを確認
 	activeOrders := nest.Spotter().GetSniperActiveOrders(s.ID)
+	if len(activeOrders) != 0 {
+		t.Fatalf("expected 0 active orders immediately after fire failure (should be tombstoned), got %d", len(activeOrders))
+	}
+
+	// 6. 取引所の注文状態を取得し、非同期の定期更新 (UpdateOrders) を実行する
+	// 取引所側には注文が受理されているので、GetOrdersで取得したものを流し込む
+	ords, err := fg.GetOrders(context.Background())
+	if err != nil {
+		t.Fatalf("GetOrders failed: %v", err)
+	}
+
+	op.UpdateOrders(ords)
+
+	// 7. 復旧後のアクティブ注文を確認。墓標から復活し、IDがサーバー側 (bt_order_1) に書き換わっていることを確認
+	activeOrders = nest.Spotter().GetSniperActiveOrders(s.ID)
 	if len(activeOrders) != 1 {
-		t.Fatalf("expected 1 active order, got %d", len(activeOrders))
+		t.Fatalf("expected 1 active order after resurrection, got %d", len(activeOrders))
 	}
 
 	o := activeOrders[0]
@@ -159,5 +179,55 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 
 	if o.InternalState() != order.STATE_ACTIVE {
 		t.Errorf("expected internal state to be STATE_ACTIVE, got %v", o.InternalState())
+	}
+}
+
+func TestTradeUseCase_SendOrderPermanentErrorBypassReconciliation(t *testing.T) {
+	// 1. バックテスト用ゲートウェイの生成 (遅延 100ms)
+	g := backtest.NewSyncBacktestGateway(backtest.ExecutionModelTouch, 100*time.Millisecond)
+
+	// 障害注入用のデコレータを用意 (Code 8: 決済指定内容誤り を再現)
+	fg := &faultInjectingGateway{
+		MarketGateway: g,
+		failSend:      true,
+		err: &api.KabuAPIError{
+			StatusCode: 500,
+			Code:       8,
+			Message:    "決済指定内容に誤りがあります",
+		},
+	}
+
+	// 2. スナイパーと作戦の構築
+	detail := symbol.Symbol{Code: "7201"}
+	strategyA := sniper.NewInstructionStrategy()
+	policy := &strategy.TouchTTLPolicy{TTL: 2000 * time.Millisecond}
+	s := sniper.NewSniper("test_sniper_7201", detail, strategyA, policy, order.EXCHANGE_TOSHO, nil)
+	nest := sniper.NewSniperNest("7201", sniper.NewSpotter(detail, nil), []*sniper.Sniper{s})
+	op := sniper.NewDefaultOperation("Op_7201", nest)
+
+	// 3. TradeUseCase の生成
+	u := NewTradeUseCase([]sniper.Operation{op}, fg, nil)
+
+	// 4. ベース時刻の設定と注文の送信
+	baseTime := time.Date(2026, 5, 29, 10, 0, 0, 0, time.UTC)
+	g.SetTime(baseTime)
+
+	ord := order.NewOrder("local-123", "7201", order.ACTION_BUY, 1000.0, 100)
+
+	// スナイパーのActiveOrdersに仮の注文として追加
+	nest.Spotter().AddOrder(s.ID, ord)
+
+	ord.Type = order.ORDER_TYPE_LIMIT
+	bullet := sniper.OrderBullet{
+		Order: ord,
+	}
+
+	// 5. fire を実行。SendOrder は恒久エラーを返したため、即失敗としてアクティブリストから削除されるはず（照合バイパス）
+	u.fire(context.Background(), op, s.ID, bullet)
+
+	// s.ActiveOrders が空になっている（Reconciliationされずに即削除された）ことを確認
+	activeOrders := nest.Spotter().GetSniperActiveOrders(s.ID)
+	if len(activeOrders) != 0 {
+		t.Fatalf("expected 0 active orders (immediately failed), got %d", len(activeOrders))
 	}
 }

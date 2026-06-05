@@ -4,7 +4,6 @@ package usecase
 import (
 	"context"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -158,94 +157,10 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 	case sniper.OrderBullet:
 		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: act.Order})
 		if err != nil {
-			slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。",
+			slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。注文を一時的に墓標へ退避させます。",
 				slog.String("symbol", act.Order.Symbol),
 				slog.String("localID", act.Order.ID),
 				slog.Any("error", err),
-			)
-
-			// APIが明確にエラーを返した場合（Status 400などのクライアントエラーや429レート制限など）は、
-			// 注文が受理されていないことが明らかであるため、GetOrdersによる状態照合をスキップして即失敗とする
-			errStr := err.Error()
-			isClientError := strings.Contains(errStr, "Status: 400") ||
-				strings.Contains(errStr, "Status: 422") ||
-				strings.Contains(errStr, "Status: 401") ||
-				strings.Contains(errStr, "Status: 403") ||
-				strings.Contains(errStr, "Status: 429")
-
-			if isClientError {
-				slog.Warn("🚫 [SendOrder_CLIENT_ERROR] 明確なAPIクライアントエラー（HTTP 400等）またはレート制限を検知したため、状態照合をスキップし即座に注文失敗とします",
-					slog.String("symbol", act.Order.Symbol),
-					slog.String("localID", act.Order.ID),
-				)
-				op.FailSendingOrder(sniperID, act.Order)
-				return
-			}
-
-			slog.Warn("⚠️ [SendOrder_RECONCILING] Orphan Position防止のため即時状態照合(Reconciliation)を行います...",
-				slog.String("symbol", act.Order.Symbol),
-				slog.String("localID", act.Order.ID),
-			)
-
-			// タイムアウトやネットワークエラーによる Orphan Position を防ぐため、即時 GetOrders で証券会社側の状態を能動取得
-			reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			ords, recErr := u.gateway.GetOrders(reconcileCtx)
-			reconcileCancel()
-
-			if recErr != nil {
-				slog.Error("❌ [SendOrder_RECONCILIATION_FAILED] 状態照合のための GetOrders に失敗しました。安全のため注文失敗として扱います",
-					slog.String("symbol", act.Order.Symbol),
-					slog.Any("error", recErr),
-				)
-				op.FailSendingOrder(sniperID, act.Order)
-				return
-			}
-
-			// GetOrders の結果から、同一銘柄・同一売買区分・同一数量・同一価格の未登録な注文が存在するか確認
-			var matchedOrder *order.Order
-			for _, ext := range ords.Orders {
-				if ext.Symbol == act.Order.Symbol &&
-					ext.Action == act.Order.Action &&
-					ext.OrderQty == act.Order.OrderQty &&
-					ext.OrderPrice == act.Order.OrderPrice {
-
-					// このスナイパーまたは他のスナイパーが既に追跡している注文IDは除外
-					alreadyTracked := false
-					for _, opOther := range u.operations {
-						for _, actOrd := range opOther.GetActiveOrders() {
-							if actOrd.ID == ext.ID {
-								alreadyTracked = true
-								break
-							}
-						}
-						if alreadyTracked {
-							break
-						}
-					}
-
-					if !alreadyTracked {
-						matchedOrder = &ext
-						break
-					}
-				}
-			}
-
-			if matchedOrder != nil {
-				slog.Info("🎯 [SendOrder_RECONCILED] タイムアウトした注文が証券会社側で受理されていることを確認しました！注文IDを更新して追跡します",
-					slog.String("symbol", act.Order.Symbol),
-					slog.String("localID", act.Order.ID),
-					slog.String("serverID", matchedOrder.ID),
-				)
-				// 注文IDをサーバー発行のものに更新してActiveOrdersで生存させる
-				op.UpdateOrderID(sniperID, act.Order, matchedOrder.ID)
-				// 状態も同期
-				op.UpdateOrders(ords)
-				return
-			}
-
-			slog.Warn("🚫 [SendOrder_NOT_ACCEPTED] 状態照合の結果、証券会社側に該当する注文が見つかりませんでした。発注は実際に行われなかったと判断します",
-				slog.String("symbol", act.Order.Symbol),
-				slog.String("localID", act.Order.ID),
 			)
 			op.FailSendingOrder(sniperID, act.Order)
 			return

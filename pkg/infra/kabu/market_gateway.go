@@ -97,7 +97,15 @@ func (m *MarketGateway) DataPool() tick.DataPool {
 // SendOrder は market.MarketGateway (Orderer) の実装です。
 // 結果が出るまで内部的にブロックします（SniperNest等から非同期で呼ばれる想定）。
 func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
-	resCh := m.dispatcher.Submit(input.Order.Symbol, input.Order, "")
+	priority := 10 // Entry
+	jobID := input.Order.ID
+	if input.Order.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+		priority = 20 // Exit
+		if input.Order.Request != nil && len(input.Order.Request.ClosePositions) > 0 {
+			jobID = "exit_hold_" + input.Order.Request.ClosePositions[0].HoldID
+		}
+	}
+	resCh := m.dispatcher.Submit(jobID, input.Order.Symbol, input.Order, "", priority)
 	select {
 	case <-ctx.Done():
 		return input.Order, ctx.Err()
@@ -269,7 +277,8 @@ func (m *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
 	}
 
 	// 2. なければ、取引所に対して実際にキャンセルを送信する
-	resCh := m.dispatcher.Submit("", nil, orderID)
+	jobID := "cancel_" + orderID
+	resCh := m.dispatcher.Submit(jobID, "", nil, orderID, 30)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -495,7 +504,7 @@ func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) 
 			execChild := m.cloneChildOrderForExecution(childTemplate, exec)
 
 			go func(c *order.Order) {
-				resCh := m.dispatcher.Submit(c.Symbol, c, "")
+				resCh := m.dispatcher.Submit(c.ID, c.Symbol, c, "", 20)
 				res := <-resCh
 				if res.Error != nil {
 					fmt.Printf("⚠️ [MarketGateway] 部分決済自動発注失敗 (Symbol: %s, ExecID: %s): %v\n",
