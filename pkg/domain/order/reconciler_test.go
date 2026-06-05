@@ -130,3 +130,134 @@ func TestReconcileOrders_ExecutionSorting(t *testing.T) {
 		t.Errorf("executions are not sorted by execution time: %+v", execs)
 	}
 }
+
+func TestReconcileOrders_SymbolMismatchAndNoMatch(t *testing.T) {
+	now := time.Now()
+
+	o1 := NewOrder("order-1", "7203", ACTION_BUY, 2000, 100)
+	o1.BypassTransition(ORDER_STATUS_IN_PROGRESS, STATE_ACTIVE)
+
+	localOrders := []*Order{o1}
+
+	apiOrders := Orders{Orders: []Order{
+		// 異なるシンボルの注文 (無視されるべき)
+		{
+			ID:     "order-1",
+			Symbol: "9999",
+			status: ORDER_STATUS_FILLED,
+			CumQty: 100,
+		},
+		// 一致するシンボルだが、どのローカル注文ともマッチしない注文 (無視されるべき)
+		{
+			ID:     "order-unknown",
+			Symbol: "7203",
+			status: ORDER_STATUS_FILLED,
+			CumQty: 100,
+		},
+	}}
+
+	processedExecs := make(map[string]bool)
+	reconciled, execs := ReconcileOrders(localOrders, apiOrders, "7203", processedExecs, now)
+
+	if len(reconciled) != 1 || reconciled[0].ID != "order-1" {
+		t.Errorf("expected order-1 to remain active")
+	}
+	if reconciled[0].Status() != ORDER_STATUS_IN_PROGRESS {
+		t.Errorf("expected order-1 status to remain IN_PROGRESS, got %v", reconciled[0].Status())
+	}
+	if len(execs) != 0 {
+		t.Errorf("expected 0 executions, got %d", len(execs))
+	}
+}
+
+func TestReconcileOrders_MatchOutsideActive(t *testing.T) {
+	now := time.Now()
+
+	// 完了済みのローカル注文（アクティブな注文リストからは事前に除外されるはず）
+	o1 := NewOrder("order-1", "7203", ACTION_BUY, 2000, 100)
+	o1.BypassTransition(ORDER_STATUS_FILLED, STATE_CLOSED)
+
+	localOrders := []*Order{o1}
+
+	// APIからは完了した注文情報が届く
+	apiOrder := Order{
+		ID:     "order-1",
+		Symbol: "7203",
+		status: ORDER_STATUS_FILLED,
+		CumQty: 100,
+	}
+
+	apiOrders := Orders{Orders: []Order{apiOrder}}
+	processedExecs := make(map[string]bool)
+
+	reconciled, _ := ReconcileOrders(localOrders, apiOrders, "7203", processedExecs, now)
+
+	// reconciled はアクティブな（未完了の）注文のみを返すので、完了した o1 は含まれない
+	if len(reconciled) != 0 {
+		t.Errorf("expected 0 reconciled active orders, got %d", len(reconciled))
+	}
+}
+
+func TestReconcileOrders_SpecialStateSync(t *testing.T) {
+	now := time.Now()
+
+	// 1. FillExpected (疑似約定) の状態で、API側がまだ未完了 (IN_PROGRESS) の場合
+	o1 := NewOrder("order-1", "7203", ACTION_BUY, 2000, 100)
+	o1.BypassTransition(ORDER_STATUS_FILL_EXPECTED, STATE_ACTIVE)
+
+	// 2. CancelSent の状態で、API側がまだ未完了 (IN_PROGRESS) の場合
+	o2 := NewOrder("order-2", "7203", ACTION_BUY, 2000, 100)
+	o2.BypassTransition(ORDER_STATUS_CANCEL_SENT, STATE_ACTIVE)
+
+	// 3. Pending 状態 (発注中) の場合、API側で検知されたら ACTIVE に移行する
+	o3 := NewOrder("order-3", "7203", ACTION_BUY, 2000, 100)
+	o3.BypassTransition(ORDER_STATUS_WAITING, STATE_PENDING)
+
+	localOrders := []*Order{o1, o2, o3}
+
+	apiOrders := Orders{Orders: []Order{
+		{
+			ID:     "order-1",
+			Symbol: "7203",
+			status: ORDER_STATUS_IN_PROGRESS,
+			CumQty: 50,
+		},
+		{
+			ID:     "order-2",
+			Symbol: "7203",
+			status: ORDER_STATUS_IN_PROGRESS,
+			CumQty: 0,
+		},
+		{
+			ID:     "order-3",
+			Symbol: "7203",
+			status: ORDER_STATUS_IN_PROGRESS,
+			CumQty: 0,
+		},
+	}}
+
+	processedExecs := make(map[string]bool)
+	reconciled, _ := ReconcileOrders(localOrders, apiOrders, "7203", processedExecs, now)
+
+	if len(reconciled) != 3 {
+		t.Fatalf("expected 3 reconciled orders, got %d", len(reconciled))
+	}
+
+	// o1: FillExpected の状態が維持され、CumQty が同期されていること
+	if o1.Status() != ORDER_STATUS_FILL_EXPECTED {
+		t.Errorf("expected status to remain FILL_EXPECTED, got %v", o1.Status())
+	}
+	if o1.CumQty != 50 {
+		t.Errorf("expected CumQty to be 50, got %f", o1.CumQty)
+	}
+
+	// o2: CancelSent の状態が維持されていること
+	if o2.Status() != ORDER_STATUS_CANCEL_SENT {
+		t.Errorf("expected status to remain CANCEL_SENT, got %v", o2.Status())
+	}
+
+	// o3: InternalState が PENDING から ACTIVE に遷移していること
+	if o3.InternalState() != STATE_ACTIVE {
+		t.Errorf("expected internal state to transition to ACTIVE, got %v", o3.InternalState())
+	}
+}
