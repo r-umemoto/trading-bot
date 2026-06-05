@@ -124,7 +124,8 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 				if o != nil && !o.IsCompleted() {
 					// 🌟 取引所にまだ送信されていない仮注文は、APIキャンセルを送らずにローカルでCANCELED状態にする
 					if o.IsPending() {
-						o.BypassTransition(order.ORDER_STATUS_CANCELED, order.STATE_CLOSED)
+						o.ToCanceled()
+						o.ToClosed()
 						continue
 					}
 					fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", symbolCode, o.ID)
@@ -132,7 +133,10 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 					if err != nil {
 						fmt.Printf("❌ [%s] キャンセルエラー: %v\n", symbolCode, err)
 					} else {
-						o.BypassTransition(order.ORDER_STATUS_CANCELED, order.STATE_CLOSED)
+						// 🌟 強制的にCANCELEDにBypassするのではなく、通常のドメインルールに従ってToCancelSentに遷移させる。
+						// その後、バックグラウンドのポーリングで取引所からCANCELED（FINISHED）が同期されるのを待つ。
+						o.ToCancelSent()
+						o.CancelSentAt = time.Now()
 					}
 					time.Sleep(200 * time.Millisecond)
 				}
