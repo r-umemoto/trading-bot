@@ -3,7 +3,6 @@ package kabu
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -11,10 +10,11 @@ import (
 )
 
 type OrderJob struct {
+	Key         string // deduplication key (JobID)
 	Symbol      string
 	OrderID     string // キャンセルの場合に使用
 	OrderPtr    *order.Order
-	Priority    int
+	Priority    int // アクション・戦略に基づく優先度
 	UpdateCount int
 	RequestedAt time.Time
 	ResultChan  chan order.OrderResult // 追加: 結果を返すためのチャネル
@@ -29,14 +29,14 @@ type Sender interface {
 // OrderDispatcher は秒間発注制限を維持しながら優先度順に発注を配信するインフラ層の門番です
 type OrderDispatcher struct {
 	sender      Sender
-	pendingJobs map[string]*OrderJob
+	pendingJobs []*OrderJob
 	jobMu       sync.Mutex
 }
 
 func NewOrderDispatcher(sender Sender) *OrderDispatcher {
 	return &OrderDispatcher{
 		sender:      sender,
-		pendingJobs: make(map[string]*OrderJob),
+		pendingJobs: make([]*OrderJob, 0),
 	}
 }
 
@@ -44,7 +44,7 @@ func (d *OrderDispatcher) Start(ctx context.Context) {
 	go d.dispatchWorker(ctx)
 }
 
-func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, cancelID string) <-chan order.OrderResult {
+func (d *OrderDispatcher) Submit(jobID string, symbol string, ord *order.Order, cancelID string, priority int) <-chan order.OrderResult {
 	resCh := make(chan order.OrderResult, 1)
 
 	d.jobMu.Lock()
@@ -53,19 +53,21 @@ func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, cancelID strin
 	requestedAt := time.Now()
 	updateCount := 0
 
-	// 既存の同一 symbol に対するジョブがある場合は上書きキャンセルする（ResultChanリークを防ぐ）
-	if old, exists := d.pendingJobs[symbol]; exists {
-		// 古いジョブの RequestedAt と UpdateCount を引き継ぐ（優先度が下がるのを防ぐ）
-		requestedAt = old.RequestedAt
-		updateCount = old.UpdateCount + 1
+	// 同じ jobID の既存ジョブを探して上書き（古い方をエラーでクローズして削除）
+	for i, old := range d.pendingJobs {
+		if old.Key == jobID {
+			requestedAt = old.RequestedAt
+			updateCount = old.UpdateCount + 1
 
-		old.ResultChan <- order.OrderResult{
-			Symbol: old.Symbol,
-			Order:  old.OrderPtr,
-			Error:  fmt.Errorf("order overwritten in dispatch queue"),
+			old.ResultChan <- order.OrderResult{
+				Symbol: old.Symbol,
+				Order:  old.OrderPtr,
+				Error:  fmt.Errorf("order overwritten in dispatch queue"),
+			}
+			close(old.ResultChan)
+			d.pendingJobs = append(d.pendingJobs[:i], d.pendingJobs[i+1:]...)
+			break
 		}
-		close(old.ResultChan)
-		delete(d.pendingJobs, symbol)
 	}
 
 	if ord == nil && cancelID == "" {
@@ -73,15 +75,8 @@ func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, cancelID strin
 		return resCh
 	}
 
-	priority := 1
-	if cancelID != "" {
-		priority = 10
-	} else if ord != nil && ord.Request != nil && (ord.Request.ClosePositionOrder != order.CLOSE_POSITION_ORDER_NONE || len(ord.Request.ClosePositions) > 0) {
-		priority = 20
-	}
-
-	// 既にロックを取得しているので直接登録する
-	d.pendingJobs[symbol] = &OrderJob{
+	d.pendingJobs = append(d.pendingJobs, &OrderJob{
+		Key:         jobID,
 		Symbol:      symbol,
 		OrderID:     cancelID,
 		OrderPtr:    ord,
@@ -89,7 +84,7 @@ func (d *OrderDispatcher) Submit(symbol string, ord *order.Order, cancelID strin
 		UpdateCount: updateCount,
 		RequestedAt: requestedAt,
 		ResultChan:  resCh,
-	}
+	})
 	return resCh
 }
 
@@ -118,22 +113,21 @@ func (d *OrderDispatcher) pickBestJob() *OrderJob {
 		return nil
 	}
 
-	var jobs []*OrderJob
-	for _, j := range d.pendingJobs {
-		jobs = append(jobs, j)
+	bestIdx := 0
+	for i := 1; i < len(d.pendingJobs); i++ {
+		scoreI := d.pendingJobs[i].Priority + d.pendingJobs[i].UpdateCount
+		scoreBest := d.pendingJobs[bestIdx].Priority + d.pendingJobs[bestIdx].UpdateCount
+		if scoreI > scoreBest {
+			bestIdx = i
+		} else if scoreI == scoreBest {
+			if d.pendingJobs[i].RequestedAt.Before(d.pendingJobs[bestIdx].RequestedAt) {
+				bestIdx = i
+			}
+		}
 	}
 
-	sort.Slice(jobs, func(i, j int) bool {
-		scoreI := jobs[i].Priority + jobs[i].UpdateCount
-		scoreJ := jobs[j].Priority + jobs[j].UpdateCount
-		if scoreI != scoreJ {
-			return scoreI > scoreJ
-		}
-		return jobs[i].RequestedAt.Before(jobs[j].RequestedAt)
-	})
-
-	best := jobs[0]
-	delete(d.pendingJobs, best.Symbol)
+	best := d.pendingJobs[bestIdx]
+	d.pendingJobs = append(d.pendingJobs[:bestIdx], d.pendingJobs[bestIdx+1:]...)
 	return best
 }
 
@@ -179,7 +173,7 @@ func (d *OrderDispatcher) CancelPendingJob(orderID string) bool {
 	d.jobMu.Lock()
 	defer d.jobMu.Unlock()
 
-	for symbol, job := range d.pendingJobs {
+	for i, job := range d.pendingJobs {
 		if job.OrderPtr != nil && job.OrderPtr.ID == orderID {
 			job.ResultChan <- order.OrderResult{
 				Symbol: job.Symbol,
@@ -187,7 +181,7 @@ func (d *OrderDispatcher) CancelPendingJob(orderID string) bool {
 				Error:  fmt.Errorf("order canceled in dispatch queue"),
 			}
 			close(job.ResultChan)
-			delete(d.pendingJobs, symbol)
+			d.pendingJobs = append(d.pendingJobs[:i], d.pendingJobs[i+1:]...)
 			return true
 		}
 	}

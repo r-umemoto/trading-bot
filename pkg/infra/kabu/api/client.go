@@ -48,10 +48,35 @@ func (c *KabuClient) doRequest(method, endpoint string, body io.Reader) (*http.R
 type KabuAPIError struct {
 	StatusCode int
 	Body       string
+	Code       int    // APIから返されるエラーコード (例: 8)
+	Message    string // APIから返されるエラーメッセージ
 }
 
 func (e *KabuAPIError) Error() string {
+	if e.Code != 0 {
+		return fmt.Sprintf("APIエラー (Status: %d, Code: %d): %s", e.StatusCode, e.Code, e.Message)
+	}
 	return fmt.Sprintf("APIエラー (Status: %d): %s", e.StatusCode, e.Body)
+}
+
+// IsClientError は HTTP 400 系のエラー、またはカブコムのエラーコード 8 (決済指定内容誤り) など、
+// クライアント起因のエラーで即時失敗とすべきエラーであるかを判定します。
+func (e *KabuAPIError) IsClientError() bool {
+	// Status が 400, 401, 403, 422, 429 の場合はクライアントエラー
+	if e.StatusCode == http.StatusBadRequest ||
+		e.StatusCode == http.StatusUnauthorized ||
+		e.StatusCode == http.StatusForbidden ||
+		e.StatusCode == http.StatusUnprocessableEntity ||
+		e.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+
+	// エラーコード 8 (決済指定内容誤り) など、特定のカブコムエラーコードの場合
+	if e.Code == 8 {
+		return true
+	}
+
+	return false
 }
 
 // DecodeResponse はHTTPレスポンスのステータスコードをチェックし、正常であればJSONデコードを行います
@@ -60,9 +85,18 @@ func (c *KabuClient) DecodeResponse(resp *http.Response, out interface{}) error 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+
+		var errResp struct {
+			Code    int    `json:"Code"`
+			Message string `json:"Message"`
+		}
+		_ = json.Unmarshal(body, &errResp) // パース失敗時はデフォルト値 (Code: 0, Message: "")
+
 		return &KabuAPIError{
 			StatusCode: resp.StatusCode,
 			Body:       string(body),
+			Code:       errResp.Code,
+			Message:    errResp.Message,
 		}
 	}
 
