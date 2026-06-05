@@ -6,51 +6,328 @@ import (
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
-type MockStrategy struct{}
+type ControllableStrategy struct {
+	name           string
+	evaluateFn     func(input strategy.StrategyInput) brain.Signal
+	ifDoneFn       func(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal
+	shouldCancelFn func(input strategy.StrategyInput, ord *order.Order) bool
+}
 
-func (m *MockStrategy) Name() string                                       { return "mock" }
-func (m *MockStrategy) Evaluate(input strategy.StrategyInput) brain.Signal { return brain.Signal{} }
-func (m *MockStrategy) AnalysisLogger() *slog.Logger                       { return nil }
-func (m *MockStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal {
+func (m *ControllableStrategy) Name() string {
+	if m.name != "" {
+		return m.name
+	}
+	return "controllable-strategy"
+}
+
+func (m *ControllableStrategy) Evaluate(input strategy.StrategyInput) brain.Signal {
+	if m.evaluateFn != nil {
+		return m.evaluateFn(input)
+	}
+	return brain.Signal{}
+}
+
+func (m *ControllableStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal {
+	if m.ifDoneFn != nil {
+		return m.ifDoneFn(input, prevSignal)
+	}
 	return brain.Signal{Action: brain.ACTION_HOLD}
 }
-func (m *MockStrategy) ShouldCancel(input strategy.StrategyInput, ord *order.Order) bool {
+
+func (m *ControllableStrategy) AnalysisLogger() *slog.Logger { return nil }
+
+func (m *ControllableStrategy) ShouldCancel(input strategy.StrategyInput, ord *order.Order) bool {
+	if m.shouldCancelFn != nil {
+		return m.shouldCancelFn(input, ord)
+	}
 	return false
 }
 
-func TestSniper_Tick_WithObservation(t *testing.T) {
+func TestSniper_BasicGettersAndMetadata(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434", Name: "Softbank"}
+	strat := &ControllableStrategy{name: "test-strat"}
+	s := NewSniper("sniper-1", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	if s.GetID() != "sniper-1" {
+		t.Errorf("expected sniper-1, got %s", s.GetID())
+	}
+	if s.GetSymbolCode() != "9434" {
+		t.Errorf("expected 9434, got %s", s.GetSymbolCode())
+	}
+	if s.GetStrategyName() != "test-strat" {
+		t.Errorf("expected test-strat, got %s", s.GetStrategyName())
+	}
+
+	// Bullet methods
+	ob := OrderBullet{}
+	ob.isBullet()
+	cb := CancelBullet{}
+	cb.isBullet()
+}
+
+func TestSniper_Tick_Lifecycle(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
-	policy := &strategy.NoopPolicy{}
-	s := NewSniper("test-sniper", detail, &MockStrategy{}, policy, order.EXCHANGE_TOSHO, nil)
+	strat := &ControllableStrategy{}
+	s := NewSniper("sniper-1", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 
-	// 1. 空の Observation で Tick を実行
-	obs := Observation{
-		Tick: tick.Tick{Price: 2000, CurrentPriceTime: time.Now()},
+	// 1. LifecycleStopped
+	s.ForceStop()
+	if s.GetLifecycle() != LifecycleStopped {
+		t.Errorf("expected LifecycleStopped, got %v", s.GetLifecycle())
 	}
+	obs := Observation{Tick: tick.Tick{Price: 2000, CurrentPriceTime: time.Now()}}
+	if bullet := s.Tick(obs); bullet != nil {
+		t.Error("expected nil bullet when stopped")
+	}
+
+	// 2. LifecycleExiting with zero hold Qty
+	s = NewSniper("sniper-1", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	s.OrderlyExit()
+	if s.GetLifecycle() != LifecycleExiting {
+		t.Errorf("expected LifecycleExiting, got %v", s.GetLifecycle())
+	}
+	// Sniper orderly exits, hold Qty = 0 -> should evaluate signal to HOLD (returns nil bullet)
 	bullet := s.Tick(obs)
-
 	if bullet != nil {
-		t.Error("expected no bullet for empty signal")
+		t.Errorf("expected nil bullet on exit with zero positions, got %v", bullet)
 	}
 
-	// 2. 疑似約定(FILL_EXPECTED)がある場合のポジション計算テスト
-	ord := order.NewOrder("test-order", "7203", order.ACTION_BUY, 2000, 100)
-	ord.BypassTransition(order.ORDER_STATUS_FILL_EXPECTED, ord.InternalState())
+	// 3. LifecycleExiting with positive hold Qty -> should generate Selling Force Exit order
+	obsWithPos := Observation{
+		Tick: tick.Tick{Price: 2000, CurrentPriceTime: time.Now()},
+		Positions: []position.Position{
+			{LeavesQty: 10, Price: 2000, Action: order.ACTION_BUY},
+		},
+	}
+	bullet = s.Tick(obsWithPos)
+	if bullet == nil {
+		t.Fatal("expected order bullet for force exit")
+	}
+	ob, ok := bullet.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %T", bullet)
+	}
+	if ob.Order.Action != order.ACTION_SELL || ob.Order.OrderQty != 10 || ob.Order.Type != order.ORDER_TYPE_MARKET {
+		t.Errorf("unexpected force exit order: %+v", ob.Order)
+	}
 
-	obs2 := Observation{
-		Tick:         tick.Tick{Price: 2000, CurrentPriceTime: time.Now()},
+	// 4. LifecycleExiting with negative hold Qty -> should generate Buying Force Exit order
+	obsWithNegPos := Observation{
+		Tick: tick.Tick{Price: 2000, CurrentPriceTime: time.Now()},
+		Positions: []position.Position{
+			{LeavesQty: 5, Price: 2000, Action: order.ACTION_SELL},
+		},
+	}
+	bullet = s.Tick(obsWithNegPos)
+	if bullet == nil {
+		t.Fatal("expected order bullet for force exit")
+	}
+	ob, ok = bullet.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %T", bullet)
+	}
+	if ob.Order.Action != order.ACTION_BUY || ob.Order.OrderQty != 5 || ob.Order.Type != order.ORDER_TYPE_MARKET {
+		t.Errorf("unexpected force exit order: %+v", ob.Order)
+	}
+}
+
+func TestSniper_Tick_CancellationAndCooldown(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	strat := &ControllableStrategy{}
+	s := NewSniper("sniper-1", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	now := time.Now()
+	ord := order.NewOrder("test-order", "9434", order.ACTION_BUY, 2000, 100)
+	ord.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+
+	obs := Observation{
+		Tick:         tick.Tick{Price: 2000, CurrentPriceTime: now},
 		ActiveOrders: []*order.Order{ord},
 	}
 
-	pos := s.calculatePosition(obs2) // 確定ポジションはゼロ
-	if pos.Qty != 100 {
-		t.Errorf("expected position 100 due to synthetic fill, got %f", pos.Qty)
+	// 1. Should cancel active order
+	strat.shouldCancelFn = func(input strategy.StrategyInput, o *order.Order) bool {
+		return true
+	}
+	bullet := s.Tick(obs)
+	if bullet == nil {
+		t.Fatal("expected cancel bullet")
+	}
+	cb, ok := bullet.(CancelBullet)
+	if !ok {
+		t.Fatalf("expected CancelBullet, got %T", bullet)
+	}
+	if cb.OrderID != "test-order" {
+		t.Errorf("expected test-order, got %s", cb.OrderID)
+	}
+	if ord.Status() != order.ORDER_STATUS_CANCEL_SENT || ord.CancelSentAt != now {
+		t.Errorf("unexpected canceled order state: %+v", ord)
+	}
+
+	// Reset cancellation
+	strat.shouldCancelFn = nil
+
+	// 2. Cooldown check: exit signal is triggered but lastCloseErrorAt is within 1s -> returns nil
+	s.lastCloseErrorAt = now
+	strat.evaluateFn = func(input strategy.StrategyInput) brain.Signal {
+		return brain.Signal{
+			Action:    brain.ACTION_SELL,
+			TradeType: brain.TradeExit,
+			Quantity:  10,
+			Price:     2000,
+			OrderType: order.ORDER_TYPE_LIMIT,
+		}
+	}
+	bullet = s.Tick(Observation{Tick: tick.Tick{Price: 2000, CurrentPriceTime: now.Add(500 * time.Millisecond)}})
+	if bullet != nil {
+		t.Errorf("expected cooldown block, but got bullet: %v", bullet)
+	}
+}
+
+func TestSniper_Tick_PreparingOrderHandling(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	strat := &ControllableStrategy{}
+	s := NewSniper("sniper-1", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	now := time.Now()
+	// Preparing order represents order in queue waiting to be sent
+	prepOrd := order.NewOrder("prep-order", "9434", order.ACTION_BUY, 2000, 100)
+
+	obs := Observation{
+		Tick:         tick.Tick{Price: 2000, CurrentPriceTime: now},
+		ActiveOrders: []*order.Order{prepOrd},
+	}
+
+	// 1. Latest signal is HOLD (returns CancelBullet)
+	strat.evaluateFn = func(input strategy.StrategyInput) brain.Signal {
+		return brain.Signal{Action: brain.ACTION_HOLD}
+	}
+	bullet := s.Tick(obs)
+	if bullet == nil {
+		t.Fatal("expected cancel bullet for preparing order when signal is HOLD")
+	}
+	cb, ok := bullet.(CancelBullet)
+	if !ok || cb.OrderID != "prep-order" {
+		t.Errorf("expected CancelBullet for prep-order, got %v", bullet)
+	}
+
+	// 2. Latest signal matches preparing order exactly (returns nil block)
+	strat.evaluateFn = func(input strategy.StrategyInput) brain.Signal {
+		return brain.Signal{
+			Action:    brain.ACTION_BUY,
+			TradeType: brain.TradeEntry,
+			Quantity:  100,
+			Price:     2000,
+			OrderType: order.ORDER_TYPE_LIMIT,
+		}
+	}
+	bullet = s.Tick(obs)
+	if bullet != nil {
+		t.Errorf("expected block (nil bullet) when signal matches prep order, got %v", bullet)
+	}
+
+	// 3. Latest signal differs from prep order -> directly issues new OrderBullet to overwrite
+	strat.evaluateFn = func(input strategy.StrategyInput) brain.Signal {
+		return brain.Signal{
+			Action:    brain.ACTION_BUY,
+			TradeType: brain.TradeEntry,
+			Quantity:  50, // different qty
+			Price:     2000,
+			OrderType: order.ORDER_TYPE_LIMIT,
+		}
+	}
+	bullet = s.Tick(obs)
+	if bullet == nil {
+		t.Fatal("expected order bullet to overwrite prep order")
+	}
+	ob, ok := bullet.(OrderBullet)
+	if !ok || ob.Order.OrderQty != 50 {
+		t.Errorf("expected overwrite order with qty 50, got %+v", bullet)
+	}
+}
+
+func TestSniper_BuildOrderPairWithIfDone(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	strat := &ControllableStrategy{}
+	s := NewSniper("sniper-1", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	// IfDone signal is returned
+	strat.ifDoneFn = func(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal {
+		return brain.Signal{
+			Action:    brain.ACTION_SELL,
+			TradeType: brain.TradeExit,
+			Quantity:  10,
+			Price:     2100,
+			OrderType: order.ORDER_TYPE_LIMIT,
+			Reason:    "ProfitTake",
+		}
+	}
+
+	strat.evaluateFn = func(input strategy.StrategyInput) brain.Signal {
+		return brain.Signal{
+			Action:    brain.ACTION_BUY,
+			TradeType: brain.TradeEntry,
+			Quantity:  10,
+			Price:     2000,
+			OrderType: order.ORDER_TYPE_LIMIT,
+		}
+	}
+
+	obs := Observation{
+		Tick: tick.Tick{Price: 2000, CurrentPriceTime: time.Now()},
+	}
+
+	bullet := s.Tick(obs)
+	if bullet == nil {
+		t.Fatal("expected order pair bullet")
+	}
+	ob, ok := bullet.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %T", bullet)
+	}
+
+	entry := ob.Order
+	if entry.IfDone == nil {
+		t.Fatal("expected IfDone order not to be nil")
+	}
+	exit := entry.IfDone
+	if exit.Action != order.ACTION_SELL || exit.OrderPrice != 2100 || exit.OrderQty != 10 || exit.Reason != "ProfitTake" {
+		t.Errorf("unexpected exit order details: %+v", exit)
+	}
+}
+
+func TestSniper_MatchPositionsToClose(t *testing.T) {
+	detail := symbol.Symbol{Code: "9434"}
+	strat := &ControllableStrategy{}
+	s := NewSniper("sniper-1", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	// Positions: Long execution-1 (60 Qty), Long execution-2 (50 Qty)
+	obs := Observation{
+		Positions: []position.Position{
+			{ExecutionID: "exec-1", Symbol: "9434", LeavesQty: 60, Price: 2000, Action: order.ACTION_BUY},
+			{ExecutionID: "exec-2", Symbol: "9434", LeavesQty: 50, Price: 2010, Action: order.ACTION_BUY},
+		},
+	}
+
+	// 1. Closes Long positions (exit Sell order matches Buy positions)
+	closePositions, _ := s.matchPositionsToClose(obs, order.ACTION_SELL, 80)
+	if len(closePositions) != 2 {
+		t.Fatalf("expected 2 close positions, got %d", len(closePositions))
+	}
+	// first position should be fully closed (60)
+	if closePositions[0].HoldID != "exec-1" || closePositions[0].Qty != 60 {
+		t.Errorf("unexpected first close position: %+v", closePositions[0])
+	}
+	// second position should be partially closed (20)
+	if closePositions[1].HoldID != "exec-2" || closePositions[1].Qty != 20 {
+		t.Errorf("unexpected second close position: %+v", closePositions[1])
 	}
 }
 

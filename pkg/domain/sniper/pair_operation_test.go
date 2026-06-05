@@ -168,3 +168,228 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 		}
 	}
 }
+
+func TestPairTradingOperation_HandleTick_NegativeSpreadAndShortExit(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Tokyo")
+
+	detailA := symbol.Symbol{Code: "7203"}
+	detailB := symbol.Symbol{Code: "7267"}
+
+	stratA := NewInstructionStrategy()
+	stratB := NewInstructionStrategy()
+	sniperA := NewSniper("sniper-a", detailA, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sniperB := NewSniper("sniper-b", detailB, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	nestA := NewSniperNest("7203", NewSpotter(detailA, nil), []*Sniper{sniperA})
+	nestB := NewSniperNest("7267", NewSpotter(detailB, nil), []*Sniper{sniperB})
+
+	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
+	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
+
+	// 1. Negative Spread Entry (Spread = -15.0) -> A Buy, B Sell
+	timeAllowed, _ := time.ParseInLocation(time.RFC3339, "2026-06-01T10:00:00+09:00", loc)
+	tickA := tick.Tick{Symbol: "7203", Price: 1000.0, CurrentPriceTime: timeAllowed}
+	tickB := tick.Tick{Symbol: "7267", Price: 1015.0, CurrentPriceTime: timeAllowed}
+	dataPool.PushTick(tickA)
+	dataPool.PushTick(tickB)
+
+	actions := o.HandleTick(tickA)
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(actions))
+	}
+	actionMap := make(map[string]order.Action)
+	for _, act := range actions {
+		if b, ok := act.Bullet.(OrderBullet); ok {
+			actionMap[act.SniperID] = b.Order.Action
+		}
+	}
+	if actionMap["sniper-a"] != order.ACTION_BUY || actionMap["sniper-b"] != order.ACTION_SELL {
+		t.Errorf("expected A to BUY and B to SELL, got A: %v, B: %v", actionMap["sniper-a"], actionMap["sniper-b"])
+	}
+
+	// 2. Exit when Short A / Long B
+	nestA.spotter.sniperActiveOrders["sniper-a"] = nil
+	nestB.spotter.sniperActiveOrders["sniper-b"] = nil
+
+	// Set Short A (-100 Qty) and Long B (100 Qty) positions
+	nestA.spotter.sniperPositions["sniper-a"] = []position.Position{
+		{ExecutionID: "exec-a", Symbol: "7203", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_SELL},
+	}
+	nestB.spotter.sniperPositions["sniper-b"] = []position.Position{
+		{ExecutionID: "exec-b", Symbol: "7267", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_BUY},
+	}
+
+	// Spread reverts to mean
+	tickA.Price = 1000.0
+	tickB.Price = 1000.1
+	dataPool.PushTick(tickA)
+	dataPool.PushTick(tickB)
+
+	actions = o.HandleTick(tickA)
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 exit actions, got %d", len(actions))
+	}
+	actionMapExit := make(map[string]order.Action)
+	for _, act := range actions {
+		if b, ok := act.Bullet.(OrderBullet); ok {
+			actionMapExit[act.SniperID] = b.Order.Action
+		}
+	}
+	// Exit A should be BUY (to close Short), Exit B should be SELL (to close Long)
+	if actionMapExit["sniper-a"] != order.ACTION_BUY || actionMapExit["sniper-b"] != order.ACTION_SELL {
+		t.Errorf("expected exit A to be BUY and B to be SELL, got A: %v, B: %v", actionMapExit["sniper-a"], actionMapExit["sniper-b"])
+	}
+}
+
+func TestPairTradingOperation_InterfaceMethods(t *testing.T) {
+	detailA := symbol.Symbol{Code: "7203"}
+	detailB := symbol.Symbol{Code: "7267"}
+
+	stratA := NewInstructionStrategy()
+	stratB := NewInstructionStrategy()
+	sniperA := NewSniper("sniper-a", detailA, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sniperB := NewSniper("sniper-b", detailB, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_SOR, nil)
+
+	nestA := NewSniperNest("7203", NewSpotter(detailA, nil), []*Sniper{sniperA})
+	nestB := NewSniperNest("7267", NewSpotter(detailB, nil), []*Sniper{sniperB})
+
+	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
+	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
+
+	// GetID
+	if o.GetID() != "test-pair" {
+		t.Errorf("expected test-pair, got %s", o.GetID())
+	}
+
+	// GetSymbolCode
+	if o.GetSymbolCode() != "7203" {
+		t.Errorf("expected 7203, got %s", o.GetSymbolCode())
+	}
+
+	// GetSymbolCodes
+	codes := o.GetSymbolCodes()
+	if len(codes) != 2 || codes[0] != "7203" || codes[1] != "7267" {
+		t.Errorf("unexpected symbol codes: %v", codes)
+	}
+
+	// GetExchanges
+	exchanges := o.GetExchanges()
+	if len(exchanges) != 2 {
+		t.Fatalf("expected 2 exchanges, got %d", len(exchanges))
+	}
+
+	// HasSniper
+	if !o.HasSniper("sniper-a") || !o.HasSniper("sniper-b") || o.HasSniper("unknown") {
+		t.Error("HasSniper returned invalid results")
+	}
+
+	// GetReportableTargets
+	targets := o.GetReportableTargets()
+	if len(targets) != 2 {
+		t.Errorf("expected 2 targets, got %d", len(targets))
+	}
+
+	// ActiveOrders and UpdateOrders / FailSendingOrder / UpdateOrderID / GetPerformance / GetUnrealizedPnL
+	ord := order.NewOrder("order-temp", "7203", order.ACTION_BUY, 2000, 100)
+	nestA.spotter.AddOrder("sniper-a", ord)
+
+	if len(o.GetActiveOrders()) != 1 {
+		t.Error("expected 1 active order")
+	}
+
+	o.UpdateOrders(order.Orders{
+		Orders: []order.Order{*ord},
+	})
+
+	o.UpdateOrderID("sniper-a", ord, "new-api-id")
+	if o.GetActiveOrders()[0].ID != "new-api-id" {
+		t.Error("expected ID to be updated")
+	}
+
+	// Test update on nestB just to cover branch
+	ordB := order.NewOrder("order-temp-b", "7267", order.ACTION_BUY, 2000, 100)
+	nestB.spotter.AddOrder("sniper-b", ordB)
+	o.UpdateOrderID("sniper-b", ordB, "new-api-id-b")
+	o.FailSendingOrder("sniper-b", ordB)
+
+	o.FailSendingOrder("sniper-a", ord)
+	if len(o.GetActiveOrders()) != 0 {
+		t.Error("expected active orders to be empty after fail sending")
+	}
+
+	// GetPerformance & GetUnrealizedPnL
+	perfA := o.GetPerformance("sniper-a")
+	if perfA.Trades != 0 {
+		t.Error("expected empty performance")
+	}
+	perfB := o.GetPerformance("sniper-b")
+	if perfB.Trades != 0 {
+		t.Error("expected empty performance")
+	}
+	perfNone := o.GetPerformance("none")
+	if perfNone.Trades != 0 {
+		t.Error("expected empty performance")
+	}
+
+	pnlA := o.GetUnrealizedPnL("sniper-a", 2000.0)
+	if pnlA != 0.0 {
+		t.Error("expected zero pnl")
+	}
+	pnlB := o.GetUnrealizedPnL("sniper-b", 2000.0)
+	if pnlB != 0.0 {
+		t.Error("expected zero pnl")
+	}
+	pnlNone := o.GetUnrealizedPnL("none", 2000.0)
+	if pnlNone != 0.0 {
+		t.Error("expected zero pnl")
+	}
+
+	// ForceExit
+	o.ForceExit()
+	if sniperA.GetLifecycle() != LifecycleStopped || sniperB.GetLifecycle() != LifecycleStopped {
+		t.Error("expected lifecycle to be stopped after ForceExit")
+	}
+}
+
+func TestPairTradingStrategyFactory(t *testing.T) {
+	factory, err := strategy.GetFactory("pair_trading")
+	if err != nil {
+		t.Fatalf("failed to get pair_trading factory: %v", err)
+	}
+
+	sym := symbol.Symbol{Code: "7203"}
+	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
+
+	strat := factory.NewStrategy(sym, dataPool, nil)
+	if strat.Name() != "InstructionStrategy" {
+		t.Errorf("expected InstructionStrategy, got %s", strat.Name())
+	}
+	if strat.AnalysisLogger() != nil {
+		t.Error("expected nil logger")
+	}
+	if strat.ShouldCancel(strategy.StrategyInput{}, nil) {
+		t.Error("expected false")
+	}
+
+	policy := factory.CreateExecutionPolicy(nil)
+	if policy == nil {
+		t.Fatal("expected execution policy not to be nil")
+	}
+}
+
+func TestPairTradingOperation_HandleTick_ZeroStates(t *testing.T) {
+	detailA := symbol.Symbol{Code: "7203"}
+	detailB := symbol.Symbol{Code: "7267"}
+	stratA := NewInstructionStrategy()
+	stratB := NewInstructionStrategy()
+	nestA := NewSniperNest("7203", NewSpotter(detailA, nil), nil)
+	nestB := NewSniperNest("7267", NewSpotter(detailB, nil), nil)
+	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
+	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
+
+	// Zero state should return nil
+	actions := o.HandleTick(tick.Tick{Symbol: "7203"})
+	if actions != nil {
+		t.Error("expected nil actions when state is zero")
+	}
+}
