@@ -225,3 +225,81 @@ func TestSpotter_ReducePositions_FlatPnL(t *testing.T) {
 		t.Errorf("unexpected performance: %+v", perf)
 	}
 }
+
+func TestSpotter_TombstoneAndResurrection(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	sp := NewSpotter(sym, nil)
+	sniperID := "sniper-1"
+
+	// 1. アクティブ注文の作成と登録
+	ord := order.NewOrder("local-123", "7203", order.ACTION_BUY, 2000, 100)
+	sp.AddOrder(sniperID, ord)
+
+	// 2. 送信失敗 (FailSendingOrder) により、墓標（Tombstone）に退避させる
+	sp.FailSendingOrder(sniperID, ord)
+
+	// アクティブリストからは消えていることを確認
+	if len(sp.GetSniperActiveOrders(sniperID)) != 0 {
+		t.Fatal("expected 0 active orders after fail sending")
+	}
+	if len(sp.tombstones[sniperID]) != 1 {
+		t.Fatal("expected 1 order in tombstones")
+	}
+
+	// 3. 取引所から異なる確定ID（bt_order_99）で注文が返ってきたとシミュレート
+	reportOrd := order.NewOrder("bt_order_99", "7203", order.ACTION_BUY, 2000, 100)
+	reportOrd.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+
+	report := order.Orders{
+		Orders: []order.Order{*reportOrd},
+	}
+
+	// Updateを走らせる
+	sp.Update(report, time.Now())
+
+	// 4. 復活 (Resurrection) の検証
+	// アクティブ注文リストに復活し、IDが bt_order_99 に更新されているはず
+	activeOrders := sp.GetSniperActiveOrders(sniperID)
+	if len(activeOrders) != 1 {
+		t.Fatalf("expected 1 active order revived, got %d", len(activeOrders))
+	}
+	revived := activeOrders[0]
+	if revived.ID != "bt_order_99" {
+		t.Errorf("expected revived order ID to be updated to 'bt_order_99', got %s", revived.ID)
+	}
+	if revived.InternalState() != order.STATE_ACTIVE {
+		t.Errorf("expected revived internal state to be STATE_ACTIVE, got %v", revived.InternalState())
+	}
+
+	// 墓標からは消えていることを確認
+	if len(sp.tombstones[sniperID]) != 0 {
+		t.Errorf("expected tombstone list to be cleared after resurrection, got %d", len(sp.tombstones[sniperID]))
+	}
+}
+
+func TestSpotter_TombstoneExpiration(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	sp := NewSpotter(sym, nil)
+	sniperID := "sniper-1"
+
+	ord := order.NewOrder("local-123", "7203", order.ACTION_BUY, 2000, 100)
+	sp.AddOrder(sniperID, ord)
+
+	// 送信失敗により墓標へ退避
+	sp.FailSendingOrder(sniperID, ord)
+
+	// 31秒進んだ未来の時刻でUpdateを走らせる (期限は30秒)
+	futureTime := time.Now().Add(31 * time.Second)
+	report := order.Orders{
+		Orders: []order.Order{},
+	}
+	sp.Update(report, futureTime)
+
+	// 墓標から完全に消え去っていることを確認
+	if len(sp.tombstones[sniperID]) != 0 {
+		t.Errorf("expected tombstone to expire and be cleared, but got %d", len(sp.tombstones[sniperID]))
+	}
+	if len(sp.GetSniperActiveOrders(sniperID)) != 0 {
+		t.Errorf("expected active orders to remain 0, got %d", len(sp.GetSniperActiveOrders(sniperID)))
+	}
+}
