@@ -106,6 +106,51 @@ func (s *Spotter) Update(report order.Orders, now time.Time) {
 			}
 		}
 
+		// IDが取引所レポートに存在しないものを対象に、未トラッキングの取引所注文とのファジーマッチを行う
+		for _, o := range orders {
+			if o.IfDone != nil && o.IfDone.IsPending() {
+				for i, ext := range untrackedAPIOrders {
+					if ext != nil && ext.ParentOrderID == o.ID { // 🌟 親の取引所IDで完全確定して紐付ける
+
+						// 部分約定による決済注文の発注に対応
+						if ext.OrderQty <= o.IfDone.OrderQty {
+							s.Logger.Info("🎯 [ID_RESOLVED] IFD子注文の発注（部分/全額）を検知しました。決済用のアクティブ注文を作成し、残数量を調整します",
+								slog.String("sniper", sniperID),
+								slog.Float64("qty", ext.OrderQty),
+								slog.String("serverID", ext.ID),
+							)
+
+							// 1. 発注された数量分の子注文オブジェクトを新規作成してアクティブにする
+							matchedChild := order.NewOrder(
+								ext.ID,
+								o.IfDone.Symbol,
+								o.IfDone.Action,
+								o.IfDone.OrderPrice,
+								ext.OrderQty,
+								order.WithType(o.IfDone.Type),
+								order.WithCashMargin(o.IfDone.CashMargin),
+								order.WithReason(o.IfDone.Reason),
+							)
+							matchedChild.BypassTransition(ext.Status(), order.STATE_ACTIVE)
+							// このスナイパーのアクティブ注文リストに直接追加する
+							s.sniperActiveOrders[sniperID] = append(s.sniperActiveOrders[sniperID], matchedChild)
+							orders = s.sniperActiveOrders[sniperID] // ローカルスライスも最新に更新
+
+							// 2. テンプレート側の残数量を減らす
+							o.IfDone.OrderQty -= ext.OrderQty
+							if o.IfDone.OrderQty <= 0 {
+								o.IfDone = nil
+							}
+
+							untrackedAPIOrders[i] = nil // 使用済みマーク
+							allTrackedIDs[ext.ID] = true
+							break
+						}
+					}
+				}
+			}
+		}
+
 		// 墓標（tombstones）にある注文のうち、IDが取引所レポートに存在しないものを対象に、
 		// 未トラッキングの取引所注文とのファジーマッチを行う
 		for _, t := range s.tombstones[sniperID] {
@@ -296,6 +341,12 @@ func (s *Spotter) PrepareObservation(sniperID string, t tick.Tick, policy strate
 		if curr.IsCompleted() {
 			// 親注文が約定完了している場合、子注文(IfDone)があれば追跡を開始する
 			if curr.IsFilled() && curr.IfDone != nil {
+				// 子注文の発注がまだ完了（STATE_ACTIVE化）していないなら、親注文の完了（アクティブからの除外）を保留する
+				if curr.IfDone.InternalState() == order.STATE_PREPARING {
+					reconciled = append(reconciled, curr)
+					hasProcessingTrade = true
+					continue
+				}
 				child := curr.IfDone
 				curr.IfDone = nil
 				reconciled = append(reconciled, child)

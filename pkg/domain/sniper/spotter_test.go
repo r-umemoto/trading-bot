@@ -79,10 +79,22 @@ func TestSpotter_PrepareObservation_IfDoneChild(t *testing.T) {
 
 	sp.AddOrder(sniperID, parentOrd)
 
-	// PrepareObservation should notice completed parentOrd, start tracking childOrd, and set hasProcessingTrade
+	// 1. When the child order is still in STATE_PREPARING (not yet placed by infrastructure),
+	// PrepareObservation should keep the parent order active to block further actions.
 	obs := sp.PrepareObservation(sniperID, tick.Tick{Price: 2000}, nil)
+	if len(obs.ActiveOrders) != 1 || obs.ActiveOrders[0].ID != "parent" {
+		t.Errorf("expected parent order to remain active while child is preparing, got: %v", obs.ActiveOrders)
+	}
+	if !obs.HasProcessingTrade {
+		t.Error("expected HasProcessingTrade to be true")
+	}
+
+	// 2. Once the child order transitions to STATE_ACTIVE (placement confirmed),
+	// PrepareObservation should extract the child order and remove the parent order.
+	childOrd.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_ACTIVE)
+	obs = sp.PrepareObservation(sniperID, tick.Tick{Price: 2000}, nil)
 	if len(obs.ActiveOrders) != 1 || obs.ActiveOrders[0].ID != "child" {
-		t.Errorf("expected child order to be tracked, got: %v", obs.ActiveOrders)
+		t.Errorf("expected child order to be extracted once active, got: %v", obs.ActiveOrders)
 	}
 	if !obs.HasProcessingTrade {
 		t.Error("expected HasProcessingTrade to be true")
@@ -303,3 +315,78 @@ func TestSpotter_TombstoneExpiration(t *testing.T) {
 		t.Errorf("expected active orders to remain 0, got %d", len(sp.GetSniperActiveOrders(sniperID)))
 	}
 }
+
+func TestSpotter_ActiveOrderFuzzyMatching_PartialFill(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	sp := NewSpotter(sym, nil)
+	sniperID := "sniper-1"
+
+	// 1. Create a parent order that has an IfDone child template of 100 qty in STATE_PREPARING
+	childOrd := order.NewOrder("local-child-123", "7203", order.ACTION_SELL, 2100, 100)
+	parentOrd := order.NewOrder("parent-123", "7203", order.ACTION_BUY, 2000, 100)
+	parentOrd.IfDone = childOrd
+
+	sp.AddOrder(sniperID, parentOrd)
+
+	// 2. Simulate a partial execution child order of 40 qty reported by the broker (API untracked)
+	reportOrd1 := order.NewOrder("broker-child-40", "7203", order.ACTION_SELL, 2100, 40)
+	reportOrd1.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	reportOrd1.ParentOrderID = "parent-123"
+
+	report1 := order.Orders{
+		Orders: []order.Order{*reportOrd1},
+	}
+
+	// 3. First update: this should match the nested o.IfDone and split it
+	sp.Update(report1, time.Now())
+
+	// Verified: parentOrd is still active, child template qty is reduced to 60, and a new active order of 40 qty is added.
+	activeOrders := sp.GetSniperActiveOrders(sniperID)
+	// Expect 2 active orders: parentOrd, and matchedChild (40 qty)
+	if len(activeOrders) != 2 {
+		t.Fatalf("expected 2 active orders, got %d", len(activeOrders))
+	}
+
+	var matchedChild *order.Order
+	for _, o := range activeOrders {
+		if o.ID == "broker-child-40" {
+			matchedChild = o
+		}
+	}
+	if matchedChild == nil {
+		t.Fatal("expected matchedChild to be found in active orders")
+	}
+	if matchedChild.OrderQty != 40 {
+		t.Errorf("expected matchedChild qty to be 40, got %f", matchedChild.OrderQty)
+	}
+	if parentOrd.IfDone == nil {
+		t.Fatal("expected parentOrd.IfDone to still exist")
+	}
+	if parentOrd.IfDone.OrderQty != 60 {
+		t.Errorf("expected parentOrd.IfDone qty to be reduced to 60, got %f", parentOrd.IfDone.OrderQty)
+	}
+
+	// 4. Simulate the second child order of 60 qty reported by the broker
+	reportOrd2 := order.NewOrder("broker-child-60", "7203", order.ACTION_SELL, 2100, 60)
+	reportOrd2.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	reportOrd2.ParentOrderID = "parent-123"
+
+	report2 := order.Orders{
+		Orders: []order.Order{*reportOrd1, *reportOrd2},
+	}
+
+	// 5. Second update: this should consume the remaining o.IfDone completely
+	sp.Update(report2, time.Now())
+
+	activeOrders2 := sp.GetSniperActiveOrders(sniperID)
+	// Expect 3 active orders: parentOrd, matchedChild-40, matchedChild-60
+	if len(activeOrders2) != 3 {
+		t.Fatalf("expected 3 active orders, got %d", len(activeOrders2))
+	}
+
+	if parentOrd.IfDone != nil {
+		t.Errorf("expected parentOrd.IfDone to be nil after fully consumed, got: %+v", parentOrd.IfDone)
+	}
+}
+
+

@@ -26,6 +26,7 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		tickChannels:      make(map[string]chan tick.Tick),
 		orderChannels:     make(map[string]chan order.Orders),
 		ifdTracker:        make(map[string]*order.Order),
+		childToParent:     make(map[string]string),
 		firedExecutions:   make(map[string]bool),
 		registeredSymbols: make(map[string]market.ResisterSymbolRequest),
 	}
@@ -58,6 +59,7 @@ type MarketGateway struct {
 	// IFD tracking fields
 	ifdMu           sync.Mutex
 	ifdTracker      map[string]*order.Order       // Key: Parent Order ID -> Value: Child Order
+	childToParent   map[string]string             // Key: Child Broker ID -> Value: Parent Broker ID
 	firedExecutions map[string]bool               // Key: Execution ID -> Value: Fired child order
 
 	// Registered symbols tracking for reconnection
@@ -368,6 +370,12 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 				},
 			)
 		}
+		m.ifdMu.Lock()
+		if parentID, ok := m.childToParent[ord.ID]; ok {
+			o.ParentOrderID = parentID
+		}
+		m.ifdMu.Unlock()
+
 		domainOrders = append(domainOrders, *o)
 	}
 
@@ -503,17 +511,20 @@ func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) 
 			// この部分約定専用の決済注文をクローンして作成
 			execChild := m.cloneChildOrderForExecution(childTemplate, exec)
 
-			go func(c *order.Order) {
+			go func(c *order.Order, parentID string) {
 				resCh := m.dispatcher.Submit(c.ID, c.Symbol, c, "", 20)
 				res := <-resCh
 				if res.Error != nil {
 					fmt.Printf("⚠️ [MarketGateway] 部分決済自動発注失敗 (Symbol: %s, ExecID: %s): %v\n",
 						c.Symbol, exec.ID, res.Error)
 				} else {
+					m.ifdMu.Lock()
+					m.childToParent[res.OrderID] = parentID
+					m.ifdMu.Unlock()
 					fmt.Printf("✅ [MarketGateway] 部分決済自動発注成功 (ID: %s, ExecID: %s)\n",
 						res.OrderID, exec.ID)
 				}
-			}(execChild)
+			}(execChild, ord.ID)
 		}
 
 		// 親注文が完全に終了（完全約定、キャンセル、失効）し、
