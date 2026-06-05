@@ -83,6 +83,8 @@ type Order struct {
 
 	// Request は新規発注時のリクエストパラメータです
 	Request *OrderRequest
+
+	ParentOrderID string // 🌟 IFD子注文の場合の親注文ID (取引所ID)
 }
 
 // SyntheticFillState は疑似約定（Synthetic Fill）の追跡状態を保持します
