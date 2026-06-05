@@ -31,12 +31,9 @@ func NewPositionCleaner(targets []CleanableTarget, marketGateway market.MarketGa
 // CleanupOnStartup は起動時に残存している「注文」と「建玉」をすべてクリーンアップします
 func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	fmt.Println("🧹 起動時のシステム状態チェックを開始します...")
-	fmt.Println("⚠️ 【開発デバッグ用一時停止】起動時のクリーンアップ（残存注文キャンセル・建玉決済）をスキップします。")
-	return nil
 
-	/* 一時コメントアウト
 	// 1. 未約定の注文をすべてキャンセル
-	fmt.Println("🔍 未約定注文 of...")
+	fmt.Println("🔍 未約定注文の確認...")
 	ords, err := c.marketGateway.GetOrders(ctx)
 	if err != nil {
 		fmt.Printf("⚠️ 注文取得エラー (スキップします): %v\n", err)
@@ -106,7 +103,6 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	}
 
 	return nil
-	*/
 }
 
 // CleanAllPositions は終了時に全スナイパーを撤収させ、ノーポジになるまで見届けます
