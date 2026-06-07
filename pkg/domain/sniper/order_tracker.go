@@ -323,6 +323,17 @@ func (ot *OrderTracker) GetInflightStats(sniperID string) InflightStats {
 					stats.InflightSellExit += o.OrderQty
 				}
 			}
+		} else {
+			// If the order is expected to fill synthetically, its IfDone exits are also expected to activate
+			if o.IfDone != nil {
+				if o.IfDone.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+					if o.IfDone.Action == order.ACTION_BUY {
+						stats.InflightBuyExit += o.IfDone.OrderQty
+					} else if o.IfDone.Action == order.ACTION_SELL {
+						stats.InflightSellExit += o.IfDone.OrderQty
+					}
+				}
+			}
 		}
 	}
 	return stats

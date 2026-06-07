@@ -64,6 +64,7 @@ type SniperNest struct {
 	cooldowns    *CooldownTracker
 	Logger       *slog.Logger
 	mu           sync.Mutex
+	lastTickTime time.Time // 🌟 最新のシミュレーション時刻を保存（エラー発生時の時間軸統一用）
 }
 
 func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger *slog.Logger) *SniperNest {
@@ -192,7 +193,11 @@ func (n *SniperNest) FailSendingOrder(sniperID string, ord *order.Order) {
 	defer n.mu.Unlock()
 	if n.orders.FailOrder(sniperID, ord) {
 		if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-			n.cooldowns.Trigger(sniperID)
+			errTime := n.lastTickTime
+			if errTime.IsZero() {
+				errTime = time.Now()
+			}
+			n.cooldowns.TriggerWithTime(sniperID, errTime)
 		}
 	}
 }
@@ -267,6 +272,8 @@ func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick, policy str
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	n.lastTickTime = t.CurrentPriceTime // 🌟 最新のシミュレーション時刻を保存
+
 	activeOrders, hasProcessingTrade, blockingOrder := n.orders.PrepareActiveOrders(sniperID, t, policy)
 	posCopy := n.positions.GetCopy(sniperID)
 
@@ -312,20 +319,79 @@ func (n *SniperNest) ReconcileTarget(
 		return nil
 	}
 
-	// 物理ポジションの算出
-	physicalQty := n.positions.HoldQty(sniperID)
+	// 仮想ポジションおよび物理ポジションの算出
+
+	activeOrders := n.orders.GetActive(sniperID)
+	positions := n.positions.GetCopy(sniperID)
+	
+	var virtualQty float64
+	for _, p := range positions {
+		if p.Action == order.ACTION_SELL {
+			virtualQty -= p.LeavesQty
+		} else {
+			virtualQty += p.LeavesQty
+		}
+	}
+	for _, curr := range activeOrders {
+		if curr != nil && curr.IsFillExpected() {
+			if curr.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+				switch curr.Action {
+				case order.ACTION_BUY:
+					virtualQty += curr.OrderQty
+				case order.ACTION_SELL:
+					virtualQty -= curr.OrderQty
+				}
+			}
+		}
+	}
 
 	// ポジション反転の安全弁
 	effectiveTargetQty := target.Qty
-	if physicalQty > 0 && target.Qty < 0 {
+	if virtualQty > 0 && target.Qty < 0 {
 		effectiveTargetQty = 0
-	} else if physicalQty < 0 && target.Qty > 0 {
+	} else if virtualQty < 0 && target.Qty > 0 {
 		effectiveTargetQty = 0
 	}
 
 	// --- 2. 矛盾注文のキャンセル処理 ---
 	for _, o := range stats.ActiveOrders {
+		if o == nil || o.InternalState() == order.STATE_PENDING || o.IsCancelSent() {
+			continue
+		}
 		shouldCancel := false
+
+		// もし戦略が自前のキャンセルロジック（CancelChecker）を持っているなら、それを最優先する
+		var s *Sniper
+		for _, sniper := range n.snipers {
+			if sniper.ID == sniperID {
+				s = sniper
+				break
+			}
+		}
+		if s != nil {
+			if checker, isChecker := s.Strategy.(strategy.CancelChecker); isChecker {
+				var avgPrice float64
+				var totalCost float64
+				for _, p := range positions {
+					if p.Action == order.ACTION_SELL {
+						totalCost -= p.Price * p.LeavesQty
+					} else {
+						totalCost += p.Price * p.LeavesQty
+					}
+				}
+				if virtualQty > 0 {
+					avgPrice = totalCost / virtualQty
+				}
+				shouldCancel = checker.ShouldCancel(strategy.StrategyInput{
+					Position: strategy.Position{
+						Qty:          virtualQty,
+						AveragePrice: avgPrice,
+					},
+					LatestTick: t,
+				}, o)
+				goto afterCheck
+			}
+		}
 
 		if effectiveTargetQty > 0 {
 			if (o.Action == order.ACTION_SELL && o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY) ||
@@ -339,10 +405,13 @@ func (n *SniperNest) ReconcileTarget(
 			}
 		} else {
 			if o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
-				shouldCancel = true
+				if target.Price == 0 {
+					shouldCancel = true
+				}
 			}
 		}
 
+	afterCheck:
 		if shouldCancel {
 			fmt.Printf("🔄 [%s] 目標ポジション変更により矛盾注文(%s)をキャンセルします [Status:%v, Target:%f]\n",
 				n.Detail.Code, o.ID, o.Status(), effectiveTargetQty)
@@ -360,20 +429,20 @@ func (n *SniperNest) ReconcileTarget(
 	var cashMargin order.CashMarginType
 
 	if effectiveTargetQty > 0 {
-		gap = effectiveTargetQty - (physicalQty + stats.InflightBuyEntry)
+		gap = effectiveTargetQty - (virtualQty + stats.InflightBuyEntry)
 		action = order.ACTION_BUY
 		cashMargin = order.CASH_MARGIN_MARGIN_ENTRY
 	} else if effectiveTargetQty < 0 {
-		gap = effectiveTargetQty - (physicalQty - stats.InflightSellEntry)
+		gap = effectiveTargetQty - (virtualQty - stats.InflightSellEntry)
 		action = order.ACTION_SELL
 		cashMargin = order.CASH_MARGIN_MARGIN_ENTRY
 	} else {
-		if physicalQty > 0 {
-			gap = physicalQty - stats.InflightSellExit
+		if virtualQty > 0 {
+			gap = virtualQty - stats.InflightSellExit
 			action = order.ACTION_SELL
 			cashMargin = order.CASH_MARGIN_MARGIN_EXIT
-		} else if physicalQty < 0 {
-			gap = math.Abs(physicalQty) - stats.InflightBuyExit
+		} else if virtualQty < 0 {
+			gap = math.Abs(virtualQty) - stats.InflightBuyExit
 			action = order.ACTION_BUY
 			cashMargin = order.CASH_MARGIN_MARGIN_EXIT
 		}
@@ -381,8 +450,81 @@ func (n *SniperNest) ReconcileTarget(
 
 	absGap := math.Abs(gap)
 
+	// 同方向かつ同口座区分の進行中注文があるか確認
+	var matchingOrder *order.Order
+	for _, o := range stats.ActiveOrders {
+		if o == nil {
+			continue
+		}
+		if o.Action == action && o.CashMargin == cashMargin {
+			if o.InternalState() == order.STATE_PREPARING {
+				matchingOrder = o
+				break
+			}
+			matchingOrder = o
+		}
+	}
+
+	// 期待される注文内容を定義
+	var desiredQty float64
+	var desiredPrice float64
+	var desiredOrderType order.OrderType
+	var desiredReason string
+
+	if cashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+		desiredQty = math.Abs(virtualQty)
+		if target.HasIfDone {
+			desiredPrice = target.ExitPrice
+			desiredOrderType = target.ExitOrderType
+			desiredReason = target.ExitReason
+		} else {
+			desiredPrice = target.Price
+			desiredOrderType = target.OrderType
+			desiredReason = target.Reason
+		}
+	} else {
+		desiredQty = math.Abs(effectiveTargetQty)
+		desiredPrice = target.Price
+		desiredOrderType = target.OrderType
+		desiredReason = target.Reason
+		// 既存のエントリー注文があり、かつターゲット価格が 0 (HOLDなど) の場合は、
+		// 既存注文の価格とタイプを引き継ぐことで、不要なキャンセルを防ぐ。
+		if matchingOrder != nil && matchingOrder.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY && target.Price == 0 {
+			desiredPrice = matchingOrder.OrderPrice
+			desiredOrderType = matchingOrder.Type
+		}
+	}
+
+	var desiredTradeType brain.TradeType
+	if cashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+		desiredTradeType = brain.TradeExit
+	} else {
+		desiredTradeType = brain.TradeEntry
+	}
+
+	desiredSignal := brain.Signal{
+		Action:    brain.Action(action),
+		TradeType: desiredTradeType,
+		Quantity:  desiredQty,
+		Price:     desiredPrice,
+		OrderType: desiredOrderType,
+		Reason:    desiredReason,
+	}
+
+	// ギャップが極小で、かつ既存注文의更新も必要ない場合は早期リターン
 	if absGap < 1.0 {
-		return nil
+		if matchingOrder == nil {
+			return nil
+		}
+
+		isIdentical := matchingOrder.Action == action &&
+			matchingOrder.OrderQty == desiredSignal.Quantity &&
+			matchingOrder.OrderPrice == desiredSignal.Price &&
+			matchingOrder.CashMargin == cashMargin
+
+		if isIdentical || policy.IsOrderDesired(matchingOrder, desiredSignal, n.Detail) {
+			return nil
+		}
 	}
 
 	// 返済エラー時のクールダウン
@@ -394,26 +536,7 @@ func (n *SniperNest) ReconcileTarget(
 		return nil
 	}
 
-	// 同方向の進行中注文があるか確認
-	var matchingOrder *order.Order
-	if stats.PreparingOrder != nil {
-		matchingOrder = stats.PreparingOrder
-	} else if stats.OutstandingOrder != nil {
-		matchingOrder = stats.OutstandingOrder
-	}
-
 	if matchingOrder != nil {
-		desiredSignal := brain.Signal{
-			Action:    brain.ACTION_BUY,
-			Quantity:  absGap,
-			Price:     target.Price,
-			OrderType: target.OrderType,
-			Reason:    target.Reason,
-		}
-		if action == order.ACTION_SELL {
-			desiredSignal.Action = brain.ACTION_SELL
-		}
-
 		isIdentical := matchingOrder.Action == action &&
 			matchingOrder.OrderQty == desiredSignal.Quantity &&
 			matchingOrder.OrderPrice == desiredSignal.Price &&
@@ -425,7 +548,7 @@ func (n *SniperNest) ReconcileTarget(
 
 		fmt.Printf("🔄 [%s] 目標値変更により、既存注文(%s)を上書きします [Status:%v, OldQty:%f, NewQty:%f, OldPrice:%f, NewPrice:%f]\n",
 			n.Detail.Code, matchingOrder.ID, matchingOrder.Status(),
-			matchingOrder.OrderQty, absGap, matchingOrder.OrderPrice, target.Price)
+			matchingOrder.OrderQty, desiredQty, matchingOrder.OrderPrice, desiredPrice)
 
 		if matchingOrder.InternalState() == order.STATE_PREPARING {
 			// 送信待ち
@@ -537,12 +660,16 @@ func (obs Observation) CalculateVirtualPosition() strategy.Position {
 	}
 	for _, curr := range obs.ActiveOrders {
 		if curr != nil && curr.IsFillExpected() {
-			switch curr.Action {
-			case order.ACTION_BUY:
-				totalQty += curr.OrderQty
-				totalCost += curr.OrderPrice * curr.OrderQty
-			case order.ACTION_SELL:
-				totalQty -= curr.OrderQty
+			// 🌟 エントリー注文（新規建て）の約定予定のみを仮想ポジションに加算する。
+			// 決済注文（返済）の約定予定は、物理ポジションから減算しない（決済完了までポジション維持として扱う）。
+			if curr.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+				switch curr.Action {
+				case order.ACTION_BUY:
+					totalQty += curr.OrderQty
+					totalCost += curr.OrderPrice * curr.OrderQty
+				case order.ACTION_SELL:
+					totalQty -= curr.OrderQty
+				}
 			}
 		}
 	}

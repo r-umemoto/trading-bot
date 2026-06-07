@@ -71,6 +71,10 @@ type TargetPosition struct {
 	ExitReason    string
 }
 
+type CancelChecker interface {
+	ShouldCancel(input StrategyInput, ord *order.Order) bool
+}
+
 type Strategy interface {
 	Name() string
 	Evaluate(input StrategyInput) TargetPosition
