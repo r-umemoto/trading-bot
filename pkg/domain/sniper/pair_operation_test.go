@@ -7,7 +7,6 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/position"
-	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
@@ -75,8 +74,8 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 	sniperA := NewSniper("sniper-a", detailA, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 	sniperB := NewSniper("sniper-b", detailB, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 
-	nestA := NewSniperNest("7203", NewSpotter(detailA, nil), []*Sniper{sniperA})
-	nestB := NewSniperNest("7267", NewSpotter(detailB, nil), []*Sniper{sniperB})
+	nestA := NewSniperNest("7203", detailA, []*Sniper{sniperA}, nil)
+	nestB := NewSniperNest("7267", detailB, []*Sniper{sniperB}, nil)
 
 	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
 
@@ -90,9 +89,9 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 	dataPool.PushTick(tickA)
 	dataPool.PushTick(tickB)
 
-	// シグナルを一旦リセット
-	stratA.SetSignal(brain.Signal{Action: brain.ACTION_HOLD})
-	stratB.SetSignal(brain.Signal{Action: brain.ACTION_HOLD})
+	// ターゲットを一旦リセット
+	stratA.SetTarget(strategy.TargetPosition{Qty: 0})
+	stratB.SetTarget(strategy.TargetPosition{Qty: 0})
 
 	// 判定実行
 	actions := o.HandleTick(tickA)
@@ -112,14 +111,18 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 	}
 
 	// 3. エントリー不可の時間帯でのスプレッド乖離 (09:15 JST, Spread = 15.0)
+	// 前のテストケースで作成された未完了の発注履歴(ActiveOrders)をクリアしてブロックを解除
+	nestA.orders.activeOrders["sniper-a"] = nil
+	nestB.orders.activeOrders["sniper-b"] = nil
+
 	timeForbidden, _ := time.ParseInLocation(time.RFC3339, "2026-06-01T09:15:00+09:00", loc)
 	tickA.CurrentPriceTime = timeForbidden
 	tickB.CurrentPriceTime = timeForbidden
 	dataPool.PushTick(tickA)
 	dataPool.PushTick(tickB)
 
-	stratA.SetSignal(brain.Signal{Action: brain.ACTION_HOLD})
-	stratB.SetSignal(brain.Signal{Action: brain.ACTION_HOLD})
+	stratA.SetTarget(strategy.TargetPosition{Qty: 0})
+	stratB.SetTarget(strategy.TargetPosition{Qty: 0})
 
 	actions = o.HandleTick(tickA)
 
@@ -129,14 +132,14 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 
 	// 4. すでにポジションがある場合の決済判定 (14:50 JST - エントリー禁止時間だが決済は許可されるべき)
 	// 前のテストケースで作成された未完了の発注履歴(ActiveOrders)をクリアしてブロックを解除
-	nestA.spotter.sniperActiveOrders["sniper-a"] = nil
-	nestB.spotter.sniperActiveOrders["sniper-b"] = nil
+	nestA.orders.activeOrders["sniper-a"] = nil
+	nestB.orders.activeOrders["sniper-b"] = nil
 
 	// ポジションをセット (Hold Qty = 100)
-	nestA.spotter.sniperPositions["sniper-a"] = []position.Position{
+	nestA.positions.positions["sniper-a"] = []position.Position{
 		{ExecutionID: "exec-a", Symbol: "7203", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_BUY},
 	}
-	nestB.spotter.sniperPositions["sniper-b"] = []position.Position{
+	nestB.positions.positions["sniper-b"] = []position.Position{
 		{ExecutionID: "exec-b", Symbol: "7267", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_SELL},
 	}
 
@@ -149,8 +152,8 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 	dataPool.PushTick(tickA)
 	dataPool.PushTick(tickB)
 
-	stratA.SetSignal(brain.Signal{Action: brain.ACTION_HOLD})
-	stratB.SetSignal(brain.Signal{Action: brain.ACTION_HOLD})
+	stratA.SetTarget(strategy.TargetPosition{Qty: 0})
+	stratB.SetTarget(strategy.TargetPosition{Qty: 0})
 
 	actions = o.HandleTick(tickA)
 
@@ -180,8 +183,8 @@ func TestPairTradingOperation_HandleTick_NegativeSpreadAndShortExit(t *testing.T
 	sniperA := NewSniper("sniper-a", detailA, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 	sniperB := NewSniper("sniper-b", detailB, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 
-	nestA := NewSniperNest("7203", NewSpotter(detailA, nil), []*Sniper{sniperA})
-	nestB := NewSniperNest("7267", NewSpotter(detailB, nil), []*Sniper{sniperB})
+	nestA := NewSniperNest("7203", detailA, []*Sniper{sniperA}, nil)
+	nestB := NewSniperNest("7267", detailB, []*Sniper{sniperB}, nil)
 
 	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
 	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
@@ -208,14 +211,14 @@ func TestPairTradingOperation_HandleTick_NegativeSpreadAndShortExit(t *testing.T
 	}
 
 	// 2. Exit when Short A / Long B
-	nestA.spotter.sniperActiveOrders["sniper-a"] = nil
-	nestB.spotter.sniperActiveOrders["sniper-b"] = nil
+	nestA.orders.activeOrders["sniper-a"] = nil
+	nestB.orders.activeOrders["sniper-b"] = nil
 
 	// Set Short A (-100 Qty) and Long B (100 Qty) positions
-	nestA.spotter.sniperPositions["sniper-a"] = []position.Position{
+	nestA.positions.positions["sniper-a"] = []position.Position{
 		{ExecutionID: "exec-a", Symbol: "7203", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_SELL},
 	}
-	nestB.spotter.sniperPositions["sniper-b"] = []position.Position{
+	nestB.positions.positions["sniper-b"] = []position.Position{
 		{ExecutionID: "exec-b", Symbol: "7267", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_BUY},
 	}
 
@@ -250,8 +253,8 @@ func TestPairTradingOperation_InterfaceMethods(t *testing.T) {
 	sniperA := NewSniper("sniper-a", detailA, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 	sniperB := NewSniper("sniper-b", detailB, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_SOR, nil)
 
-	nestA := NewSniperNest("7203", NewSpotter(detailA, nil), []*Sniper{sniperA})
-	nestB := NewSniperNest("7267", NewSpotter(detailB, nil), []*Sniper{sniperB})
+	nestA := NewSniperNest("7203", detailA, []*Sniper{sniperA}, nil)
+	nestB := NewSniperNest("7267", detailB, []*Sniper{sniperB}, nil)
 
 	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
 	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
@@ -291,7 +294,7 @@ func TestPairTradingOperation_InterfaceMethods(t *testing.T) {
 
 	// ActiveOrders and UpdateOrders / FailSendingOrder / UpdateOrderID / GetPerformance / GetUnrealizedPnL
 	ord := order.NewOrder("order-temp", "7203", order.ACTION_BUY, 2000, 100)
-	nestA.spotter.AddOrder("sniper-a", ord)
+	nestA.AddOrder("sniper-a", ord)
 
 	if len(o.GetActiveOrders()) != 1 {
 		t.Error("expected 1 active order")
@@ -308,7 +311,7 @@ func TestPairTradingOperation_InterfaceMethods(t *testing.T) {
 
 	// Test update on nestB just to cover branch
 	ordB := order.NewOrder("order-temp-b", "7267", order.ACTION_BUY, 2000, 100)
-	nestB.spotter.AddOrder("sniper-b", ordB)
+	nestB.AddOrder("sniper-b", ordB)
 	o.UpdateOrderID("sniper-b", ordB, "new-api-id-b")
 	o.FailSendingOrder("sniper-b", ordB)
 
@@ -367,9 +370,7 @@ func TestPairTradingStrategyFactory(t *testing.T) {
 	if strat.AnalysisLogger() != nil {
 		t.Error("expected nil logger")
 	}
-	if strat.ShouldCancel(strategy.StrategyInput{}, nil) {
-		t.Error("expected false")
-	}
+
 
 	policy := factory.CreateExecutionPolicy(nil)
 	if policy == nil {
@@ -382,8 +383,8 @@ func TestPairTradingOperation_HandleTick_ZeroStates(t *testing.T) {
 	detailB := symbol.Symbol{Code: "7267"}
 	stratA := NewInstructionStrategy()
 	stratB := NewInstructionStrategy()
-	nestA := NewSniperNest("7203", NewSpotter(detailA, nil), nil)
-	nestB := NewSniperNest("7267", NewSpotter(detailB, nil), nil)
+	nestA := NewSniperNest("7203", detailA, nil, nil)
+	nestB := NewSniperNest("7267", detailB, nil, nil)
 	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
 	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
 

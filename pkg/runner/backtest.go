@@ -191,11 +191,7 @@ func RunBacktest() error {
 			symbolCode, _ := op.Params["symbol"].(string)
 			symSnipers, ok := snipersBySymbol[symbolCode]
 			if ok && len(symSnipers) > 0 {
-				var spotter *sniper.Spotter
-				if len(symSnipers) > 0 {
-					spotter = sniper.NewSpotter(symSnipers[0].Detail, symSnipers[0].Logger)
-				}
-				nest := sniper.NewSniperNest(symbolCode, spotter, symSnipers)
+				nest := sniper.NewSniperNest(symbolCode, symSnipers[0].Detail, symSnipers, symSnipers[0].Logger)
 				operations = append(operations, sniper.NewDefaultOperation(op.ID, nest))
 				delete(snipersBySymbol, symbolCode)
 			}
@@ -210,12 +206,8 @@ func RunBacktest() error {
 			sniperB, okB := pairSnipersBySymbol[symbolB]
 
 			if okA && okB {
-				// spotter の生成と nest の構築
-				spotterA := sniper.NewSpotter(sniperA.Detail, sniperA.Logger)
-				spotterB := sniper.NewSpotter(sniperB.Detail, sniperB.Logger)
-
-				nestA := sniper.NewSniperNest(symbolA, spotterA, []*sniper.Sniper{sniperA})
-				nestB := sniper.NewSniperNest(symbolB, spotterB, []*sniper.Sniper{sniperB})
+				nestA := sniper.NewSniperNest(symbolA, sniperA.Detail, []*sniper.Sniper{sniperA}, sniperA.Logger)
+				nestB := sniper.NewSniperNest(symbolB, sniperB.Detail, []*sniper.Sniper{sniperB}, sniperB.Logger)
 
 				stratA := sniperA.Strategy.(*sniper.InstructionStrategy)
 				stratB := sniperB.Strategy.(*sniper.InstructionStrategy)
@@ -232,13 +224,8 @@ func RunBacktest() error {
 		}
 	}
 
-	// 未配備の「はぐれスナイパー」を自動救済するフォールバック配備（セーフティネット）
 	for symbol, symSnipers := range snipersBySymbol {
-		var spotter *sniper.Spotter
-		if len(symSnipers) > 0 {
-			spotter = sniper.NewSpotter(symSnipers[0].Detail, symSnipers[0].Logger)
-		}
-		nest := sniper.NewSniperNest(symbol, spotter, symSnipers)
+		nest := sniper.NewSniperNest(symbol, symSnipers[0].Detail, symSnipers, symSnipers[0].Logger)
 		opID := fmt.Sprintf("FallbackOp_%s", symbol)
 		operations = append(operations, sniper.NewDefaultOperation(opID, nest))
 		slog.Warn("作戦に未登録のスナイパーをフォールバック作戦として自動配備しました", slog.String("symbol", symbol))

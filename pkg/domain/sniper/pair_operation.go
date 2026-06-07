@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
-	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
@@ -15,13 +14,13 @@ import (
 
 // InstructionStrategy は、司令官 (Commander) からの指示をそのまま実行する Sniper 用の戦略実装です。
 type InstructionStrategy struct {
-	mu            sync.Mutex
-	pendingSignal brain.Signal
+	mu        sync.Mutex
+	targetPos strategy.TargetPosition
 }
 
 func NewInstructionStrategy() *InstructionStrategy {
 	return &InstructionStrategy{
-		pendingSignal: brain.Signal{Action: brain.ACTION_HOLD},
+		targetPos: strategy.TargetPosition{Qty: 0},
 	}
 }
 
@@ -29,30 +28,20 @@ func (inst *InstructionStrategy) Name() string {
 	return "InstructionStrategy"
 }
 
-func (inst *InstructionStrategy) Evaluate(input strategy.StrategyInput) brain.Signal {
+func (inst *InstructionStrategy) Evaluate(input strategy.StrategyInput) strategy.TargetPosition {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
-	sig := inst.pendingSignal
-	inst.pendingSignal = brain.Signal{Action: brain.ACTION_HOLD} // 評価後にリセット
-	return sig
-}
-
-func (inst *InstructionStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal {
-	return brain.Signal{Action: brain.ACTION_HOLD}
+	return inst.targetPos
 }
 
 func (inst *InstructionStrategy) AnalysisLogger() *slog.Logger {
 	return nil
 }
 
-func (inst *InstructionStrategy) ShouldCancel(input strategy.StrategyInput, ord *order.Order) bool {
-	return false
-}
-
-func (inst *InstructionStrategy) SetSignal(sig brain.Signal) {
+func (inst *InstructionStrategy) SetTarget(target strategy.TargetPosition) {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
-	inst.pendingSignal = sig
+	inst.targetPos = target
 }
 
 // PairTradingOperation は、2つの銘柄（Nest A と Nest B）を監視し、
@@ -163,8 +152,8 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 	)
 
 	// 2. 現在の保有状況の確認
-	qtyA := o.nestA.spotter.HoldQty(o.nestA.snipers[0].ID)
-	qtyB := o.nestB.spotter.HoldQty(o.nestB.snipers[0].ID)
+	qtyA := o.nestA.HoldQty(o.nestA.snipers[0].ID)
+	qtyB := o.nestB.HoldQty(o.nestB.snipers[0].ID)
 
 	var actions []FireAction
 
@@ -176,13 +165,13 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 			if priceDiff > o.thresholdPriceDiff {
 				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_positive_threshold"))
 				// 銘柄Aを売り、銘柄Bを買う
-				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: 0.0, Quantity: o.tradeQty, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellA"})
-				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: 0.0, Quantity: o.tradeQty, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyB"})
+				o.strategyA.SetTarget(strategy.TargetPosition{Qty: -o.tradeQty, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellA"})
+				o.strategyB.SetTarget(strategy.TargetPosition{Qty: o.tradeQty, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyB"})
 			} else if priceDiff < -o.thresholdPriceDiff {
 				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_negative_threshold"))
 				// 銘柄Aを買い、銘柄Bを売る
-				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeEntry, Price: 0.0, Quantity: o.tradeQty, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyA"})
-				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeEntry, Price: 0.0, Quantity: o.tradeQty, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellB"})
+				o.strategyA.SetTarget(strategy.TargetPosition{Qty: o.tradeQty, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyA"})
+				o.strategyB.SetTarget(strategy.TargetPosition{Qty: -o.tradeQty, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellB"})
 			}
 		} else {
 			if math.Abs(priceDiff) > o.thresholdPriceDiff {
@@ -197,13 +186,8 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 		// スプレッドの絶対値が元の閾値の10%未満に収束したら決済
 		if math.Abs(priceDiff) < o.thresholdPriceDiff*0.1 {
 			o.logger.Warn("PAIR_EXIT_SIGNAL_DETECTED", slog.String("reason", "spread_reverted_to_mean"))
-			if qtyA > 0 {
-				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeExit, Price: 0.0, Quantity: math.Abs(qtyA), OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_SellA"})
-				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeExit, Price: 0.0, Quantity: math.Abs(qtyB), OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_BuyB"})
-			} else {
-				o.strategyA.SetSignal(brain.Signal{Action: brain.ACTION_BUY, TradeType: brain.TradeExit, Price: 0.0, Quantity: math.Abs(qtyA), OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_BuyA"})
-				o.strategyB.SetSignal(brain.Signal{Action: brain.ACTION_SELL, TradeType: brain.TradeExit, Price: 0.0, Quantity: math.Abs(qtyB), OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_SellB"})
-			}
+			o.strategyA.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_FlatA"})
+			o.strategyB.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_FlatB"})
 		}
 	}
 

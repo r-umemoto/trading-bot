@@ -8,8 +8,7 @@ import (
 
 func TestDefaultOperation(t *testing.T) {
 	sym := symbol.Symbol{Code: "7203", Name: "Toyota"}
-	sp := NewSpotter(sym, nil)
-	nest := NewSniperNest("7203", sp, nil)
+	nest := NewSniperNest("7203", sym, nil, nil)
 
 	op := NewDefaultOperation("op-1", nest)
 

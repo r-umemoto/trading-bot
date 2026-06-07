@@ -4,7 +4,6 @@ import (
 	"log/slog"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
-	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
@@ -31,12 +30,12 @@ func (s *SampleStrategy) AnalysisLogger() *slog.Logger {
 }
 
 // Evaluate is purely functional
-func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
+func (s *SampleStrategy) Evaluate(input StrategyInput) TargetPosition {
 	holdQty := input.HoldQty()
 	avgPrice := input.AveragePrice()
 
 	if !input.LatestTick.IsExecution() {
-		return brain.NewHold()
+		return TargetPosition{Qty: holdQty}
 	}
 
 	if holdQty > 0 {
@@ -46,22 +45,22 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 		}
 		if curretPrice < s.highPrice*0.80 && avgPrice > curretPrice {
 			s.highPrice = 0
-			return brain.NewSellExit(holdQty, 0, 0, "trailing stop")
+			return TargetPosition{Qty: 0, Price: 0, OrderType: order.ORDER_TYPE_MARKET, Reason: "trailing stop"}
 		}
 		if curretPrice < avgPrice*0.997 {
 			s.highPrice = 0
-			return brain.NewSellExit(holdQty, 0, 0, "loss cut")
+			return TargetPosition{Qty: 0, Price: 0, OrderType: order.ORDER_TYPE_MARKET, Reason: "loss cut"}
 		}
 		if curretPrice > s.highPrice {
 			s.highPrice = curretPrice
 		}
-		return brain.NewHold()
+		return TargetPosition{Qty: holdQty}
 	}
 
 	// 1分足の終値が3回連続で上昇したら買い
 	bars := s.oneMinBar.Bars()
 	if len(bars) < 3 {
-		return brain.NewHold()
+		return TargetPosition{Qty: 0}
 	}
 
 	// 過去3本のバーの終値を取得
@@ -71,18 +70,10 @@ func (s *SampleStrategy) Evaluate(input StrategyInput) brain.Signal {
 
 	// 終値が3回連続で上昇しているかチェック
 	if bar1.Close < bar2.Close && bar2.Close < bar3.Close {
-		return brain.NewBuyEntry(100, 0, 0, "3 consecutive bars rise")
+		return TargetPosition{Qty: 100, Price: 0, OrderType: order.ORDER_TYPE_MARKET, Reason: "3 consecutive bars rise"}
 	}
 
-	return brain.NewHold()
-}
-
-func (s *SampleStrategy) IfDone(input StrategyInput, prevSignal brain.Signal) brain.Signal {
-	return brain.NewHold()
-}
-
-func (s *SampleStrategy) ShouldCancel(input StrategyInput, ord *order.Order) bool {
-	return false
+	return TargetPosition{Qty: 0}
 }
 
 // ----------------------------------------------------------------------------
