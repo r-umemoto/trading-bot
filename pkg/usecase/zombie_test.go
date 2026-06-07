@@ -25,7 +25,7 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 	strategyA := sniper.NewInstructionStrategy()
 	policy := &strategy.TouchTTLPolicy{TTL: 2000 * time.Millisecond}
 	s := sniper.NewSniper("test_sniper_7201", detail, strategyA, policy, order.EXCHANGE_TOSHO, nil)
-	nest := sniper.NewSniperNest("7201", sniper.NewSpotter(detail, nil), []*sniper.Sniper{s})
+	nest := sniper.NewSniperNest("7201", detail, []*sniper.Sniper{s}, nil)
 	op := sniper.NewDefaultOperation("Op_7201", nest)
 
 	// 3. TradeUseCase の生成
@@ -53,7 +53,7 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 	ord.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
 
 	ordInSniper := *ord
-	nest.Spotter().AddOrder(s.ID, &ordInSniper)
+	nest.AddOrder(s.ID, &ordInSniper)
 
 	// 5. 注文キャンセル要求を送信
 	err = g.CancelOrder(context.Background(), "bt_order_1")
@@ -88,7 +88,7 @@ func TestTradeUseCase_ZombieOrderReconciliation(t *testing.T) {
 	// 8. 照会（GetOrders）後のステータスを確認
 	// 自己修復により、ローカルステータスが CANCELED に更新されているはず
 	// （※ Spotter内で更新されたはずの注文インスタンスを調べるため、Spotterから注文を取得する）
-	activeOrders := nest.Spotter().GetSniperActiveOrders(s.ID)
+	activeOrders := nest.GetSniperActiveOrders(s.ID)
 	if len(activeOrders) != 0 {
 		t.Errorf("expected reconciled order to be completed and removed from active list, but got %d orders", len(activeOrders))
 	}
@@ -128,7 +128,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 	strategyA := sniper.NewInstructionStrategy()
 	policy := &strategy.TouchTTLPolicy{TTL: 2000 * time.Millisecond}
 	s := sniper.NewSniper("test_sniper_7201", detail, strategyA, policy, order.EXCHANGE_TOSHO, nil)
-	nest := sniper.NewSniperNest("7201", sniper.NewSpotter(detail, nil), []*sniper.Sniper{s})
+	nest := sniper.NewSniperNest("7201", detail, []*sniper.Sniper{s}, nil)
 	op := sniper.NewDefaultOperation("Op_7201", nest)
 
 	// 3. TradeUseCase の生成
@@ -141,7 +141,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 	ord := order.NewOrder("local-123", "7201", order.ACTION_BUY, 1000.0, 100)
 
 	// スナイパーのActiveOrdersに仮の注文として追加 (火を入れる前の状態)
-	nest.Spotter().AddOrder(s.ID, ord)
+	nest.AddOrder(s.ID, ord)
 
 	ord.Type = order.ORDER_TYPE_LIMIT
 	bullet := sniper.OrderBullet{
@@ -152,7 +152,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 	u.fire(context.Background(), op, s.ID, bullet)
 
 	// s.ActiveOrders が一旦空になっていることを確認
-	activeOrders := nest.Spotter().GetSniperActiveOrders(s.ID)
+	activeOrders := nest.GetSniperActiveOrders(s.ID)
 	if len(activeOrders) != 0 {
 		t.Fatalf("expected 0 active orders immediately after fire failure (should be tombstoned), got %d", len(activeOrders))
 	}
@@ -167,7 +167,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 	op.UpdateOrders(ords)
 
 	// 7. 復旧後のアクティブ注文を確認。墓標から復活し、IDがサーバー側 (bt_order_1) に書き換わっていることを確認
-	activeOrders = nest.Spotter().GetSniperActiveOrders(s.ID)
+	activeOrders = nest.GetSniperActiveOrders(s.ID)
 	if len(activeOrders) != 1 {
 		t.Fatalf("expected 1 active order after resurrection, got %d", len(activeOrders))
 	}
@@ -202,7 +202,7 @@ func TestTradeUseCase_SendOrderPermanentErrorBypassReconciliation(t *testing.T) 
 	strategyA := sniper.NewInstructionStrategy()
 	policy := &strategy.TouchTTLPolicy{TTL: 2000 * time.Millisecond}
 	s := sniper.NewSniper("test_sniper_7201", detail, strategyA, policy, order.EXCHANGE_TOSHO, nil)
-	nest := sniper.NewSniperNest("7201", sniper.NewSpotter(detail, nil), []*sniper.Sniper{s})
+	nest := sniper.NewSniperNest("7201", detail, []*sniper.Sniper{s}, nil)
 	op := sniper.NewDefaultOperation("Op_7201", nest)
 
 	// 3. TradeUseCase の生成
@@ -215,7 +215,7 @@ func TestTradeUseCase_SendOrderPermanentErrorBypassReconciliation(t *testing.T) 
 	ord := order.NewOrder("local-123", "7201", order.ACTION_BUY, 1000.0, 100)
 
 	// スナイパーのActiveOrdersに仮の注文として追加
-	nest.Spotter().AddOrder(s.ID, ord)
+	nest.AddOrder(s.ID, ord)
 
 	ord.Type = order.ORDER_TYPE_LIMIT
 	bullet := sniper.OrderBullet{
@@ -226,7 +226,7 @@ func TestTradeUseCase_SendOrderPermanentErrorBypassReconciliation(t *testing.T) 
 	u.fire(context.Background(), op, s.ID, bullet)
 
 	// s.ActiveOrders が空になっている（Reconciliationされずに即削除された）ことを確認
-	activeOrders := nest.Spotter().GetSniperActiveOrders(s.ID)
+	activeOrders := nest.GetSniperActiveOrders(s.ID)
 	if len(activeOrders) != 0 {
 		t.Fatalf("expected 0 active orders (immediately failed), got %d", len(activeOrders))
 	}

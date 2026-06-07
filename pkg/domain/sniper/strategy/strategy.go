@@ -58,13 +58,21 @@ func (i *StrategyInput) AveragePrice() float64 {
 	return i.Position.AveragePrice
 }
 
+type TargetPosition struct {
+	Qty           float64         // ターゲットポジション量（プラスならロング、マイナスならショート、0ならノーポジ）
+	Price         float64         // 注文価格（0なら成行）
+	OrderType     order.OrderType // 注文タイプ（指値・成行）
+	Reason        string          // 理由（分析用）
+
+	// IFD用の決済ターゲット（オプション）
+	HasIfDone     bool
+	ExitPrice     float64
+	ExitOrderType order.OrderType
+	ExitReason    string
+}
+
 type Strategy interface {
 	Name() string
-	Evaluate(input StrategyInput) brain.Signal
-	// IfDone は、直前のシグナルが約定したと仮定した場合の「次の意図」を返します。
-	// 不要な場合は ACTION_HOLD を返します。
-	IfDone(input StrategyInput, prevSignal brain.Signal) brain.Signal
+	Evaluate(input StrategyInput) TargetPosition
 	AnalysisLogger() *slog.Logger // 🌟 解析用ロガーを取得
-	// ShouldCancel は、現在アクティブな注文（未約定）をキャンセルすべきか戦略自身が判断します。
-	ShouldCancel(input StrategyInput, ord *order.Order) bool
 }

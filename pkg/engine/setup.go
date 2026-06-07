@@ -304,12 +304,11 @@ func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*s
 	return snipers, nil
 }
 
-func buildNestHelper(symbol string, symSnipers []*sniper.Sniper) *sniper.SniperNest {
-	var spotter *sniper.Spotter
+func buildNestHelper(symCode string, symSnipers []*sniper.Sniper) *sniper.SniperNest {
 	if len(symSnipers) > 0 {
-		spotter = sniper.NewSpotter(symSnipers[0].Detail, symSnipers[0].Logger)
+		return sniper.NewSniperNest(symCode, symSnipers[0].Detail, symSnipers, symSnipers[0].Logger)
 	}
-	return sniper.NewSniperNest(symbol, spotter, symSnipers)
+	return sniper.NewSniperNest(symCode, symbol.Symbol{Code: symCode}, symSnipers, nil)
 }
 
 

@@ -8,7 +8,6 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
-	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
@@ -295,42 +294,33 @@ type MockSniperStrategy struct {
 }
 
 func (m *MockSniperStrategy) Name() string { return "mock_sniper_strategy" }
-func (m *MockSniperStrategy) Evaluate(input strategy.StrategyInput) brain.Signal {
+func (m *MockSniperStrategy) Evaluate(input strategy.StrategyInput) strategy.TargetPosition {
 	if !m.hasPosition {
 		// 最初は空売りエントリー
-		return brain.Signal{
-			Action:    brain.ACTION_SELL,
-			TradeType: brain.TradeEntry,
+		return strategy.TargetPosition{
+			Qty:       -100,
 			Price:     400.0,
-			Quantity:  100,
 			OrderType: order.ORDER_TYPE_LIMIT,
 			Reason:    "PairEntry_SellA",
 		}
 	} else {
 		// エントリー後は買い戻し決済
-		return brain.Signal{
-			Action:    brain.ACTION_BUY,
-			TradeType: brain.TradeExit,
+		return strategy.TargetPosition{
+			Qty:       0,
 			Price:     395.0,
-			Quantity:  100,
 			OrderType: order.ORDER_TYPE_LIMIT,
 			Reason:    "PairExit_BuyA",
 		}
 	}
 }
 func (m *MockSniperStrategy) AnalysisLogger() *slog.Logger { return nil }
-func (m *MockSniperStrategy) IfDone(input strategy.StrategyInput, prevSignal brain.Signal) brain.Signal {
-	return brain.Signal{Action: brain.ACTION_HOLD}
-}
-func (m *MockSniperStrategy) ShouldCancel(input strategy.StrategyInput, ord *order.Order) bool {
-	return false
-}
 
 func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	g := NewBacktestGateway(ExecutionModelPrice, 0)
 	detail := symbol.Symbol{Code: "7201"}
 	strat := &MockSniperStrategy{}
 	s := sniper.NewSniper("test-sniper", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	nest := sniper.NewSniperNest("7201", detail, []*sniper.Sniper{s}, nil)
 
 	baseTime := time.Now()
 
@@ -338,16 +328,20 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	obs1 := sniper.Observation{
 		Tick: tick.Tick{Price: 400.0, CurrentPriceTime: baseTime},
 	}
-	bullet1 := s.Tick(obs1)
+	input1 := strategy.StrategyInput{
+		Position:   obs1.CalculateVirtualPosition(),
+		LatestTick: obs1.Tick,
+	}
+	target1 := s.Evaluate(input1)
+	bullet1 := nest.ReconcileTarget(s.ID, obs1.Tick, target1, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+
 	ordBullet1, ok1 := bullet1.(sniper.OrderBullet)
 	if !ok1 {
 		t.Fatalf("expected entry order to be generated")
 	}
 
-	// [バグの検証1]
-	// 新規空売り (ACTION_SELL) 注文のはずなので、CashMargin は CASH_MARGIN_MARGIN_ENTRY (2) であり、
-	// ClosePositions も空、ClosePositionOrder も NONE であるべきです。
-	// もしバグがあると、CashMargin が返済になってしまい、SendOrder がエラーになります。
+	nest.AddOrder(s.ID, ordBullet1.Order)
+
 	_, err := g.SendOrder(context.Background(), order.SendOrderInput{Order: ordBullet1.Order})
 	if err != nil {
 		t.Fatalf("🚨 【バグ再現】新規空売りの発注に失敗しました。新規注文が返済注文に誤変換されています: %v", err)
@@ -361,26 +355,27 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 		CurrentPriceStatus: 1,
 	})
 
+	// 約定結果を spotter に同期する
+	ordersReport, _ := g.GetOrders(context.Background())
+	nest.Update(ordersReport, baseTime.Add(time.Second))
+
 	// 戦略の状態を「ポジションあり」に更新
 	strat.hasPosition = true
 
 	// ---- 2. 決済（買い戻し）の評価と発注 ----
-	// ゲートウェイからポジションを取得してスナイパーに渡す
-	positions, _ := g.GetPositions(context.Background(), order.PRODUCT_MARGIN)
-	obs2 := sniper.Observation{
-		Tick:      tick.Tick{Price: 395.0, CurrentPriceTime: baseTime.Add(2 * time.Second)},
-		Positions: positions,
+	obs2 := nest.PrepareObservation(s.ID, tick.Tick{Price: 395.0, CurrentPriceTime: baseTime.Add(2 * time.Second)}, s.ExecutionPolicy)
+	input2 := strategy.StrategyInput{
+		Position:   obs2.CalculateVirtualPosition(),
+		LatestTick: obs2.Tick,
 	}
+	target2 := s.Evaluate(input2)
+	bullet2 := nest.ReconcileTarget(s.ID, obs2.Tick, target2, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 
-	bullet2 := s.Tick(obs2)
 	ordBullet2, ok2 := bullet2.(sniper.OrderBullet)
 	if !ok2 {
 		t.Fatalf("expected exit order to be generated")
 	}
 
-	// [バグの検証2]
-	// 買い戻し決済 (ACTION_BUY) 注文なので、正しく返済 (CashMargin: 3) としてカブコムに送られる必要があります。
-	// もしバグがあると、CashMargin: 2 (新規) のまま送られてしまい、両建て規制に引っかかってエラーになります。
 	_, err2 := g.SendOrder(context.Background(), order.SendOrderInput{Order: ordBullet2.Order})
 	if err2 != nil {
 		t.Fatalf("🚨 【バグ再現】買い戻し決済の発注に失敗しました。決済注文が新規注文に誤変換されています: %v", err2)
