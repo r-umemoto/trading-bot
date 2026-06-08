@@ -270,3 +270,187 @@ func TestOrderTracker_PrepareActiveOrders(t *testing.T) {
 		t.Errorf("expected internal state to remain STATE_PREPARING, got %v", ord.InternalState())
 	}
 }
+
+func TestOrderTracker_Update_IFDPromotion(t *testing.T) {
+	ot := sniper.NewOrderTracker(nil)
+	sniperID := "test-sniper"
+	sym := symbol.Symbol{Code: "7203"}
+
+	// Parent order with IFD child
+	parent := order.NewOrder("parent-1", "7203", order.ACTION_BUY, 2000, 100)
+	parent.BypassTransition(order.ORDER_STATUS_FILLED, order.STATE_CLOSED)
+
+	child := order.NewOrder("child-temp", "7203", order.ACTION_SELL, 2010, 100)
+	child.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_PENDING) // pending state
+	parent.IfDone = child
+
+	ot.Add(sniperID, parent)
+
+	// API Report with untracked child order (ParentOrderID = parent-1)
+	untrackedChild := order.NewOrder("api-child-1", "7203", order.ACTION_SELL, 2010, 100)
+	untrackedChild.ParentOrderID = "parent-1"
+	untrackedChild.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+
+	report := order.Orders{
+		Orders: []order.Order{*untrackedChild},
+	}
+
+	ot.Update(report, sym, time.Now(), func(sID string, exec order.Execution, act order.Action, createdAt time.Time, parentOrder *order.Order) {})
+
+	// Verification
+	active := ot.GetActive(sniperID)
+	// The parent order should be pruned as it is completed.
+	// The untracked child should be promoted and added to active orders.
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active order (the promoted child), got %d", len(active))
+	}
+	if active[0].ID != "api-child-1" {
+		t.Errorf("expected promoted child ID to be api-child-1, got %s", active[0].ID)
+	}
+	if parent.IfDone != nil {
+		t.Errorf("expected parent's IfDone to be nil after full promotion, got %+v", parent.IfDone)
+	}
+}
+
+func TestOrderTracker_Update_TombstoneResurrection(t *testing.T) {
+	// Path A: Tombstone order matches an ID directly present in the report
+	t.Run("Resurrection Path A", func(t *testing.T) {
+		ot := sniper.NewOrderTracker(nil)
+		sniperID := "test-sniper"
+		sym := symbol.Symbol{Code: "7203"}
+
+		o := order.NewOrder("server-id-1", "7203", order.ACTION_BUY, 2000, 100)
+		o.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+		ot.Add(sniperID, o)
+		ot.FailOrder(sniperID, o) // Moves to tombstone
+
+		// Report contains the tombstone's ID (with same active state)
+		reportOrd := order.NewOrder("server-id-1", "7203", order.ACTION_BUY, 2000, 100)
+		reportOrd.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+
+		report := order.Orders{
+			Orders: []order.Order{*reportOrd},
+		}
+
+		ot.Update(report, sym, time.Now(), func(sID string, exec order.Execution, act order.Action, createdAt time.Time, parentOrder *order.Order) {})
+
+		// Verification
+		active := ot.GetActive(sniperID)
+		if len(active) != 1 || active[0].ID != "server-id-1" {
+			t.Errorf("expected tombstone to be resurrected to active orders, got %v", active)
+		}
+	})
+
+	// Path B: Tombstone local ID matches untracked API order properties
+	t.Run("Resurrection Path B", func(t *testing.T) {
+		ot := sniper.NewOrderTracker(nil)
+		sniperID := "test-sniper"
+		sym := symbol.Symbol{Code: "7203"}
+
+		o := order.NewOrder("local-temp-id", "7203", order.ACTION_BUY, 2000, 100)
+		ot.Add(sniperID, o)
+		ot.FailOrder(sniperID, o) // Moves to tombstone
+
+		// Report contains an untracked API order matching properties
+		untracked := order.NewOrder("api-resolved-id", "7203", order.ACTION_BUY, 2000, 100)
+		untracked.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+
+		report := order.Orders{
+			Orders: []order.Order{*untracked},
+		}
+
+		ot.Update(report, sym, time.Now(), func(sID string, exec order.Execution, act order.Action, createdAt time.Time, parentOrder *order.Order) {})
+
+		// Verification
+		active := ot.GetActive(sniperID)
+		if len(active) != 1 {
+			t.Fatalf("expected 1 resurrected active order, got %d", len(active))
+		}
+		if active[0].ID != "api-resolved-id" {
+			t.Errorf("expected resurrected order ID to be updated to api-resolved-id, got %s", active[0].ID)
+		}
+	})
+}
+
+type mockPolicy struct {
+	strategy.NoopPolicy
+	applied []*order.Order
+}
+
+func (m *mockPolicy) ApplySyntheticFill(o *order.Order, t tick.Tick) {
+	m.applied = append(m.applied, o)
+}
+
+func TestOrderTracker_PrepareActiveOrders_Full(t *testing.T) {
+	ot := sniper.NewOrderTracker(nil)
+	sniperID := "test-sniper"
+
+	// 1. Completed parent order with IfDone child (not preparing)
+	p1 := order.NewOrder("p1", "7203", order.ACTION_BUY, 2000, 100)
+	p1.BypassTransition(order.ORDER_STATUS_FILLED, order.STATE_CLOSED)
+	c1 := order.NewOrder("c1", "7203", order.ACTION_SELL, 2010, 100)
+	c1.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_PENDING)
+	p1.IfDone = c1
+
+	// 2. Completed parent order with IfDone child (preparing)
+	p2 := order.NewOrder("p2", "7203", order.ACTION_BUY, 2000, 100)
+	p2.BypassTransition(order.ORDER_STATUS_FILLED, order.STATE_CLOSED)
+	c2 := order.NewOrder("c2", "7203", order.ACTION_SELL, 2010, 100)
+	c2.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_PREPARING)
+	p2.IfDone = c2
+
+	// 3. Outstanding active order
+	oActive := order.NewOrder("active-1", "7203", order.ACTION_BUY, 2000, 100)
+	oActive.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+
+	ot.Add(sniperID, p1)
+	ot.Add(sniperID, p2)
+	ot.Add(sniperID, oActive)
+
+	policy := &mockPolicy{}
+	active, hasProcessing, blocking := ot.PrepareActiveOrders(sniperID, tick.Tick{Price: 2000}, policy)
+
+	// Verification
+	// - p1 is completed & filled, its child c1 (pending) is promoted and p1 is discarded.
+	// - p2 is completed & filled, but its child c2 is preparing, so p2 is kept.
+	// - oActive is outstanding active.
+	// Thus, active should contain: c1, p2, oActive.
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active orders, got %d", len(active))
+	}
+
+	// Confirm promotion
+	foundC1 := false
+	foundP2 := false
+	foundActive := false
+	for _, o := range active {
+		if o.ID == "c1" {
+			foundC1 = true
+		}
+		if o.ID == "p2" {
+			foundP2 = true
+		}
+		if o.ID == "active-1" {
+			foundActive = true
+		}
+	}
+	if !foundC1 || !foundP2 || !foundActive {
+		t.Errorf("unexpected active orders list: %+v", active)
+	}
+
+	// hasProcessing should be true because outstanding active and promoted children exist
+	if !hasProcessing {
+		t.Error("expected hasProcessing to be true")
+	}
+
+	// blockingOrder should be oActive (it is not preparing, not completed, active)
+	if blocking != oActive {
+		t.Errorf("expected blocking order to be active-1, got %v", blocking)
+	}
+
+	// ApplySyntheticFill should be called only on oActive (since c1 is promoted within the loop, the loop continues and c1 doesn't go through ApplySyntheticFill in the same call)
+	if len(policy.applied) != 1 {
+		t.Errorf("expected ApplySyntheticFill to be called once, got %d times", len(policy.applied))
+	}
+}
+

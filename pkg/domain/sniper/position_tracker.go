@@ -48,19 +48,21 @@ func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, ex
 			Price:       exec.Price,
 			Meta:        position.PositionMeta{EntryTime: exec.ExecutionTime},
 		})
-		pt.logger.Info("FILLED",
-			slog.String("sniper", sniperID),
-			slog.String("symbol", symbolCode),
-			slog.String("action", string(action)),
-			slog.Float64("qty", exec.Qty),
-			slog.Float64("price", exec.Price),
-			slog.String("exit_reason", func() string {
-				if parentOrder != nil {
-					return parentOrder.Reason
-				}
-				return ""
-			}()),
-		)
+		if pt.logger != nil {
+			pt.logger.Info("FILLED",
+				slog.String("sniper", sniperID),
+				slog.String("symbol", symbolCode),
+				slog.String("action", string(action)),
+				slog.Float64("qty", exec.Qty),
+				slog.Float64("price", exec.Price),
+				slog.String("exit_reason", func() string {
+					if parentOrder != nil {
+						return parentOrder.Reason
+					}
+					return ""
+				}()),
+			)
+		}
 	} else {
 		var closePositions []order.ClosePosition
 		reason := ""
@@ -166,15 +168,17 @@ func (pt *PositionTracker) reducePositions(sniperID string, symbolCode string, s
 	if !earliestEntryTime.IsZero() && !sellTime.IsZero() {
 		holdTimeSec = sellTime.Sub(earliestEntryTime).Seconds()
 	}
-	pt.logger.Info("POSITION_CLOSED",
-		slog.String("sniper", sniperID),
-		slog.String("symbol", symbolCode),
-		slog.Float64("pnl", totalTradePnL),
-		slog.Float64("hold_time_sec", holdTimeSec),
-		slog.String("exit_reason", closeReason),
-		slog.Time("entry_time", earliestEntryTime),
-		slog.Time("exit_time", sellTime),
-	)
+	if pt.logger != nil {
+		pt.logger.Info("POSITION_CLOSED",
+			slog.String("sniper", sniperID),
+			slog.String("symbol", symbolCode),
+			slog.Float64("pnl", totalTradePnL),
+			slog.Float64("hold_time_sec", holdTimeSec),
+			slog.String("exit_reason", closeReason),
+			slog.Time("entry_time", earliestEntryTime),
+			slog.Time("exit_time", sellTime),
+		)
+	}
 }
 
 func (pt *PositionTracker) HoldQty(sniperID string) float64 {
