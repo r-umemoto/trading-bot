@@ -174,6 +174,21 @@ func (o *Order) IsCompleted() bool {
 	return o.status == ORDER_STATUS_FILLED || o.status == ORDER_STATUS_CANCELED || o.status == ORDER_STATUS_EXPIRED
 }
 
+// CanCancel はこの注文が現在（ローカルまたは取引所API経由で）キャンセル可能な状態にあるかを判定します。
+// APIへの発注送信中 (STATE_PENDING) の場合は、結果が確定するまでキャンセルできません。
+func (o *Order) CanCancel() bool {
+	if o.IsCompleted() {
+		return false
+	}
+	if o.IsCancelSent() {
+		return false
+	}
+	if o.internalState == STATE_PENDING {
+		return false
+	}
+	return true
+}
+
 // HasExecution は指定された約定IDが既に存在するかを判定します
 func (o *Order) HasExecution(execID string) bool {
 	for _, exec := range o.Executions {

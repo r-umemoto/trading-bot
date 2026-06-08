@@ -355,7 +355,7 @@ func (n *SniperNest) ReconcileTarget(
 
 	// --- 2. 矛盾注文のキャンセル処理 ---
 	for _, o := range stats.ActiveOrders {
-		if o == nil || o.InternalState() == order.STATE_PENDING || o.IsCancelSent() {
+		if o == nil || !o.CanCancel() {
 			continue
 		}
 		shouldCancel := false
@@ -550,8 +550,13 @@ func (n *SniperNest) ReconcileTarget(
 			n.Detail.Code, matchingOrder.ID, matchingOrder.Status(),
 			matchingOrder.OrderQty, desiredQty, matchingOrder.OrderPrice, desiredPrice)
 
+		if !matchingOrder.CanCancel() {
+			// API送信中やキャンセル送信中のため、安全のため完了するまで上書きを保留する
+			return nil
+		}
+
 		if matchingOrder.InternalState() == order.STATE_PREPARING {
-			// 送信待ち
+			// 送信前の場合は、キャンセル要求を送らずに新規上書き注文の発行へ進む
 		} else {
 			matchingOrder.ToCancelSent()
 			matchingOrder.CancelSentAt = now
