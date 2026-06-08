@@ -563,8 +563,9 @@ func (n *SniperNest) ReconcileTarget(
 			return CancelBullet{OrderID: matchingOrder.ID}
 		}
 	}
+	lockedHoldIDs := order.ActiveOrders(activeOrders).LockedHoldIDs()
 
-	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType)
+	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType, lockedHoldIDs)
 	if exit != nil {
 		entry.IfDone = exit
 	}
@@ -583,12 +584,13 @@ func (n *SniperNest) buildOrderPairFromTarget(
 	exchange order.ExchangeMarket,
 	marginType order.MarginTradeType,
 	accountType order.AccountType,
+	lockedHoldIDs map[string]bool,
 ) (*order.Order, *order.Order) {
 	isExit := (cashMargin == order.CASH_MARGIN_MARGIN_EXIT)
 
 	var closePositions []order.ClosePosition
 	if isExit {
-		closePositions, _ = n.positions.MatchPositionsToClose(sniperID, action, qty)
+		closePositions, _ = n.positions.MatchPositionsToClose(sniperID, action, qty, lockedHoldIDs)
 	}
 
 	entryReq := &order.OrderRequest{

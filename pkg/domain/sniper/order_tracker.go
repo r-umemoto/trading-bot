@@ -287,10 +287,44 @@ type InflightStats struct {
 func (ot *OrderTracker) GetInflightStats(sniperID string) InflightStats {
 	var stats InflightStats
 	orders := ot.activeOrders[sniperID]
+
+	// Build a map of execution IDs already covered by active/pending exit orders
+	coveredExecIDs := make(map[string]bool)
 	for _, o := range orders {
-		if o == nil || o.IsCompleted() {
+		if o == nil || o.IsCompleted() || o.IsCancelSent() {
 			continue
 		}
+		if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && o.Request != nil {
+			for _, cp := range o.Request.ClosePositions {
+				coveredExecIDs[cp.HoldID] = true
+			}
+		}
+	}
+
+	for _, o := range orders {
+		if o == nil {
+			continue
+		}
+
+		// Track unmatched child exit orders for parent orders that have executions
+		if o.IfDone != nil {
+			for _, exec := range o.Executions {
+				if !coveredExecIDs[exec.ID] {
+					if o.IfDone.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+						if o.IfDone.Action == order.ACTION_BUY {
+							stats.InflightBuyExit += exec.Qty
+						} else if o.IfDone.Action == order.ACTION_SELL {
+							stats.InflightSellExit += exec.Qty
+						}
+					}
+				}
+			}
+		}
+
+		if o.IsCompleted() {
+			continue
+		}
+
 		if o.IsCancelSent() {
 			stats.CancelingOrders = append(stats.CancelingOrders, o)
 			continue
