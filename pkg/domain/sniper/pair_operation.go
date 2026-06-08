@@ -142,7 +142,20 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 
 	priceA := stateA.LatestTick.Price
 	priceB := stateB.LatestTick.Price
-	priceDiff := priceA - priceB
+
+	// 始値（OpeningPrice）を基準価格とする。未設定の場合は最新価格でフォールバック。
+	openA := stateA.LatestTick.OpeningPrice
+	if openA == 0 {
+		openA = priceA
+	}
+	openB := stateB.LatestTick.OpeningPrice
+	if openB == 0 {
+		openB = priceB
+	}
+
+	normA := priceA / openA
+	normB := priceB / openB
+	priceDiff := normA - normB
 
 	o.logger.Info("PAIR_SPREAD_MONITOR",
 		slog.String("operation", o.ID),
@@ -157,7 +170,25 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 
 	var actions []FireAction
 
-	// 3. 取引シグナルの生成
+	// 3. 金額等価になるように数量をスケーリング (100株単位に丸める)
+	qtyA_scaled := o.tradeQty
+	qtyB_scaled := o.tradeQty
+
+	if openA < openB {
+		ratio := openB / openA
+		qtyA_scaled = math.Round(o.tradeQty*ratio/100.0) * 100.0
+		if qtyA_scaled < 100.0 {
+			qtyA_scaled = 100.0
+		}
+	} else {
+		ratio := openA / openB
+		qtyB_scaled = math.Round(o.tradeQty*ratio/100.0) * 100.0
+		if qtyB_scaled < 100.0 {
+			qtyB_scaled = 100.0
+		}
+	}
+
+	// 4. 取引シグナルの生成
 	if qtyA == 0 && qtyB == 0 {
 		// ノーポジションのとき、スプレッド乖離を判定してエントリー
 		// 新規エントリー時のみ時間帯フィルターを適用する
@@ -165,13 +196,13 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 			if priceDiff > o.thresholdPriceDiff {
 				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_positive_threshold"))
 				// 銘柄Aを売り、銘柄Bを買う
-				o.strategyA.SetTarget(strategy.TargetPosition{Qty: -o.tradeQty, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellA"})
-				o.strategyB.SetTarget(strategy.TargetPosition{Qty: o.tradeQty, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyB"})
+				o.strategyA.SetTarget(strategy.TargetPosition{Qty: -qtyA_scaled, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellA"})
+				o.strategyB.SetTarget(strategy.TargetPosition{Qty: qtyB_scaled, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyB"})
 			} else if priceDiff < -o.thresholdPriceDiff {
 				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_negative_threshold"))
 				// 銘柄Aを買い、銘柄Bを売る
-				o.strategyA.SetTarget(strategy.TargetPosition{Qty: o.tradeQty, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyA"})
-				o.strategyB.SetTarget(strategy.TargetPosition{Qty: -o.tradeQty, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellB"})
+				o.strategyA.SetTarget(strategy.TargetPosition{Qty: qtyA_scaled, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_BuyA"})
+				o.strategyB.SetTarget(strategy.TargetPosition{Qty: -qtyB_scaled, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEntry_SellB"})
 			}
 		} else {
 			if math.Abs(priceDiff) > o.thresholdPriceDiff {

@@ -79,13 +79,13 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 
 	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
 
-	// threshold = 10.0, qty = 100
-	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, slog.Default())
+	// threshold = 0.01 (1%), qty = 100
+	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 0.01, 100.0, slog.Default())
 
-	// 2. エントリー可能な黄金時間帯でのスプレッド乖離 (10:00 JST, Spread = 15.0)
+	// 2. エントリー可能な黄金時間帯でのスプレッド乖離 (10:00 JST, Spread = 1.5% > 1.0% threshold)
 	timeAllowed, _ := time.ParseInLocation(time.RFC3339, "2026-06-01T10:00:00+09:00", loc)
-	tickA := tick.Tick{Symbol: "7203", Price: 1015.0, CurrentPriceTime: timeAllowed}
-	tickB := tick.Tick{Symbol: "7267", Price: 1000.0, CurrentPriceTime: timeAllowed}
+	tickA := tick.Tick{Symbol: "7203", Price: 1015.0, CurrentPriceTime: timeAllowed, OpeningPrice: 1000.0}
+	tickB := tick.Tick{Symbol: "7267", Price: 1000.0, CurrentPriceTime: timeAllowed, OpeningPrice: 1000.0}
 	dataPool.PushTick(tickA)
 	dataPool.PushTick(tickB)
 
@@ -187,12 +187,12 @@ func TestPairTradingOperation_HandleTick_NegativeSpreadAndShortExit(t *testing.T
 	nestB := NewSniperNest("7267", detailB, []*Sniper{sniperB}, nil)
 
 	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
-	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
+	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 0.01, 100.0, nil)
 
-	// 1. Negative Spread Entry (Spread = -15.0) -> A Buy, B Sell
+	// 1. Negative Spread Entry (Spread = -1.5% < -1.0% threshold) -> A Buy, B Sell
 	timeAllowed, _ := time.ParseInLocation(time.RFC3339, "2026-06-01T10:00:00+09:00", loc)
-	tickA := tick.Tick{Symbol: "7203", Price: 1000.0, CurrentPriceTime: timeAllowed}
-	tickB := tick.Tick{Symbol: "7267", Price: 1015.0, CurrentPriceTime: timeAllowed}
+	tickA := tick.Tick{Symbol: "7203", Price: 1000.0, CurrentPriceTime: timeAllowed, OpeningPrice: 1000.0}
+	tickB := tick.Tick{Symbol: "7267", Price: 1015.0, CurrentPriceTime: timeAllowed, OpeningPrice: 1000.0}
 	dataPool.PushTick(tickA)
 	dataPool.PushTick(tickB)
 
@@ -257,7 +257,7 @@ func TestPairTradingOperation_InterfaceMethods(t *testing.T) {
 	nestB := NewSniperNest("7267", detailB, []*Sniper{sniperB}, nil)
 
 	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
-	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
+	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 0.01, 100.0, nil)
 
 	// GetID
 	if o.GetID() != "test-pair" {
@@ -386,7 +386,7 @@ func TestPairTradingOperation_HandleTick_ZeroStates(t *testing.T) {
 	nestA := NewSniperNest("7203", detailA, nil, nil)
 	nestB := NewSniperNest("7267", detailB, nil, nil)
 	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
-	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 10.0, 100.0, nil)
+	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 0.01, 100.0, nil)
 
 	// Zero state should return nil
 	actions := o.HandleTick(tick.Tick{Symbol: "7203"})
