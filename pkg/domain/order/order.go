@@ -489,3 +489,29 @@ func (o *Order) TransitionToInternalState(to InternalState) {
 	}
 }
 
+// ActiveOrders is a collection of tracked order pointers.
+type ActiveOrders []*Order
+
+// LockedHoldIDs returns the set of HoldIDs currently locked/reserved by active or in-flight exit orders.
+func (aos ActiveOrders) LockedHoldIDs() map[string]bool {
+	locked := make(map[string]bool)
+	for _, o := range aos {
+		if o == nil {
+			continue
+		}
+		// 1. Fully active exit orders specify ClosePositions in their Request
+		if !o.IsCompleted() && !o.IsCancelSent() && o.CashMargin == CASH_MARGIN_MARGIN_EXIT && o.Request != nil {
+			for _, cp := range o.Request.ClosePositions {
+				locked[cp.HoldID] = true
+			}
+		}
+		// 2. In-flight/unmatched child exit orders of parent orders are tracked via IfDone and Executions
+		if o.IfDone != nil && o.IfDone.CashMargin == CASH_MARGIN_MARGIN_EXIT {
+			for _, exec := range o.Executions {
+				locked[exec.ID] = true
+			}
+		}
+	}
+	return locked
+}
+

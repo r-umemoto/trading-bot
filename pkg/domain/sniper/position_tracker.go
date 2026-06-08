@@ -201,7 +201,7 @@ func (pt *PositionTracker) GetUnrealizedPnL(sniperID string, currentPrice float6
 	return unrealized
 }
 
-func (pt *PositionTracker) MatchPositionsToClose(sniperID string, action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
+func (pt *PositionTracker) MatchPositionsToClose(sniperID string, action order.Action, qty float64, lockedHoldIDs map[string]bool) ([]order.ClosePosition, order.ClosePositionOrder) {
 	var closePositions []order.ClosePosition
 	remainingQty := qty
 
@@ -212,6 +212,9 @@ func (pt *PositionTracker) MatchPositionsToClose(sniperID string, action order.A
 
 	for _, p := range pt.positions[sniperID] {
 		if p.Action != targetAction {
+			continue
+		}
+		if lockedHoldIDs[p.ExecutionID] {
 			continue
 		}
 		if remainingQty <= 0 {
