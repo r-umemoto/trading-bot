@@ -3,6 +3,7 @@ package order
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -212,9 +213,12 @@ func (o *Order) AddExecution(exec Execution) {
 
 const LOCAL_ID_PREFIX = "local-"
 
+var localIDSeq uint64
+
 // GenerateLocalID はAPIからのレスポンス待ちの間に使用するローカル専用の仮IDを生成します
 func GenerateLocalID() string {
-	return fmt.Sprintf("%s%d", LOCAL_ID_PREFIX, time.Now().UnixNano())
+	seq := atomic.AddUint64(&localIDSeq, 1)
+	return fmt.Sprintf("%s%d-%d", LOCAL_ID_PREFIX, time.Now().UnixNano(), seq)
 }
 
 // Orders は最新の注文状態の一覧を通知します
