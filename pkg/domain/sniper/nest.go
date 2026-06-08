@@ -551,7 +551,10 @@ func (n *SniperNest) ReconcileTarget(
 			matchingOrder.OrderQty, desiredQty, matchingOrder.OrderPrice, desiredPrice)
 
 		if matchingOrder.InternalState() == order.STATE_PREPARING {
-			// 送信待ち
+			// 送信待ちのため、キャンセル要求は送らず、新規上書き注文の発行へ進む
+		} else if matchingOrder.InternalState() == order.STATE_PENDING {
+			// API送信中・ID確定待ちのため、安全のため確定するまで上書きを保留する
+			return nil
 		} else {
 			matchingOrder.ToCancelSent()
 			matchingOrder.CancelSentAt = now
