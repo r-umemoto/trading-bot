@@ -162,69 +162,65 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 			}
 		}
 
-		for _, t := range ot.tombstones[sniperID] {
-			if !reportContainsID(report, t.ord.ID) {
-				for i, ext := range untrackedAPIOrders {
-					if ext != nil &&
-						t.ord.Symbol == ext.Symbol &&
-						t.ord.Action == ext.Action &&
-						t.ord.OrderQty == ext.OrderQty &&
-						t.ord.OrderPrice == ext.OrderPrice {
+		// 1. Identify which tombstone orders should be resurrected (those that actually exist in the API report)
+		var resurrected []*order.Order
+		resurrectedMap := make(map[string]bool)
 
-						ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
-							slog.String("sniper", sniperID),
-							slog.String("localID", t.ord.ID),
-							slog.String("serverID", ext.ID),
-						)
-						t.ord.ID = ext.ID
-						untrackedAPIOrders[i] = nil
-						allTrackedIDs[ext.ID] = true
-						break
-					}
+		for _, t := range ot.tombstones[sniperID] {
+			// A. If the server ID already exists in the report, it is resurrected
+			if reportContainsID(report, t.ord.ID) {
+				resurrected = append(resurrected, t.ord)
+				resurrectedMap[t.ord.ID] = true
+				continue
+			}
+
+			// B. If it is a local ID, try to match it with untracked API orders
+			for i, ext := range untrackedAPIOrders {
+				if ext != nil &&
+					t.ord.Symbol == ext.Symbol &&
+					t.ord.Action == ext.Action &&
+					t.ord.OrderQty == ext.OrderQty &&
+					t.ord.OrderPrice == ext.OrderPrice {
+
+					ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
+						slog.String("sniper", sniperID),
+						slog.String("localID", t.ord.ID),
+						slog.String("serverID", ext.ID),
+					)
+					t.ord.ID = ext.ID
+					untrackedAPIOrders[i] = nil
+					allTrackedIDs[ext.ID] = true
+
+					resurrected = append(resurrected, t.ord)
+					resurrectedMap[ext.ID] = true
+					break
 				}
 			}
 		}
 
+		// 2. Only merge verified active orders and resurrected orders to pass to ReconcileOrders
 		combined := make([]*order.Order, len(orders))
 		copy(combined, orders)
-
-		tombMap := make(map[string]bool)
-		for _, t := range ot.tombstones[sniperID] {
-			combined = append(combined, t.ord)
-			tombMap[t.ord.ID] = true
-		}
+		combined = append(combined, resurrected...)
 
 		reconciled, newExecs := order.ReconcileOrders(combined, report, detail.Code, ot.processedExecutions, now)
 
-		var nextActive []*order.Order
+		// 3. Clean up the tombstones list (remove resurrected ones and keep only ones created within 30s)
 		var nextTombstones []tombstoneEntry
-
 		for _, t := range ot.tombstones[sniperID] {
+			if resurrectedMap[t.ord.ID] {
+				ot.logger.Info("🎯 [TOMBSTONE_RESURRECTED] 復活を検知",
+					slog.String("sniper", sniperID),
+					slog.String("orderID", t.ord.ID),
+				)
+				continue
+			}
 			if now.Sub(t.deletedAt) < 30*time.Second {
 				nextTombstones = append(nextTombstones, t)
 			}
 		}
 
-		for _, o := range reconciled {
-			if tombMap[o.ID] {
-				ot.logger.Info("🎯 [TOMBSTONE_RESURRECTED] 復活を検知",
-					slog.String("sniper", sniperID),
-					slog.String("orderID", o.ID),
-				)
-				nextActive = append(nextActive, o)
-				var cleanedTomb []tombstoneEntry
-				for _, t := range nextTombstones {
-					if t.ord.ID != o.ID {
-						cleanedTomb = append(cleanedTomb, t)
-					}
-				}
-				nextTombstones = cleanedTomb
-			} else {
-				nextActive = append(nextActive, o)
-			}
-		}
-
-		ot.activeOrders[sniperID] = nextActive
+		ot.activeOrders[sniperID] = reconciled
 		ot.tombstones[sniperID] = nextTombstones
 
 		for _, pe := range newExecs {
