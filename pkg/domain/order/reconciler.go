@@ -107,10 +107,12 @@ func ReconcileOrders(
 	// 3. 約定の反映（時系列順）
 	pendingExecs.Sort()
 
-	// 4. 完了した注文をアクティブ注文リストから除外
+	// 4. 完了した注文をアクティブ注文リストから除外。
+	// ただし、完全約定(FILLED)であっても、未解決のIfDone決済子注文を保持している場合は、
+	// 将来取引所から届く決済子注文との親子関係の解決を行うためにアクティブ注文リストに残します。
 	var activeOrders []*Order
 	for _, o := range reconciledOrders {
-		if !o.IsCompleted() {
+		if !o.IsCompleted() || (o.IsFilled() && o.IfDone != nil && o.IfDone.IsPending()) {
 			activeOrders = append(activeOrders, o)
 		}
 	}

@@ -292,3 +292,63 @@ func TestReconcileOrders_SpecialStateSync(t *testing.T) {
 		t.Errorf("expected status to transition to CANCELED, got %v", o5.Status())
 	}
 }
+
+func TestReconcileOrders_KeepFilledWithPendingIfDone(t *testing.T) {
+	now := time.Now()
+
+	// 親注文（FILLED）に、未発注の IfDone が紐づいている状態
+	parent := NewOrder("parent-1", "7203", ACTION_BUY, 2000, 100)
+	parent.BypassTransition(ORDER_STATUS_IN_PROGRESS, STATE_ACTIVE)
+
+	child := NewOrder("local-child-1", "7203", ACTION_SELL, 2100, 100)
+	child.BypassTransition(ORDER_STATUS_NONE, STATE_PREPARING) // IsPending() = true
+
+	parent.IfDone = child
+
+	localOrders := []*Order{parent}
+
+	// APIレポート：親注文が完全に約定（FILLED）した
+	apiOrder := Order{
+		ID:         "parent-1",
+		Symbol:     "7203",
+		Action:     ACTION_BUY,
+		status:     ORDER_STATUS_FILLED,
+		CumQty:     100,
+		Executions: []Execution{
+			{ID: "exec-1", Price: 2000, Qty: 100, ExecutionTime: now},
+		},
+	}
+
+	apiOrders := Orders{Orders: []Order{apiOrder}}
+	processedExecs := make(map[string]bool)
+
+	reconciled, _ := ReconcileOrders(localOrders, apiOrders, "7203", processedExecs, now)
+
+	// 今回の修正により、FILLED であっても未発注の IfDone を持っている親注文は、
+	// 子注文の紐付け（親子解決）を待つために、アクティブリストに維持されるべき
+	if len(reconciled) != 1 {
+		t.Fatalf("expected parent order to remain in active orders, but got %d reconciled orders", len(reconciled))
+	}
+
+	if reconciled[0].ID != "parent-1" {
+		t.Errorf("expected parent-1 to be the reconciled order, got %s", reconciled[0].ID)
+	}
+
+	// もし IfDone が無い、あるいは Pending でない場合は、通常通りリストから除外されることもテスト
+	parentNoIfDone := NewOrder("parent-2", "7203", ACTION_BUY, 2000, 100)
+	parentNoIfDone.BypassTransition(ORDER_STATUS_IN_PROGRESS, STATE_ACTIVE)
+
+	apiOrder2 := Order{
+		ID:     "parent-2",
+		Symbol: "7203",
+		status: ORDER_STATUS_FILLED,
+		CumQty: 100,
+	}
+	apiOrders2 := Orders{Orders: []Order{apiOrder2}}
+
+	reconciled2, _ := ReconcileOrders([]*Order{parentNoIfDone}, apiOrders2, "7203", processedExecs, now)
+
+	if len(reconciled2) != 0 {
+		t.Errorf("expected parent order without IfDone to be excluded from active orders, got %d", len(reconciled2))
+	}
+}
