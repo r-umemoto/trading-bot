@@ -128,11 +128,13 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 				for i, ext := range untrackedAPIOrders {
 					if ext != nil && ext.ParentOrderID == o.ID {
 						if ext.OrderQty <= o.IfDone.OrderQty {
-							ot.logger.Info("🎯 [ID_RESOLVED] IFD子注文の発注を検知しました",
-								slog.String("sniper", sniperID),
-								slog.Float64("qty", ext.OrderQty),
-								slog.String("serverID", ext.ID),
-							)
+							if ot.logger != nil {
+								ot.logger.Info("🎯 [ID_RESOLVED] IFD子注文の発注を検知しました",
+									slog.String("sniper", sniperID),
+									slog.Float64("qty", ext.OrderQty),
+									slog.String("serverID", ext.ID),
+								)
+							}
 
 							matchedChild := order.NewOrder(
 								ext.ID,
@@ -182,11 +184,13 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 					t.ord.OrderQty == ext.OrderQty &&
 					t.ord.OrderPrice == ext.OrderPrice {
 
-					ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
-						slog.String("sniper", sniperID),
-						slog.String("localID", t.ord.ID),
-						slog.String("serverID", ext.ID),
-					)
+					if ot.logger != nil {
+						ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
+							slog.String("sniper", sniperID),
+							slog.String("localID", t.ord.ID),
+							slog.String("serverID", ext.ID),
+						)
+					}
 					t.ord.ID = ext.ID
 					untrackedAPIOrders[i] = nil
 					allTrackedIDs[ext.ID] = true
@@ -209,10 +213,12 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 		var nextTombstones []tombstoneEntry
 		for _, t := range ot.tombstones[sniperID] {
 			if resurrectedMap[t.ord.ID] {
-				ot.logger.Info("🎯 [TOMBSTONE_RESURRECTED] 復活を検知",
-					slog.String("sniper", sniperID),
-					slog.String("orderID", t.ord.ID),
-				)
+				if ot.logger != nil {
+					ot.logger.Info("🎯 [TOMBSTONE_RESURRECTED] 復活を検知",
+						slog.String("sniper", sniperID),
+						slog.String("orderID", t.ord.ID),
+					)
+				}
 				continue
 			}
 			if now.Sub(t.deletedAt) < 30*time.Second {

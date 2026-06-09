@@ -579,3 +579,118 @@ func TestExchangeMarket_UnmarshalJSON_Failure(t *testing.T) {
 		})
 	}
 }
+
+func TestOrder_CanCancel(t *testing.T) {
+	tests := []struct {
+		name          string
+		status        order.OrderStatus
+		internalState order.InternalState
+		expected      bool
+	}{
+		{"Waiting & Preparing", order.ORDER_STATUS_WAITING, order.STATE_PREPARING, true},
+		{"InProgress & Active", order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE, true},
+		{"Completed Filled", order.ORDER_STATUS_FILLED, order.STATE_CLOSED, false},
+		{"Completed Canceled", order.ORDER_STATUS_CANCELED, order.STATE_CLOSED, false},
+		{"Completed Expired", order.ORDER_STATUS_EXPIRED, order.STATE_CLOSED, false},
+		{"Cancel Sent", order.ORDER_STATUS_CANCEL_SENT, order.STATE_CANCELING, false},
+		{"Pending State", order.ORDER_STATUS_WAITING, order.STATE_PENDING, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
+			o.BypassTransition(tt.status, tt.internalState)
+			if got := o.CanCancel(); got != tt.expected {
+				t.Errorf("expected CanCancel() = %v, got %v", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestActiveOrders_LockedHoldIDs(t *testing.T) {
+	// 1. Nil element check
+	var aos order.ActiveOrders = []*order.Order{nil}
+	locked := aos.LockedHoldIDs()
+	if len(locked) != 0 {
+		t.Errorf("expected empty map for nil order, got %v", locked)
+	}
+
+	// 2. Active exit order (not completed, not cancel sent, margin exit, request present)
+	o1 := order.NewOrder("o1", "7203", order.ACTION_SELL, 100, 1)
+	o1.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	o1.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	o1.Request = &order.OrderRequest{
+		ClosePositions: []order.ClosePosition{
+			{HoldID: "hold-1", Qty: 1},
+			{HoldID: "hold-2", Qty: 1},
+		},
+	}
+
+	// 3. Completed or CancelSent exit order (should NOT lock)
+	o2 := order.NewOrder("o2", "7203", order.ACTION_SELL, 100, 1)
+	o2.BypassTransition(order.ORDER_STATUS_FILLED, order.STATE_CLOSED)
+	o2.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	o2.Request = &order.OrderRequest{
+		ClosePositions: []order.ClosePosition{
+			{HoldID: "hold-completed", Qty: 1},
+		},
+	}
+
+	o3 := order.NewOrder("o3", "7203", order.ACTION_SELL, 100, 1)
+	o3.BypassTransition(order.ORDER_STATUS_CANCEL_SENT, order.STATE_CANCELING)
+	o3.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	o3.Request = &order.OrderRequest{
+		ClosePositions: []order.ClosePosition{
+			{HoldID: "hold-cancelsent", Qty: 1},
+		},
+	}
+
+	// 4. Parent order with IfDone exit order (in-flight exit tracked via IfDone and Executions)
+	oParent := order.NewOrder("oParent", "7203", order.ACTION_BUY, 100, 1)
+	oChild := order.NewOrder("oChild", "7203", order.ACTION_SELL, 100, 1)
+	oChild.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	oParent.IfDone = oChild
+	oParent.AddExecution(order.Execution{ID: "hold-ifdone-exec", Price: 100, Qty: 1})
+
+	aos = order.ActiveOrders{o1, o2, o3, oParent}
+	locked = aos.LockedHoldIDs()
+
+	if !locked["hold-1"] || !locked["hold-2"] {
+		t.Errorf("expected hold-1 and hold-2 to be locked, got %v", locked)
+	}
+	if locked["hold-completed"] {
+		t.Errorf("completed order should not lock hold ID")
+	}
+	if locked["hold-cancelsent"] {
+		t.Errorf("cancel sent order should not lock hold ID")
+	}
+	if !locked["hold-ifdone-exec"] {
+		t.Errorf("expected hold-ifdone-exec to be locked via parent execution")
+	}
+}
+
+func TestOrder_Transitions_ExtraPanics(t *testing.T) {
+	t.Run("ToCancelSent invalid state panic", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic when transitioning to CancelSent from invalid non-terminal state")
+			}
+		}()
+		o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
+		// Use an arbitrary invalid non-terminal state
+		o.BypassTransition(order.OrderStatus(99), order.STATE_PREPARING)
+		o.ToCancelSent()
+	})
+
+	t.Run("ToFillExpected invalid state panic", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic when transitioning to FillExpected from CancelSent")
+			}
+		}()
+		o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
+		o.BypassTransition(order.ORDER_STATUS_CANCEL_SENT, order.STATE_CANCELING)
+		o.ToFillExpected()
+	})
+}
+

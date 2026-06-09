@@ -184,6 +184,8 @@ func TestStrictPiercePolicy_ApplySyntheticFill(t *testing.T) {
 	})
 }
 
+
+
 func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 	policy := &strategy.VolumeConsumptionPolicy{QueueOffsetRatio: 0.8}
 	now := time.Now()
@@ -201,6 +203,12 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		if ord2.IsFillExpected() {
 			t.Error("expected zero price order to be ignored")
 		}
+
+		ord3 := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
+		policy.ApplySyntheticFill(ord3, tick.Tick{Price: 0})
+		if ord3.IsFillExpected() {
+			t.Error("expected zero price tick to be ignored")
+		}
 	})
 
 	t.Run("Buy Pierce and Touch", func(t *testing.T) {
@@ -211,6 +219,12 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999, CurrentPriceTime: now})
 		if !ord.IsFillExpected() {
 			t.Error("expected instant fill expected on pierce")
+		}
+
+		// Pierce again when already FillExpected -> should do nothing / remain FillExpected
+		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999, CurrentPriceTime: now})
+		if !ord.IsFillExpected() {
+			t.Error("expected to remain fill expected")
 		}
 
 		// Reset ord
@@ -274,8 +288,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 			t.Errorf("expected order to revert to Waiting on timeout, got %v", ord.Status())
 		}
 	})
-
-	t.Run("Sell Touch", func(t *testing.T) {
+	t.Run("Sell Touch and Sell Pierce", func(t *testing.T) {
 		ord := order.NewOrder("test", "7203", order.ACTION_SELL, 2000, 100)
 		ord.ToInProgress()
 
@@ -287,6 +300,38 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		})
 		if ord.Synthetic.InitialQueueQty != 100 {
 			t.Errorf("expected InitialQueueQty 100, got %f", ord.Synthetic.InitialQueueQty)
+		}
+
+		// Sell Pierce -> Instant FillExpected
+		ord2 := order.NewOrder("test2", "7203", order.ACTION_SELL, 2000, 100)
+		ord2.ToInProgress()
+		policy.ApplySyntheticFill(ord2, tick.Tick{Price: 2001, CurrentPriceTime: now})
+		if !ord2.IsFillExpected() {
+			t.Error("expected instant fill expected on sell pierce")
+		}
+	})
+
+	t.Run("Volume consumption threshold with zero price time", func(t *testing.T) {
+		ord := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
+		ord.ToInProgress()
+
+		policy.ApplySyntheticFill(ord, tick.Tick{
+			Price:         2000,
+			TradingVolume: 10000,
+			BestBid:       tick.FirstQuote{Qty: 100},
+		})
+
+		// Volume increase above threshold, but CurrentPriceTime is Zero
+		policy.ApplySyntheticFill(ord, tick.Tick{
+			Price:         2000,
+			TradingVolume: 10100,
+		})
+
+		if !ord.IsFillExpected() {
+			t.Error("expected fill expected")
+		}
+		if ord.Synthetic.ExpectedAt.IsZero() {
+			t.Error("expected ExpectedAt fallback to time.Now, should not be zero")
 		}
 	})
 

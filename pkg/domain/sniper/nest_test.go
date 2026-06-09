@@ -530,3 +530,305 @@ func TestSniperNest_ActiveOrderFuzzyMatching_PartialFill(t *testing.T) {
 		t.Errorf("expected parentOrd.IfDone to be nil after fully consumed, got: %+v", parentOrd.IfDone)
 	}
 }
+
+type mockCancelCheckerStrategy struct {
+	mockNestStrategy
+	shouldCancel bool
+}
+
+func (m *mockCancelCheckerStrategy) ShouldCancel(input strategy.StrategyInput, ord *order.Order) bool {
+	return m.shouldCancel
+}
+
+func TestSniperNest_FailSendingOrder_Cooldown(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// 1. Fail exit order: should trigger cooldown
+	exitOrd := order.NewOrder("exit-1", "7203", order.ACTION_SELL, 2000, 100)
+	exitOrd.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	nest.AddOrder(sniperID, exitOrd)
+
+	// lastTickTime is zero
+	nest.FailSendingOrder(sniperID, exitOrd)
+	if !nest.cooldowns.IsCoolingDown(sniperID, time.Now()) {
+		t.Error("expected cooldown to be triggered for exit order failure")
+	}
+
+	// 2. Fail exit order with lastTickTime non-zero
+	nest2 := NewSniperNest("7203", sym, nil, nil)
+	nest2.lastTickTime = time.Now().Add(-10 * time.Second)
+	exitOrd2 := order.NewOrder("exit-2", "7203", order.ACTION_SELL, 2000, 100)
+	exitOrd2.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	nest2.AddOrder(sniperID, exitOrd2)
+	nest2.FailSendingOrder(sniperID, exitOrd2)
+	// Cooldown was triggered 10 seconds ago, so it should NOT be cooling down now
+	if nest2.cooldowns.IsCoolingDown(sniperID, time.Now()) {
+		t.Error("expected cooldown to be expired since lastTickTime was 10s ago")
+	}
+}
+
+func TestSniperNest_ReportContainsID_Logic(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// Parent order (filled)
+	parentOrd := order.NewOrder("parent-1", "7203", order.ACTION_BUY, 2000, 100)
+	parentOrd.BypassTransition(order.ORDER_STATUS_FILLED, order.STATE_CLOSED)
+
+	// Child order (pending, has ParentOrderID)
+	childOrd := order.NewOrder("child-1", "7203", order.ACTION_SELL, 2100, 100)
+	childOrd.ParentOrderID = "parent-1"
+	childOrd.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_PENDING)
+
+	nest.AddOrder(sniperID, childOrd)
+
+	// Report contains parent-1, but does NOT contain child-1
+	report := order.Orders{
+		Orders: []order.Order{*parentOrd},
+	}
+
+	nest.Update(report, time.Now())
+
+	// Child order should be preserved in active orders
+	active := nest.GetSniperActiveOrders(sniperID)
+	if len(active) != 1 || active[0].ID != "child-1" {
+		t.Errorf("expected child order to be preserved, active orders: %v", active)
+	}
+
+	// Now report contains both parent-1 and child-1 (both parentContains and childContains are true)
+	// It should transition the child ord status to whatever status child-1 has in the report
+	reportChild := order.NewOrder("child-1", "7203", order.ACTION_SELL, 2100, 100)
+	reportChild.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	report2 := order.Orders{
+		Orders: []order.Order{*parentOrd, *reportChild},
+	}
+	nest.Update(report2, time.Now())
+	active2 := nest.GetSniperActiveOrders(sniperID)
+	if len(active2) != 1 || active2[0].Status() != order.ORDER_STATUS_IN_PROGRESS {
+		t.Errorf("expected child order to transition, got status: %v", active2[0].Status())
+	}
+}
+
+func TestSniperNest_Update_WithExecutions(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	ord := order.NewOrder("order-1", "7203", order.ACTION_BUY, 2000, 100)
+	ord.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	nest.AddOrder(sniperID, ord)
+
+	// 1. Report contains BUY execution
+	reportOrd := order.NewOrder("order-1", "7203", order.ACTION_BUY, 2000, 100)
+	reportOrd.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	reportOrd.Executions = []order.Execution{
+		{ID: "exec-new-1", Price: 2000, Qty: 50, ExecutionTime: time.Now()},
+	}
+
+	report := order.Orders{
+		Orders: []order.Order{*reportOrd},
+	}
+
+	nest.Update(report, time.Now())
+
+	// Position should be updated
+	if nest.HoldQty(sniperID) != 50 {
+		t.Errorf("expected HoldQty 50, got %f", nest.HoldQty(sniperID))
+	}
+
+	// 2. Add an exit SELL order
+	exitOrd := order.NewOrder("order-2", "7203", order.ACTION_SELL, 2010, 50)
+	exitOrd.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	exitOrd.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	nest.AddOrder(sniperID, exitOrd)
+
+	// Report contains SELL execution (reduces position, realizes PnL)
+	reportOrd2 := order.NewOrder("order-2", "7203", order.ACTION_SELL, 2010, 50)
+	reportOrd2.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	reportOrd2.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	reportOrd2.Executions = []order.Execution{
+		{ID: "exec-exit-new", Price: 2010, Qty: 50, ExecutionTime: time.Now()},
+	}
+
+	report2 := order.Orders{
+		Orders: []order.Order{*reportOrd2},
+	}
+
+	nest.Update(report2, time.Now())
+
+	// Position should be flat
+	if nest.HoldQty(sniperID) != 0 {
+		t.Errorf("expected HoldQty 0, got %f", nest.HoldQty(sniperID))
+	}
+
+	// Performance should show PnL: (2010 - 2000) * 50 = 500
+	perf := nest.GetPerformance(sniperID)
+	if perf.RealizedPnL != 500 {
+		t.Errorf("expected RealizedPnL 500, got %f", perf.RealizedPnL)
+	}
+}
+
+func TestSniperNest_ReconcileTarget_MoreBranches(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// 1. Target is negative (-50, short entry)
+	targetShort := strategy.TargetPosition{Qty: -50, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, targetShort, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	orderBullet, ok := bullet.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %+v", bullet)
+	}
+	if orderBullet.Order.Action != order.ACTION_SELL || orderBullet.Order.CashMargin != order.CASH_MARGIN_MARGIN_ENTRY {
+		t.Errorf("expected new sell entry order for short position, got %+v", orderBullet.Order)
+	}
+
+	// 2. Virtual Qty is negative (-100), Target is 0 -> should BUY exit
+	nest2 := NewSniperNest("7203", sym, nil, nil)
+	nest2.positions.positions[sniperID] = []position.Position{
+		{LeavesQty: 100, Price: 2000, Action: order.ACTION_SELL},
+	}
+	targetZero := strategy.TargetPosition{Qty: 0, Price: 0, OrderType: order.ORDER_TYPE_MARKET}
+	bullet2 := nest2.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, targetZero, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	orderBullet2, ok2 := bullet2.(OrderBullet)
+	if !ok2 {
+		t.Fatalf("expected OrderBullet, got %+v", bullet2)
+	}
+	if orderBullet2.Order.Action != order.ACTION_BUY || orderBullet2.Order.CashMargin != order.CASH_MARGIN_MARGIN_EXIT {
+		t.Errorf("expected buy exit order, got %+v", orderBullet2.Order)
+	}
+
+	// 3. Invalid order cancel check: effectiveTargetQty < 0 (short), but active order is BUY entry
+	nest3 := NewSniperNest("7203", sym, nil, nil)
+	ordBuy := order.NewOrder("buy-entry-ord", "7203", order.ACTION_BUY, 2000, 100)
+	ordBuy.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	nest3.AddOrder(sniperID, ordBuy)
+
+	bullet3 := nest3.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, targetShort, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	cancelBullet3, ok3 := bullet3.(CancelBullet)
+	if !ok3 || cancelBullet3.OrderID != "buy-entry-ord" {
+		t.Errorf("expected CancelBullet for buy-entry-ord, got %+v", bullet3)
+	}
+}
+
+
+func TestSniperNest_ReconcileTarget_CancelCheck(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	strat := &mockCancelCheckerStrategy{
+		shouldCancel: true,
+	}
+	s1 := NewSniper("sniper-1", sym, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	nest := NewSniperNest("7203", sym, []*Sniper{s1}, nil)
+
+	// Setup position and active order
+	nest.positions.positions["sniper-1"] = []position.Position{
+		{LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
+	}
+	ord := order.NewOrder("order-1", "7203", order.ACTION_BUY, 2000, 100)
+	ord.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	nest.AddOrder("sniper-1", ord)
+
+	target := strategy.TargetPosition{Qty: 100, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}
+	bullet := nest.ReconcileTarget("sniper-1", tick.Tick{Price: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+
+	cancelBullet, ok := bullet.(CancelBullet)
+	if !ok || cancelBullet.OrderID != "order-1" {
+		t.Errorf("expected CancelBullet for order-1, got %+v", bullet)
+	}
+}
+
+func TestSniperNest_ReconcileTarget_ExitCooldown(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// Position exists
+	nest.positions.positions[sniperID] = []position.Position{
+		{LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
+	}
+
+	// Trigger cooldown
+	nest.cooldowns.Trigger(sniperID)
+
+	// Target is 0 (exit)
+	target := strategy.TargetPosition{Qty: 0, Price: 0, OrderType: order.ORDER_TYPE_MARKET}
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+
+	if bullet != nil {
+		t.Errorf("expected ReconcileTarget to return nil due to active cooldown, got %+v", bullet)
+	}
+}
+
+func TestSniperNest_ReconcileTarget_PosInversion(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// Virtual Qty is positive (+100)
+	nest.positions.positions[sniperID] = []position.Position{
+		{LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
+	}
+
+	// Target is negative (-50) -> position inversion safety valve should set effectiveTargetQty to 0
+	target := strategy.TargetPosition{Qty: -50, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+
+	// Effective target is 0, virtual qty is 100 -> gap is -100 -> exit of 100 units
+	orderBullet, ok := bullet.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %+v", bullet)
+	}
+	if orderBullet.Order.Action != order.ACTION_SELL || orderBullet.Order.OrderQty != 100 {
+		t.Errorf("expected exit sell order of 100 units due to safety valve, got: %+v", orderBullet.Order)
+	}
+
+	// Opposite case: Virtual Qty is negative (-100), Target is positive (+50)
+	nest2 := NewSniperNest("7203", sym, nil, nil)
+	nest2.positions.positions[sniperID] = []position.Position{
+		{LeavesQty: 100, Price: 2000, Action: order.ACTION_SELL},
+	}
+	bullet2 := nest2.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.TargetPosition{Qty: 50, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	orderBullet2, ok2 := bullet2.(OrderBullet)
+	if !ok2 {
+		t.Fatalf("expected OrderBullet, got %+v", bullet2)
+	}
+	if orderBullet2.Order.Action != order.ACTION_BUY || orderBullet2.Order.OrderQty != 100 {
+		t.Errorf("expected exit buy order of 100 units due to safety valve, got: %+v", orderBullet2.Order)
+	}
+}
+
+func TestObservation_CalculateVirtualPosition(t *testing.T) {
+	// Active orders contain entry BUY and entry SELL (short) which are FillExpected
+	oBuy := order.NewOrder("oBuy", "7203", order.ACTION_BUY, 2000, 100)
+	oBuy.BypassTransition(order.ORDER_STATUS_FILL_EXPECTED, order.STATE_ACTIVE)
+	oBuy.CashMargin = order.CASH_MARGIN_MARGIN_ENTRY
+
+	oSell := order.NewOrder("oSell", "7203", order.ACTION_SELL, 2000, 40)
+	oSell.BypassTransition(order.ORDER_STATUS_FILL_EXPECTED, order.STATE_ACTIVE)
+	oSell.CashMargin = order.CASH_MARGIN_MARGIN_ENTRY
+
+	obs := Observation{
+		Positions: []position.Position{
+			{LeavesQty: 50, Price: 2000, Action: order.ACTION_BUY},
+		},
+		ActiveOrders: []*order.Order{oBuy, oSell},
+	}
+
+	vpos := obs.CalculateVirtualPosition()
+	// Physical position: 50
+	// Entry Buy: +100
+	// Entry Sell: -40
+	// Expected total qty: 50 + 100 - 40 = 110
+	if vpos.Qty != 110 {
+		t.Errorf("expected virtual qty 110, got %f", vpos.Qty)
+	}
+	expectedPrice := (50*2000.0 + 100*2000.0) / 110.0 // totalCost / totalQty
+	if vpos.AveragePrice != expectedPrice {
+		t.Errorf("expected avg price %f, got %f", expectedPrice, vpos.AveragePrice)
+	}
+}
+

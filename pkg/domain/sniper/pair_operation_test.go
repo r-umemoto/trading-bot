@@ -394,3 +394,159 @@ func TestPairTradingOperation_HandleTick_ZeroStates(t *testing.T) {
 		t.Error("expected nil actions when state is zero")
 	}
 }
+
+func TestPairTradingOperation_HandleTick_ZeroOpeningPrice(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Tokyo")
+	detailA := symbol.Symbol{Code: "7203"}
+	detailB := symbol.Symbol{Code: "7267"}
+
+	stratA := NewInstructionStrategy()
+	stratB := NewInstructionStrategy()
+	sniperA := NewSniper("sniper-a", detailA, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sniperB := NewSniper("sniper-b", detailB, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	nestA := NewSniperNest("7203", detailA, []*Sniper{sniperA}, nil)
+	nestB := NewSniperNest("7267", detailB, []*Sniper{sniperB}, nil)
+
+	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
+	o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 0.01, 100.0, nil)
+
+	// Opening price is 0
+	timeAllowed, _ := time.ParseInLocation(time.RFC3339, "2026-06-01T10:00:00+09:00", loc)
+	tickA := tick.Tick{Symbol: "7203", Price: 1000.0, CurrentPriceTime: timeAllowed, OpeningPrice: 0}
+	tickB := tick.Tick{Symbol: "7267", Price: 1000.0, CurrentPriceTime: timeAllowed, OpeningPrice: 0}
+	dataPool.PushTick(tickA)
+	dataPool.PushTick(tickB)
+
+	// This should run without panic and fall back opening price to current price (1000)
+	// PriceDiff normA (1000/1000) - normB (1000/1000) = 0. No entry actions.
+	actions := o.HandleTick(tickA)
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions, got %d", len(actions))
+	}
+}
+
+func TestPairTradingOperation_HandleTick_ScalingAndRounding(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Tokyo")
+	detailA := symbol.Symbol{Code: "7203"}
+	detailB := symbol.Symbol{Code: "7267"}
+
+	stratA := NewInstructionStrategy()
+	stratB := NewInstructionStrategy()
+	sniperA := NewSniper("sniper-a", detailA, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sniperB := NewSniper("sniper-b", detailB, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	nestA := NewSniperNest("7203", detailA, []*Sniper{sniperA}, nil)
+	nestB := NewSniperNest("7267", detailB, []*Sniper{sniperB}, nil)
+
+	dataPool := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
+
+	t.Run("openA < openB", func(t *testing.T) {
+		// tradeQty = 100.0
+		o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 0.01, 100.0, nil)
+
+		timeAllowed, _ := time.ParseInLocation(time.RFC3339, "2026-06-01T10:00:00+09:00", loc)
+		// openA (500) < openB (1000)
+		// ratio = 1000 / 500 = 2.0
+		// qtyA_scaled = round(100 * 2 / 100) * 100 = 200.
+		tickA := tick.Tick{Symbol: "7203", Price: 510.0, CurrentPriceTime: timeAllowed, OpeningPrice: 500.0} // normA = 510 / 500 = 1.02
+		tickB := tick.Tick{Symbol: "7267", Price: 1000.0, CurrentPriceTime: timeAllowed, OpeningPrice: 1000.0} // normB = 1000 / 1000 = 1.0
+		// spread = 1.02 - 1.0 = 0.02 > 0.01 (threshold) -> A Sell (qty=200), B Buy (qty=100)
+		dataPool.PushTick(tickA)
+		dataPool.PushTick(tickB)
+
+		stratA.SetTarget(strategy.TargetPosition{Qty: 0})
+		stratB.SetTarget(strategy.TargetPosition{Qty: 0})
+
+		actions := o.HandleTick(tickA)
+		if len(actions) != 2 {
+			t.Fatalf("expected 2 actions, got %d", len(actions))
+		}
+
+		for _, act := range actions {
+			if b, ok := act.Bullet.(OrderBullet); ok {
+				if act.SniperID == "sniper-a" {
+					if b.Order.OrderQty != 200.0 {
+						t.Errorf("expected scaled qtyA to be 200.0, got %f", b.Order.OrderQty)
+					}
+				} else if act.SniperID == "sniper-b" {
+					if b.Order.OrderQty != 100.0 {
+						t.Errorf("expected qtyB to be 100.0, got %f", b.Order.OrderQty)
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("openA < openB with low qty boundary correction", func(t *testing.T) {
+		// tradeQty = 10.0
+		o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 0.01, 10.0, nil)
+
+		timeAllowed, _ := time.ParseInLocation(time.RFC3339, "2026-06-01T10:00:00+09:00", loc)
+		// openA (900) < openB (1000)
+		// ratio = 1000 / 900 = 1.111
+		// qtyA_scaled = round(10 * 1.111 / 100) * 100 = 0 -> corrected to 100.
+		tickA := tick.Tick{Symbol: "7203", Price: 918.0, CurrentPriceTime: timeAllowed, OpeningPrice: 900.0} // normA = 918 / 900 = 1.02
+		tickB := tick.Tick{Symbol: "7267", Price: 1000.0, CurrentPriceTime: timeAllowed, OpeningPrice: 1000.0} // normB = 1000 / 1000 = 1.0
+		dataPool.PushTick(tickA)
+		dataPool.PushTick(tickB)
+
+		stratA.SetTarget(strategy.TargetPosition{Qty: 0})
+		stratB.SetTarget(strategy.TargetPosition{Qty: 0})
+
+		// Reset active orders
+		nestA.orders.activeOrders["sniper-a"] = nil
+		nestB.orders.activeOrders["sniper-b"] = nil
+
+		actions := o.HandleTick(tickA)
+		if len(actions) != 2 {
+			t.Fatalf("expected 2 actions, got %d", len(actions))
+		}
+
+		for _, act := range actions {
+			if b, ok := act.Bullet.(OrderBullet); ok {
+				if act.SniperID == "sniper-a" {
+					if b.Order.OrderQty != 100.0 {
+						t.Errorf("expected corrected qtyA to be 100.0, got %f", b.Order.OrderQty)
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("openA >= openB with low qty boundary correction", func(t *testing.T) {
+		// tradeQty = 10.0
+		o := NewPairTradingOperation("test-pair", nestA, nestB, stratA, stratB, dataPool, 0.01, 10.0, nil)
+
+		timeAllowed, _ := time.ParseInLocation(time.RFC3339, "2026-06-01T10:00:00+09:00", loc)
+		// openA (1000) >= openB (900)
+		// ratio = 1000 / 900 = 1.111
+		// qtyB_scaled = round(10 * 1.111 / 100) * 100 = 0 -> corrected to 100.
+		tickA := tick.Tick{Symbol: "7203", Price: 1020.0, CurrentPriceTime: timeAllowed, OpeningPrice: 1000.0} // normA = 1.02
+		tickB := tick.Tick{Symbol: "7267", Price: 900.0, CurrentPriceTime: timeAllowed, OpeningPrice: 900.0} // normB = 1.0
+		dataPool.PushTick(tickA)
+		dataPool.PushTick(tickB)
+
+		stratA.SetTarget(strategy.TargetPosition{Qty: 0})
+		stratB.SetTarget(strategy.TargetPosition{Qty: 0})
+
+		nestA.orders.activeOrders["sniper-a"] = nil
+		nestB.orders.activeOrders["sniper-b"] = nil
+
+		actions := o.HandleTick(tickA)
+		if len(actions) != 2 {
+			t.Fatalf("expected 2 actions, got %d", len(actions))
+		}
+
+		for _, act := range actions {
+			if b, ok := act.Bullet.(OrderBullet); ok {
+				if act.SniperID == "sniper-b" {
+					if b.Order.OrderQty != 100.0 {
+						t.Errorf("expected corrected qtyB to be 100.0, got %f", b.Order.OrderQty)
+					}
+				}
+			}
+		}
+	})
+}
+

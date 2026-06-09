@@ -213,7 +213,15 @@ func TestReconcileOrders_SpecialStateSync(t *testing.T) {
 	o3 := NewOrder("order-3", "7203", ACTION_BUY, 2000, 100)
 	o3.BypassTransition(ORDER_STATUS_WAITING, STATE_PENDING)
 
-	localOrders := []*Order{o1, o2, o3}
+	// 4. FillExpected の状態で、API側が完了 (FILLED) になった場合
+	o4 := NewOrder("order-4", "7203", ACTION_BUY, 2000, 100)
+	o4.BypassTransition(ORDER_STATUS_FILL_EXPECTED, STATE_ACTIVE)
+
+	// 5. CancelSent の状態で、API側が完了 (CANCELED) になった場合
+	o5 := NewOrder("order-5", "7203", ACTION_BUY, 2000, 100)
+	o5.BypassTransition(ORDER_STATUS_CANCEL_SENT, STATE_ACTIVE)
+
+	localOrders := []*Order{o1, o2, o3, o4, o5}
 
 	apiOrders := Orders{Orders: []Order{
 		{
@@ -234,11 +242,24 @@ func TestReconcileOrders_SpecialStateSync(t *testing.T) {
 			status: ORDER_STATUS_IN_PROGRESS,
 			CumQty: 0,
 		},
+		{
+			ID:     "order-4",
+			Symbol: "7203",
+			status: ORDER_STATUS_FILLED,
+			CumQty: 100,
+		},
+		{
+			ID:     "order-5",
+			Symbol: "7203",
+			status: ORDER_STATUS_CANCELED,
+			CumQty: 0,
+		},
 	}}
 
 	processedExecs := make(map[string]bool)
 	reconciled, _ := ReconcileOrders(localOrders, apiOrders, "7203", processedExecs, now)
 
+	// アクティブ注文リストには未完了の注文 (o1, o2, o3) のみが残る (o4, o5 は完了したので除外される)
 	if len(reconciled) != 3 {
 		t.Fatalf("expected 3 reconciled orders, got %d", len(reconciled))
 	}
@@ -259,5 +280,15 @@ func TestReconcileOrders_SpecialStateSync(t *testing.T) {
 	// o3: InternalState が PENDING から ACTIVE に遷移していること
 	if o3.InternalState() != STATE_ACTIVE {
 		t.Errorf("expected internal state to transition to ACTIVE, got %v", o3.InternalState())
+	}
+
+	// o4: status が FILLED に更新されていること
+	if o4.Status() != ORDER_STATUS_FILLED {
+		t.Errorf("expected status to transition to FILLED, got %v", o4.Status())
+	}
+
+	// o5: status が CANCELED に更新されていること
+	if o5.Status() != ORDER_STATUS_CANCELED {
+		t.Errorf("expected status to transition to CANCELED, got %v", o5.Status())
 	}
 }
