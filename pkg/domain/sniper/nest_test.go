@@ -832,3 +832,27 @@ func TestObservation_CalculateVirtualPosition(t *testing.T) {
 	}
 }
 
+func TestSniperNest_HandleTick_StoppedLifecycle(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203", Name: "Toyota"}
+	strat := &mockNestStrategy{
+		evaluateFn: func(input strategy.StrategyInput) strategy.TargetPosition {
+			return strategy.TargetPosition{
+				Qty:       10,
+				Price:     2000,
+				OrderType: order.ORDER_TYPE_LIMIT,
+				Reason:    "TestBuy",
+			}
+		},
+	}
+	s1 := NewSniper("sniper-1", sym, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	s1.ForceStop() // LifecycleをStoppedにする
+
+	nest := NewSniperNest("7203", sym, []*Sniper{s1}, nil)
+
+	actions := nest.HandleTick(tick.Tick{Symbol: "7203", Price: 2000, TradingVolume: 100})
+	if len(actions) != 0 {
+		t.Fatalf("expected 0 fire actions for stopped sniper, got %d", len(actions))
+	}
+}
+
+

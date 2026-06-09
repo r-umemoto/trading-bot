@@ -93,6 +93,9 @@ func (n *SniperNest) GetSymbolCodes() []string {
 func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 	var actions []FireAction
 	for _, s := range n.snipers {
+		if s.GetLifecycle() == LifecycleStopped {
+			continue
+		}
 		obs := n.PrepareObservation(s.ID, t, s.ExecutionPolicy)
 
 		input := strategy.StrategyInput{
