@@ -69,7 +69,7 @@ func NewSyncBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBa
 		simulateCancelSilent: make(map[string]bool),
 		positions:            make(map[string][]position.Position),
 	}
-	g.dataPool = tick.NewDefaultDataPool(nil)
+	g.dataPool = tick.NewDefaultDataPool(&backtestHistoricalFeederProvider{})
 	return g
 }
 
@@ -434,4 +434,43 @@ func (g *SyncBacktestGateway) getDepth(symbol string, action order.Action, price
 		}
 	}
 	return 0
+}
+
+type backtestHistoricalFeeder struct {
+	symbol string
+}
+
+func (f *backtestHistoricalFeeder) FetchSMA(period int) (float64, error) {
+	return 0, nil
+}
+
+func (f *backtestHistoricalFeeder) FetchPreviousClose() (float64, error) {
+	closes := map[string]float64{
+		"8604": 1359.5,
+		"8308": 2085.5,
+		"4689": 406.7,
+		"4755": 741,
+		"7201": 341.8,
+		"7267": 1438.5,
+		"4005": 569.9,
+		"3402": 1094.5,
+		"6366": 694,
+		"6498": 2136,
+		"8801": 1462.5,
+		"3382": 1915.5,
+		"4503": 2149,
+		"4527": 2465.5,
+		"2503": 2641.5,
+		"2897": 2655,
+	}
+	if val, ok := closes[f.symbol]; ok {
+		return val, nil
+	}
+	return 0, nil
+}
+
+type backtestHistoricalFeederProvider struct{}
+
+func (p *backtestHistoricalFeederProvider) GetFeeder(symbol string) tick.HistoricalFeeder {
+	return &backtestHistoricalFeeder{symbol: symbol}
 }
