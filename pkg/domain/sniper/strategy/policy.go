@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
@@ -201,6 +202,14 @@ func (p *NoopPolicy) IsOrderDesired(ord *order.Order, sig brain.Signal, symbol s
 func isOrderDesiredDefault(ord *order.Order, sig brain.Signal, symbol symbol.Symbol) bool {
 	marketAction, _ := sig.Action.ToMarketAction()
 	if ord.Action != marketAction || ord.OrderQty != sig.Quantity {
+		return false
+	}
+
+	// NaN 同士の比較は一致とみなす
+	if math.IsNaN(sig.Price) && math.IsNaN(ord.OrderPrice) {
+		return true
+	}
+	if math.IsNaN(sig.Price) || math.IsNaN(ord.OrderPrice) {
 		return false
 	}
 
