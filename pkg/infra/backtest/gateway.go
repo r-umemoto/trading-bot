@@ -411,6 +411,7 @@ func (g *SyncBacktestGateway) executeAll(id string, price float64) {
 
 	// 🌟 IFD自動発火ロジック (ゲートウェイ側での自動実行)
 	if ord.IfDone != nil {
+		ord.IfDone.ParentOrderID = ord.ID
 		fmt.Printf("⚡ [Backtest] IFD発動: 親注文(%s)約定 -> 子注文(%s)を即時発射します\n", ord.ID, ord.IfDone.Action)
 		_, _ = g.SendOrder(context.Background(), order.SendOrderInput{
 			Order: ord.IfDone,
