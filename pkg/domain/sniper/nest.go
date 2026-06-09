@@ -511,7 +511,7 @@ func (n *SniperNest) ReconcileTarget(
 		Reason:    desiredReason,
 	}
 
-	// ギャップが極小で、かつ既存注文의更新も必要ない場合は早期リターン
+	// ギャップが極小で、かつ既存注文の更新も必要ない場合は早期リターン
 	if absGap < 1.0 {
 		if matchingOrder == nil {
 			return nil
@@ -519,12 +519,17 @@ func (n *SniperNest) ReconcileTarget(
 
 		isIdentical := matchingOrder.Action == action &&
 			matchingOrder.OrderQty == desiredSignal.Quantity &&
-			matchingOrder.OrderPrice == desiredSignal.Price &&
+			(matchingOrder.OrderPrice == desiredSignal.Price || (math.IsNaN(matchingOrder.OrderPrice) && math.IsNaN(desiredSignal.Price))) &&
 			matchingOrder.CashMargin == cashMargin
 
 		if isIdentical || policy.IsOrderDesired(matchingOrder, desiredSignal, n.Detail) {
 			return nil
 		}
+	}
+
+	// 目標価格が NaN の場合は、新規発注や既存注文の上書きを行わない（ガードレール）
+	if math.IsNaN(desiredSignal.Price) {
+		return nil
 	}
 
 	// 返済エラー時のクールダウン
@@ -539,7 +544,7 @@ func (n *SniperNest) ReconcileTarget(
 	if matchingOrder != nil {
 		isIdentical := matchingOrder.Action == action &&
 			matchingOrder.OrderQty == desiredSignal.Quantity &&
-			matchingOrder.OrderPrice == desiredSignal.Price &&
+			(matchingOrder.OrderPrice == desiredSignal.Price || (math.IsNaN(matchingOrder.OrderPrice) && math.IsNaN(desiredSignal.Price))) &&
 			matchingOrder.CashMargin == cashMargin
 
 		if isIdentical || policy.IsOrderDesired(matchingOrder, desiredSignal, n.Detail) {

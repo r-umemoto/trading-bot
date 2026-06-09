@@ -1,6 +1,7 @@
 package strategy_test
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -460,6 +461,26 @@ func TestIsOrderDesiredDefault(t *testing.T) {
 		sig2 := brain.NewBuyEntry(100, 2000, order.ORDER_TYPE_LIMIT, "")
 		if policy.IsOrderDesired(ord, sig2, sym) {
 			t.Error("expected false when order is market but signal is limit")
+		}
+	})
+
+	t.Run("NaN prices", func(t *testing.T) {
+		policy := &strategy.TouchTTLPolicy{}
+
+		ord := order.NewOrder("test", "7203", order.ACTION_BUY, math.NaN(), 100)
+		sig := brain.NewBuyEntry(100, math.NaN(), order.ORDER_TYPE_LIMIT, "")
+		if !policy.IsOrderDesired(ord, sig, sym) {
+			t.Error("expected true when both order price and signal price are NaN")
+		}
+
+		ord2 := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
+		if policy.IsOrderDesired(ord2, sig, sym) {
+			t.Error("expected false when order price is valid but signal price is NaN")
+		}
+
+		sig2 := brain.NewBuyEntry(100, 2000, order.ORDER_TYPE_LIMIT, "")
+		if policy.IsOrderDesired(ord, sig2, sym) {
+			t.Error("expected false when order price is NaN but signal price is valid")
 		}
 	})
 }
