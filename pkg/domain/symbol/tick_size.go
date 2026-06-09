@@ -14,9 +14,9 @@ func (d *Symbol) CalcTickSize(price float64) float64 {
 	case PRICE_RANGE_GROUP_TSE_TOPIX100:
 		return getTSETopix100TickSize(absPrice)
 	case PRICE_RANGE_GROUP_TSE_STANDARD:
-		fallthrough
-	default:
 		return getTSEStandardTickSize(absPrice)
+	default:
+		return 0.0
 	}
 }
 
