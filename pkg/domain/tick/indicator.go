@@ -46,6 +46,7 @@ func (i *StaticFloatIndicator) ID() string {
 
 func (i *StaticFloatIndicator) Update(tick Tick) {
 	// 静的指標なのでTickでは更新されない
+	_ = tick
 }
 
 func (i *StaticFloatIndicator) Value() interface{} {
