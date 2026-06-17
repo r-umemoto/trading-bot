@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"log/slog"
+	"math"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/brain"
@@ -12,6 +13,22 @@ import (
 type Position struct {
 	Qty          float64 // 保有数量
 	AveragePrice float64 // 平均取得単価
+}
+
+func (p Position) AbsQty() float64 {
+	return math.Abs(p.Qty)
+}
+
+func (p Position) IsShort() bool {
+	return p.Qty < 0
+}
+
+func (p Position) IsLong() bool {
+	return p.Qty > 0
+}
+
+func (p Position) IsFlat() bool {
+	return p.Qty == 0
 }
 
 // Simulate は、このポジションに対してシグナルが実行されたと仮定した新しいポジションを返します。
@@ -69,6 +86,22 @@ type TargetPosition struct {
 	ExitPrice     float64
 	ExitOrderType order.OrderType
 	ExitReason    string
+}
+
+func (t TargetPosition) AbsQty() float64 {
+	return math.Abs(t.Qty)
+}
+
+func (t TargetPosition) IsShort() bool {
+	return t.Qty < 0
+}
+
+func (t TargetPosition) IsLong() bool {
+	return t.Qty > 0
+}
+
+func (t TargetPosition) IsFlat() bool {
+	return t.Qty == 0
 }
 
 type CancelChecker interface {
