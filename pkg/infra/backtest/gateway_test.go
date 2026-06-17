@@ -328,12 +328,13 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	obs1 := sniper.Observation{
 		Tick: tick.Tick{Price: 400.0, CurrentPriceTime: baseTime},
 	}
+	virtualPos1 := obs1.CalculateVirtualPosition()
 	input1 := strategy.StrategyInput{
-		Position:   obs1.CalculateVirtualPosition(),
+		Position:   virtualPos1,
 		LatestTick: obs1.Tick,
 	}
 	target1 := s.Evaluate(input1)
-	bullet1 := nest.ReconcileTarget(s.ID, obs1.Tick, target1, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+	bullet1 := nest.ReconcileTarget(s.ID, obs1.Tick, virtualPos1, target1, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 
 	ordBullet1, ok1 := bullet1.(sniper.OrderBullet)
 	if !ok1 {
@@ -364,12 +365,13 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 
 	// ---- 2. 決済（買い戻し）の評価と発注 ----
 	obs2 := nest.PrepareObservation(s.ID, tick.Tick{Price: 395.0, CurrentPriceTime: baseTime.Add(2 * time.Second)}, s.ExecutionPolicy)
+	virtualPos2 := obs2.CalculateVirtualPosition()
 	input2 := strategy.StrategyInput{
-		Position:   obs2.CalculateVirtualPosition(),
+		Position:   virtualPos2,
 		LatestTick: obs2.Tick,
 	}
 	target2 := s.Evaluate(input2)
-	bullet2 := nest.ReconcileTarget(s.ID, obs2.Tick, target2, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+	bullet2 := nest.ReconcileTarget(s.ID, obs2.Tick, virtualPos2, target2, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 
 	ordBullet2, ok2 := bullet2.(sniper.OrderBullet)
 	if !ok2 {

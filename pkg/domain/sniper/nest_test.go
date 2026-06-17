@@ -678,7 +678,7 @@ func TestSniperNest_ReconcileTarget_MoreBranches(t *testing.T) {
 
 	// 1. Target is negative (-50, short entry)
 	targetShort := strategy.TargetPosition{Qty: -50, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}
-	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, targetShort, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.Position{Qty: 0}, targetShort, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
 	orderBullet, ok := bullet.(OrderBullet)
 	if !ok {
 		t.Fatalf("expected OrderBullet, got %+v", bullet)
@@ -693,7 +693,7 @@ func TestSniperNest_ReconcileTarget_MoreBranches(t *testing.T) {
 		{LeavesQty: 100, Price: 2000, Action: order.ACTION_SELL},
 	}
 	targetZero := strategy.TargetPosition{Qty: 0, Price: 0, OrderType: order.ORDER_TYPE_MARKET}
-	bullet2 := nest2.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, targetZero, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	bullet2 := nest2.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.Position{Qty: -100, AveragePrice: 2000}, targetZero, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
 	orderBullet2, ok2 := bullet2.(OrderBullet)
 	if !ok2 {
 		t.Fatalf("expected OrderBullet, got %+v", bullet2)
@@ -708,7 +708,7 @@ func TestSniperNest_ReconcileTarget_MoreBranches(t *testing.T) {
 	ordBuy.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
 	nest3.AddOrder(sniperID, ordBuy)
 
-	bullet3 := nest3.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, targetShort, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	bullet3 := nest3.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.Position{Qty: 0}, targetShort, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
 	cancelBullet3, ok3 := bullet3.(CancelBullet)
 	if !ok3 || cancelBullet3.OrderID != "buy-entry-ord" {
 		t.Errorf("expected CancelBullet for buy-entry-ord, got %+v", bullet3)
@@ -733,7 +733,7 @@ func TestSniperNest_ReconcileTarget_CancelCheck(t *testing.T) {
 	nest.AddOrder("sniper-1", ord)
 
 	target := strategy.TargetPosition{Qty: 100, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}
-	bullet := nest.ReconcileTarget("sniper-1", tick.Tick{Price: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	bullet := nest.ReconcileTarget("sniper-1", tick.Tick{Price: 2000}, strategy.Position{Qty: 200, AveragePrice: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
 
 	cancelBullet, ok := bullet.(CancelBullet)
 	if !ok || cancelBullet.OrderID != "order-1" {
@@ -756,7 +756,7 @@ func TestSniperNest_ReconcileTarget_ExitCooldown(t *testing.T) {
 
 	// Target is 0 (exit)
 	target := strategy.TargetPosition{Qty: 0, Price: 0, OrderType: order.ORDER_TYPE_MARKET}
-	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.Position{Qty: 100, AveragePrice: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
 
 	if bullet != nil {
 		t.Errorf("expected ReconcileTarget to return nil due to active cooldown, got %+v", bullet)
@@ -775,7 +775,7 @@ func TestSniperNest_ReconcileTarget_PosInversion(t *testing.T) {
 
 	// Target is negative (-50) -> position inversion safety valve should set effectiveTargetQty to 0
 	target := strategy.TargetPosition{Qty: -50, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}
-	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.Position{Qty: 100, AveragePrice: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
 
 	// Effective target is 0, virtual qty is 100 -> gap is -100 -> exit of 100 units
 	orderBullet, ok := bullet.(OrderBullet)
@@ -791,7 +791,7 @@ func TestSniperNest_ReconcileTarget_PosInversion(t *testing.T) {
 	nest2.positions.positions[sniperID] = []position.Position{
 		{LeavesQty: 100, Price: 2000, Action: order.ACTION_SELL},
 	}
-	bullet2 := nest2.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.TargetPosition{Qty: 50, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	bullet2 := nest2.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.Position{Qty: -100, AveragePrice: 2000}, strategy.TargetPosition{Qty: 50, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
 	orderBullet2, ok2 := bullet2.(OrderBullet)
 	if !ok2 {
 		t.Fatalf("expected OrderBullet, got %+v", bullet2)
