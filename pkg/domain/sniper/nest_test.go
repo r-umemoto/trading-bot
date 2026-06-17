@@ -826,9 +826,24 @@ func TestObservation_CalculateVirtualPosition(t *testing.T) {
 	if vpos.Qty != 110 {
 		t.Errorf("expected virtual qty 110, got %f", vpos.Qty)
 	}
-	expectedPrice := (50*2000.0 + 100*2000.0) / 110.0 // totalCost / totalQty
+	expectedPrice := (50*2000.0 + 100*2000.0 - 40*2000.0) / 110.0 // totalCost / totalQty
 	if vpos.AveragePrice != expectedPrice {
 		t.Errorf("expected avg price %f, got %f", expectedPrice, vpos.AveragePrice)
+	}
+
+	// Test case for purely short positions:
+	obsShort := Observation{
+		Positions: []position.Position{
+			{LeavesQty: 100, Price: 2000, Action: order.ACTION_SELL},
+		},
+		ActiveOrders: []*order.Order{},
+	}
+	vposShort := obsShort.CalculateVirtualPosition()
+	if vposShort.Qty != -100 {
+		t.Errorf("expected virtual qty -100, got %f", vposShort.Qty)
+	}
+	if vposShort.AveragePrice != 2000.0 {
+		t.Errorf("expected avg price 2000.0 for short position, got %f", vposShort.AveragePrice)
 	}
 }
 

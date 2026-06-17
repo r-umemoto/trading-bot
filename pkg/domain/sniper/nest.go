@@ -350,9 +350,10 @@ func (n *SniperNest) ReconcileTarget(
 
 	// ポジション反転の安全弁
 	effectiveTargetQty := target.Qty
-	if virtualQty > 0 && target.Qty < 0 {
+	virtualPos := strategy.Position{Qty: virtualQty}
+	if virtualPos.IsLong() && target.IsShort() {
 		effectiveTargetQty = 0
-	} else if virtualQty < 0 && target.Qty > 0 {
+	} else if virtualPos.IsShort() && target.IsLong() {
 		effectiveTargetQty = 0
 	}
 
@@ -362,6 +363,7 @@ func (n *SniperNest) ReconcileTarget(
 			continue
 		}
 		shouldCancel := false
+		effectiveTarget := strategy.TargetPosition{Qty: effectiveTargetQty}
 
 		// もし戦略が自前のキャンセルロジック（CancelChecker）を持っているなら、それを最優先する
 		var s *Sniper
@@ -382,12 +384,12 @@ func (n *SniperNest) ReconcileTarget(
 						totalCost += p.Price * p.LeavesQty
 					}
 				}
-				if virtualQty > 0 {
-					avgPrice = totalCost / virtualQty
+				if virtualPos.AbsQty() != 0 {
+					avgPrice = math.Abs(totalCost / virtualPos.Qty)
 				}
 				shouldCancel = checker.ShouldCancel(strategy.StrategyInput{
 					Position: strategy.Position{
-						Qty:          virtualQty,
+						Qty:          virtualPos.Qty,
 						AveragePrice: avgPrice,
 					},
 					LatestTick: t,
@@ -396,12 +398,12 @@ func (n *SniperNest) ReconcileTarget(
 			}
 		}
 
-		if effectiveTargetQty > 0 {
+		if effectiveTarget.IsLong() {
 			if (o.Action == order.ACTION_SELL && o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY) ||
 				(o.Action == order.ACTION_BUY && o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT) {
 				shouldCancel = true
 			}
-		} else if effectiveTargetQty < 0 {
+		} else if effectiveTarget.IsShort() {
 			if (o.Action == order.ACTION_BUY && o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY) ||
 				(o.Action == order.ACTION_SELL && o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT) {
 				shouldCancel = true
@@ -431,21 +433,23 @@ func (n *SniperNest) ReconcileTarget(
 	var action order.Action
 	var cashMargin order.CashMarginType
 
-	if effectiveTargetQty > 0 {
-		gap = effectiveTargetQty - (virtualQty + stats.InflightBuyEntry)
+	effectiveTarget := strategy.TargetPosition{Qty: effectiveTargetQty}
+
+	if effectiveTarget.IsLong() {
+		gap = effectiveTarget.AbsQty() - (virtualPos.AbsQty() + stats.InflightBuyEntry)
 		action = order.ACTION_BUY
 		cashMargin = order.CASH_MARGIN_MARGIN_ENTRY
-	} else if effectiveTargetQty < 0 {
-		gap = effectiveTargetQty - (virtualQty - stats.InflightSellEntry)
+	} else if effectiveTarget.IsShort() {
+		gap = effectiveTarget.AbsQty() - (virtualPos.AbsQty() + stats.InflightSellEntry)
 		action = order.ACTION_SELL
 		cashMargin = order.CASH_MARGIN_MARGIN_ENTRY
 	} else {
-		if virtualQty > 0 {
-			gap = virtualQty - stats.InflightSellExit
+		if virtualPos.IsLong() {
+			gap = virtualPos.AbsQty() - stats.InflightSellExit
 			action = order.ACTION_SELL
 			cashMargin = order.CASH_MARGIN_MARGIN_EXIT
-		} else if virtualQty < 0 {
-			gap = math.Abs(virtualQty) - stats.InflightBuyExit
+		} else if virtualPos.IsShort() {
+			gap = virtualPos.AbsQty() - stats.InflightBuyExit
 			action = order.ACTION_BUY
 			cashMargin = order.CASH_MARGIN_MARGIN_EXIT
 		}
@@ -684,13 +688,14 @@ func (obs Observation) CalculateVirtualPosition() strategy.Position {
 					totalCost += curr.OrderPrice * curr.OrderQty
 				case order.ACTION_SELL:
 					totalQty -= curr.OrderQty
+					totalCost -= curr.OrderPrice * curr.OrderQty
 				}
 			}
 		}
 	}
 	avgPrice := 0.0
-	if totalQty > 0 {
-		avgPrice = totalCost / totalQty
+	if totalQty != 0 {
+		avgPrice = math.Abs(totalCost / totalQty)
 	}
 	return strategy.Position{Qty: totalQty, AveragePrice: avgPrice}
 }
