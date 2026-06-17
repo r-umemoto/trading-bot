@@ -98,13 +98,15 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 		}
 		obs := n.PrepareObservation(s.ID, t, s.ExecutionPolicy)
 
+		virtualPos := obs.CalculateVirtualPosition()
+
 		input := strategy.StrategyInput{
-			Position:   obs.CalculateVirtualPosition(),
+			Position:   virtualPos,
 			LatestTick: obs.Tick,
 		}
 
 		target := s.Evaluate(input)
-		bullet := n.ReconcileTarget(s.ID, obs.Tick, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+		bullet := n.ReconcileTarget(s.ID, obs.Tick, virtualPos, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 
 		if bullet != nil {
 			actions = append(actions, FireAction{
@@ -293,6 +295,7 @@ func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick, policy str
 func (n *SniperNest) ReconcileTarget(
 	sniperID string,
 	t tick.Tick,
+	virtualPos strategy.Position,
 	target strategy.TargetPosition,
 	exchange order.ExchangeMarket,
 	marginType order.MarginTradeType,
@@ -322,35 +325,8 @@ func (n *SniperNest) ReconcileTarget(
 		return nil
 	}
 
-	// 仮想ポジションおよび物理ポジションの算出
-
-	activeOrders := n.orders.GetActive(sniperID)
-	positions := n.positions.GetCopy(sniperID)
-	
-	var virtualQty float64
-	for _, p := range positions {
-		if p.Action == order.ACTION_SELL {
-			virtualQty -= p.LeavesQty
-		} else {
-			virtualQty += p.LeavesQty
-		}
-	}
-	for _, curr := range activeOrders {
-		if curr != nil && curr.IsFillExpected() {
-			if curr.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
-				switch curr.Action {
-				case order.ACTION_BUY:
-					virtualQty += curr.OrderQty
-				case order.ACTION_SELL:
-					virtualQty -= curr.OrderQty
-				}
-			}
-		}
-	}
-
 	// ポジション反転の安全弁
 	effectiveTargetQty := target.Qty
-	virtualPos := strategy.Position{Qty: virtualQty}
 	if virtualPos.IsLong() && target.IsShort() {
 		effectiveTargetQty = 0
 	} else if virtualPos.IsShort() && target.IsLong() {
@@ -375,23 +351,8 @@ func (n *SniperNest) ReconcileTarget(
 		}
 		if s != nil {
 			if checker, isChecker := s.Strategy.(strategy.CancelChecker); isChecker {
-				var avgPrice float64
-				var totalCost float64
-				for _, p := range positions {
-					if p.Action == order.ACTION_SELL {
-						totalCost -= p.Price * p.LeavesQty
-					} else {
-						totalCost += p.Price * p.LeavesQty
-					}
-				}
-				if virtualPos.AbsQty() != 0 {
-					avgPrice = math.Abs(totalCost / virtualPos.Qty)
-				}
 				shouldCancel = checker.ShouldCancel(strategy.StrategyInput{
-					Position: strategy.Position{
-						Qty:          virtualPos.Qty,
-						AveragePrice: avgPrice,
-					},
+					Position:   virtualPos,
 					LatestTick: t,
 				}, o)
 				goto afterCheck
@@ -479,7 +440,7 @@ func (n *SniperNest) ReconcileTarget(
 	var desiredReason string
 
 	if cashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-		desiredQty = math.Abs(virtualQty)
+		desiredQty = virtualPos.AbsQty()
 		if target.HasIfDone {
 			desiredPrice = target.ExitPrice
 			desiredOrderType = target.ExitOrderType
@@ -575,6 +536,7 @@ func (n *SniperNest) ReconcileTarget(
 			return CancelBullet{OrderID: matchingOrder.ID}
 		}
 	}
+	activeOrders := n.orders.GetActive(sniperID)
 	lockedHoldIDs := order.ActiveOrders(activeOrders).LockedHoldIDs()
 
 	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType, lockedHoldIDs)
