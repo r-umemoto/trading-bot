@@ -37,6 +37,22 @@ func RunBacktest() error {
 	flag.IntVar(&latencyMs, "latency", 0, "発注・キャンセル遅延時間 (ミリ秒)")
 	flag.Parse()
 
+	// csvPath がディレクトリの場合は、その中の tick データ (all_*.csv または all.csv) を探索して解決します
+	fi, err := os.Stat(csvPath)
+	if err == nil && fi.IsDir() {
+		matches, err := filepath.Glob(filepath.Join(csvPath, "all_*.csv"))
+		if err == nil && len(matches) > 0 {
+			csvPath = matches[0]
+		} else {
+			p := filepath.Join(csvPath, "all.csv")
+			if _, err := os.Stat(p); err == nil {
+				csvPath = p
+			} else {
+				return fmt.Errorf("指定されたディレクトリ内にチックデータ(all_*.csv または all.csv)が見つかりません: %s", csvPath)
+			}
+		}
+	}
+
 	execModel := backtest.ExecutionModel(execModelStr)
 	latency := time.Duration(latencyMs) * time.Millisecond
 
