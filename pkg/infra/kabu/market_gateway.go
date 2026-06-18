@@ -2,10 +2,14 @@ package kabu
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
 	"log"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -580,8 +584,8 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
 	rawCh := make(chan api.PushMessage)
 
 	today := time.Now().Format("20060102")
-	// "all" というプレフィックスで、./data ディレクトリに保存
-	logger, err := storage.NewCSVLogger("all", today, "./data")
+	// "all" というプレフィックスで、./data/<today> ディレクトリに保存
+	logger, err := storage.NewCSVLogger("all", today, filepath.Join("./data", today))
 	if err != nil {
 		log.Fatalf("ロガーの初期化に失敗しました: %v", err)
 	}
@@ -969,6 +973,8 @@ func (f *KabuHistoricalFeeder) FetchSMA(period int) (float64, error) {
 	return 0, fmt.Errorf("SMA is not supported by KabuHistoricalFeeder")
 }
 
+var closesFileMu sync.Mutex
+
 func (f *KabuHistoricalFeeder) FetchPreviousClose() (float64, error) {
 	slog.Info("Fetching previous close from KabuStation API", slog.String("symbol", f.symbol))
 	board, err := f.client.GetBoard(f.symbol)
@@ -983,5 +989,44 @@ func (f *KabuHistoricalFeeder) FetchPreviousClose() (float64, error) {
 	}
 
 	slog.Info("Successfully fetched previous close from KabuStation API", slog.String("symbol", f.symbol), slog.Float64("previous_close", board.PreviousClose))
+
+	// 前日終値をCSVへ動的に書き出す
+	closesFileMu.Lock()
+	defer closesFileMu.Unlock()
+
+	today := time.Now().Format("20060102")
+	dirPath := filepath.Join("./data", today)
+	if err := os.MkdirAll(dirPath, 0755); err == nil {
+		csvFilePath := filepath.Join(dirPath, "closes.csv")
+		
+		var records [][]string
+		if file, err := os.Open(csvFilePath); err == nil {
+			reader := csv.NewReader(file)
+			records, _ = reader.ReadAll()
+			file.Close()
+		}
+
+		alreadyWritten := false
+		for _, row := range records {
+			if len(row) > 0 && strings.TrimSpace(row[0]) == f.symbol {
+				alreadyWritten = true
+				break
+			}
+		}
+
+		if !alreadyWritten {
+			file, err := os.OpenFile(csvFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err == nil {
+				writer := csv.NewWriter(file)
+				if len(records) == 0 {
+					_ = writer.Write([]string{"Symbol", "PreviousClose"})
+				}
+				_ = writer.Write([]string{f.symbol, strconv.FormatFloat(board.PreviousClose, 'f', -1, 64)})
+				writer.Flush()
+				file.Close()
+			}
+		}
+	}
+
 	return board.PreviousClose, nil
 }
