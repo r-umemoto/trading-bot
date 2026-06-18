@@ -3,6 +3,8 @@ package backtest
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -381,5 +383,51 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	_, err2 := g.SendOrder(context.Background(), order.SendOrderInput{Order: ordBullet2.Order})
 	if err2 != nil {
 		t.Fatalf("🚨 【バグ再現】買い戻し決済の発注に失敗しました。決済注文が新規注文に誤変換されています: %v", err2)
+	}
+}
+
+func TestSyncBacktestGateway_LoadPreviousCloses(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "backtest_closes_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a date-specific sub-folder
+	dateDir := filepath.Join(tmpDir, "20260618")
+	if err := os.MkdirAll(dateDir, 0755); err != nil {
+		t.Fatalf("failed to create date dir: %v", err)
+	}
+
+	// Create a CSV file representing previous closes
+	csvContent := `Symbol,PreviousClose
+8604,1500.5
+8308,2200
+`
+	csvFile := filepath.Join(dateDir, "closes.csv")
+	if err := os.WriteFile(csvFile, []byte(csvContent), 0644); err != nil {
+		t.Fatalf("failed to write CSV: %v", err)
+	}
+
+	// Create the gateway
+	g := NewSyncBacktestGateway(ExecutionModelPrice, 0)
+
+	// Let's check initial fallback values
+	if g.previousCloses["8604"] != 0 {
+		t.Errorf("expected default value 0 for 8604, got %f", g.previousCloses["8604"])
+	}
+
+	// Load closes from the simulated directory structure
+	simulatedCsvPath := filepath.Join(tmpDir, "all_20260618.csv")
+	if err := g.LoadPreviousCloses(simulatedCsvPath); err != nil {
+		t.Fatalf("LoadPreviousCloses failed: %v", err)
+	}
+
+	// Check if the values were updated
+	if g.previousCloses["8604"] != 1500.5 {
+		t.Errorf("expected loaded value 1500.5 for 8604, got %f", g.previousCloses["8604"])
+	}
+	if g.previousCloses["8308"] != 2200.0 {
+		t.Errorf("expected loaded value 2200.0 for 8308, got %f", g.previousCloses["8308"])
 	}
 }
