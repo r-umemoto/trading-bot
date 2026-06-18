@@ -56,6 +56,9 @@ func RunBacktest() error {
 
 	// 3. バックテスト用インフラ（Mock Gateway）の準備
 	gateway := backtest.NewSyncBacktestGateway(execModel, latency)
+	if err := gateway.LoadPreviousCloses(csvPath); err != nil {
+		slog.Error("前日終値CSVのロードに失敗しました (デフォルト値を使用します)", slog.Any("error", err))
+	}
 	dataPool := gateway.DataPool()
 	if _, err := gateway.Listen(context.Background()); err != nil {
 		return fmt.Errorf("バックテスト用ゲートウェイのListen開始に失敗: %w", err)

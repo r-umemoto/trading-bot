@@ -2,7 +2,13 @@ package backtest
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
@@ -49,6 +55,9 @@ type SyncBacktestGateway struct {
 
 	// 建玉管理
 	positions map[string][]position.Position
+
+	// 前日終値データ
+	previousCloses map[string]float64
 }
 
 func NewSyncBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBacktestGateway {
@@ -68,8 +77,9 @@ func NewSyncBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBa
 		cancelRequested:      make(map[string]bool),
 		simulateCancelSilent: make(map[string]bool),
 		positions:            make(map[string][]position.Position),
+		previousCloses:       make(map[string]float64),
 	}
-	g.dataPool = tick.NewDefaultDataPool(&backtestHistoricalFeederProvider{})
+	g.dataPool = tick.NewDefaultDataPool(&backtestHistoricalFeederProvider{gateway: g})
 	return g
 }
 
@@ -437,7 +447,8 @@ func (g *SyncBacktestGateway) getDepth(symbol string, action order.Action, price
 }
 
 type backtestHistoricalFeeder struct {
-	symbol string
+	symbol  string
+	gateway *SyncBacktestGateway
 }
 
 func (f *backtestHistoricalFeeder) FetchSMA(period int) (float64, error) {
@@ -445,32 +456,150 @@ func (f *backtestHistoricalFeeder) FetchSMA(period int) (float64, error) {
 }
 
 func (f *backtestHistoricalFeeder) FetchPreviousClose() (float64, error) {
-	closes := map[string]float64{
-		"8604": 1359.5,
-		"8308": 2085.5,
-		"4689": 406.7,
-		"4755": 741,
-		"7201": 341.8,
-		"7267": 1438.5,
-		"4005": 569.9,
-		"3402": 1094.5,
-		"6366": 694,
-		"6498": 2136,
-		"8801": 1462.5,
-		"3382": 1915.5,
-		"4503": 2149,
-		"4527": 2465.5,
-		"2503": 2641.5,
-		"2897": 2655,
-	}
-	if val, ok := closes[f.symbol]; ok {
+	if val, ok := f.gateway.previousCloses[f.symbol]; ok {
 		return val, nil
 	}
 	return 0, nil
 }
 
-type backtestHistoricalFeederProvider struct{}
+type backtestHistoricalFeederProvider struct {
+	gateway *SyncBacktestGateway
+}
 
 func (p *backtestHistoricalFeederProvider) GetFeeder(symbol string) tick.HistoricalFeeder {
-	return &backtestHistoricalFeeder{symbol: symbol}
+	return &backtestHistoricalFeeder{
+		symbol:  symbol,
+		gateway: p.gateway,
+	}
+}
+
+// LoadPreviousCloses はCSVファイルから前日終値データを読み込み、前日終値マップを更新します。
+func (g *SyncBacktestGateway) LoadPreviousCloses(csvPath string) error {
+	baseName := filepath.Base(csvPath)
+	var dateStr string
+	for i := 0; i <= len(baseName)-8; i++ {
+		sub := baseName[i : i+8]
+		if _, err := strconv.Atoi(sub); err == nil {
+			if _, err := time.Parse("20060102", sub); err == nil {
+				dateStr = sub
+				break
+			}
+		}
+	}
+
+	if dateStr == "" {
+		slog.Warn("CSVパスから日付を抽出できませんでした。デフォルトの終値データを使用します", slog.String("path", csvPath))
+		return nil
+	}
+
+	// 探索対象ディレクトリ
+	// 1. csvPathのあるディレクトリ内の日付毎フォルダ (e.g. ./data/20260618)
+	// 2. csvPathのあるディレクトリそのもの
+	dirs := []string{
+		filepath.Join(filepath.Dir(csvPath), dateStr),
+		filepath.Dir(csvPath),
+	}
+
+	// 探索対象のファイル名候補
+	candidates := []string{
+		"closes.csv",
+		"previous_close.csv",
+		"previous_closes.csv",
+		fmt.Sprintf("closes_%s.csv", dateStr),
+		fmt.Sprintf("previous_close_%s.csv", dateStr),
+	}
+
+	var foundPath string
+	for _, dir := range dirs {
+		for _, cand := range candidates {
+			p := filepath.Join(dir, cand)
+			if _, err := os.Stat(p); err == nil {
+				foundPath = p
+				break
+			}
+		}
+		if foundPath != "" {
+			break
+		}
+	}
+
+	if foundPath == "" {
+		slog.Warn("対象の日付フォルダまたはCSVファイルが見つかりません。デフォルトの終値データを使用します", slog.String("date", dateStr))
+		return nil
+	}
+
+	slog.Info("前日終値データをCSVからロードします", slog.String("path", foundPath))
+
+	file, err := os.Open(foundPath)
+	if err != nil {
+		return fmt.Errorf("前日終値CSVファイルを開けませんでした: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return fmt.Errorf("前日終値CSVファイルの読み込みに失敗しました: %w", err)
+	}
+
+	if len(records) == 0 {
+		return fmt.Errorf("前日終値CSVファイルが空です")
+	}
+
+	symbolIdx := -1
+	priceIdx := -1
+
+	// ヘッダー行の判定
+	header := records[0]
+	isHeader := false
+	for i, col := range header {
+		colClean := strings.ToLower(strings.TrimSpace(col))
+		if colClean == "symbol" || colClean == "code" || colClean == "銘柄" || colClean == "銘柄コード" {
+			symbolIdx = i
+			isHeader = true
+		}
+		if colClean == "previous_close" || colClean == "previousclose" || colClean == "close" || colClean == "終値" || colClean == "前日終値" || colClean == "price" {
+			priceIdx = i
+			isHeader = true
+		}
+	}
+
+	startRow := 0
+	if isHeader {
+		startRow = 1
+	}
+
+	// ヘッダーが明示的に見つからない場合は、0列目を銘柄、1列目を終値と仮定する
+	if symbolIdx == -1 || priceIdx == -1 || symbolIdx == priceIdx {
+		symbolIdx = 0
+		priceIdx = 1
+	}
+
+	loadedCloses := make(map[string]float64)
+	for i := startRow; i < len(records); i++ {
+		row := records[i]
+		if len(row) <= symbolIdx || len(row) <= priceIdx {
+			continue
+		}
+		sym := strings.TrimSpace(row[symbolIdx])
+		priceStr := strings.TrimSpace(row[priceIdx])
+		if sym == "" || priceStr == "" {
+			continue
+		}
+
+		price, err := strconv.ParseFloat(priceStr, 64)
+		if err != nil {
+			continue // 数値変換できない行はスキップ（ヘッダー行の誤判定対策など）
+		}
+
+		loadedCloses[sym] = price
+	}
+
+	// ゲートウェイのマップを更新
+	for k, v := range loadedCloses {
+		g.previousCloses[k] = v
+	}
+
+	slog.Info("CSVから前日終値データを正常に読み込みました", slog.Int("count", len(loadedCloses)))
+	return nil
 }
