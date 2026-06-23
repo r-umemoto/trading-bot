@@ -3,6 +3,7 @@ package kabu
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -33,6 +34,7 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		childToParent:     make(map[string]string),
 		firedExecutions:   make(map[string]bool),
 		registeredSymbols: make(map[string]market.ResisterSymbolRequest),
+		shortDisabled:     make(map[string]bool),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
 	m.dataPool = tick.NewDefaultDataPool(kabuProvider)
@@ -69,6 +71,9 @@ type MarketGateway struct {
 	// Registered symbols tracking for reconnection
 	regMu             sync.RWMutex
 	registeredSymbols map[string]market.ResisterSymbolRequest
+
+	shortDisabledMu sync.RWMutex
+	shortDisabled   map[string]bool // key: symbol
 }
 
 var _ market.MarketGateway = (*MarketGateway)(nil)
@@ -103,6 +108,19 @@ func (m *MarketGateway) DataPool() tick.DataPool {
 // SendOrder は market.MarketGateway (Orderer) の実装です。
 // 結果が出るまで内部的にブロックします（SniperNest等から非同期で呼ばれる想定）。
 func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
+	ord := input.Order
+
+	// Check if this is a short entry order and it is locally disabled due to regulation
+	isShortEntry := (ord.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY && ord.Action == order.ACTION_SELL)
+	if isShortEntry {
+		m.shortDisabledMu.RLock()
+		disabled := m.shortDisabled[ord.Symbol]
+		m.shortDisabledMu.RUnlock()
+		if disabled {
+			return ord, fmt.Errorf("%w: 売建規制銘柄のため、新規の売建（ショート）注文の発注を見合わせます (Symbol: %s)", order.ErrOrderSkipped, ord.Symbol)
+		}
+	}
+
 	priority := 10 // Entry
 	jobID := input.Order.ID
 	if input.Order.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
@@ -117,6 +135,14 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 		return input.Order, ctx.Err()
 	case res := <-resCh:
 		if res.Error != nil {
+			var apiErr *api.KabuAPIError
+			if errors.As(res.Error, &apiErr) && apiErr.Code == 100302 {
+				m.shortDisabledMu.Lock()
+				m.shortDisabled[ord.Symbol] = true
+				m.shortDisabledMu.Unlock()
+				slog.Error("🚫 売建規制（100302）を検知したため、本セッション中の新規売建を禁止します", slog.String("symbol", ord.Symbol))
+				return input.Order, fmt.Errorf("%w: %w", order.ErrShortRegulated, res.Error)
+			}
 			return input.Order, res.Error
 		}
 		if res.Order != nil {

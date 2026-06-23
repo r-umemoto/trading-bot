@@ -62,7 +62,7 @@ func (d *OrderDispatcher) Submit(jobID string, symbol string, ord *order.Order, 
 			old.ResultChan <- order.OrderResult{
 				Symbol: old.Symbol,
 				Order:  old.OrderPtr,
-				Error:  fmt.Errorf("order overwritten in dispatch queue"),
+				Error:  fmt.Errorf("%w: order overwritten in dispatch queue", order.ErrDispatchQueueBypass),
 			}
 			close(old.ResultChan)
 			d.pendingJobs = append(d.pendingJobs[:i], d.pendingJobs[i+1:]...)
@@ -178,7 +178,7 @@ func (d *OrderDispatcher) CancelPendingJob(orderID string) bool {
 			job.ResultChan <- order.OrderResult{
 				Symbol: job.Symbol,
 				Order:  job.OrderPtr,
-				Error:  fmt.Errorf("order canceled in dispatch queue"),
+				Error:  fmt.Errorf("%w: order canceled in dispatch queue", order.ErrDispatchQueueBypass),
 			}
 			close(job.ResultChan)
 			d.pendingJobs = append(d.pendingJobs[:i], d.pendingJobs[i+1:]...)

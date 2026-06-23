@@ -2,6 +2,7 @@ package kabu
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -462,3 +463,105 @@ func TestKabuHistoricalFeeder_FetchPreviousClose_WritesCSV(t *testing.T) {
 		t.Errorf("expected content to remain unchanged, but got:\n%q", string(content2))
 	}
 }
+
+type regulatedMockClient struct {
+	MockKabuClient
+	sendOrderFunc func(req api.OrderRequest) (*api.OrderResponse, error)
+}
+
+func (m *regulatedMockClient) SendOrder(req api.OrderRequest) (*api.OrderResponse, error) {
+	if m.sendOrderFunc != nil {
+		return m.sendOrderFunc(req)
+	}
+	return m.MockKabuClient.SendOrder(req)
+}
+
+func TestMarketGateway_ShortRegulation(t *testing.T) {
+	mockClient := &regulatedMockClient{}
+	gateway := NewMarketGateway(nil, nil)
+	gateway.client = mockClient
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gateway.dispatcher.Start(ctx)
+
+	// 1. First order fails with 100302
+	mockClient.sendOrderFunc = func(req api.OrderRequest) (*api.OrderResponse, error) {
+		return nil, &api.KabuAPIError{
+			StatusCode: 400,
+			Code:       100302,
+			Message:    "売建規制エラーです",
+		}
+	}
+
+	ord := order.NewOrder("order-1", "7203", order.ACTION_SELL, 2000, 100)
+	ord.CashMargin = order.CASH_MARGIN_MARGIN_ENTRY
+	ord.Request = &order.OrderRequest{
+		Exchange:        order.EXCHANGE_TOSHO,
+		SecurityType:    order.SECURITY_TYPE_STOCK,
+		MarginTradeType: order.TRADE_TYPE_GENERAL_DAY,
+		AccountType:     order.ACCOUNT_SPECIAL,
+	}
+
+	_, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: ord})
+	if err == nil || !errors.Is(err, order.ErrShortRegulated) {
+		t.Fatalf("expected ErrShortRegulated error, got %v", err)
+	}
+
+	// Verify symbol is marked as short-disabled
+	gateway.shortDisabledMu.RLock()
+	disabled := gateway.shortDisabled["7203"]
+	gateway.shortDisabledMu.RUnlock()
+	if !disabled {
+		t.Error("expected 7203 to be marked as short disabled")
+	}
+
+	// 2. Subsequent short entry order should be blocked locally
+	ord2 := order.NewOrder("order-2", "7203", order.ACTION_SELL, 2000, 100)
+	ord2.CashMargin = order.CASH_MARGIN_MARGIN_ENTRY
+	ord2.Request = ord.Request
+
+	_, err = gateway.SendOrder(context.Background(), order.SendOrderInput{Order: ord2})
+	if err == nil || !errors.Is(err, order.ErrOrderSkipped) {
+		t.Fatalf("expected ErrOrderSkipped error, got %v", err)
+	}
+
+	// 3. Long entry order should still be allowed
+	mockClient.sendOrderFunc = func(req api.OrderRequest) (*api.OrderResponse, error) {
+		return &api.OrderResponse{OrderId: "long-order-id"}, nil
+	}
+	ordLong := order.NewOrder("order-long", "7203", order.ACTION_BUY, 2000, 100)
+	ordLong.CashMargin = order.CASH_MARGIN_MARGIN_ENTRY
+	ordLong.Request = ord.Request
+
+	res, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: ordLong})
+	if err != nil {
+		t.Fatalf("expected long entry to be allowed, got error %v", err)
+	}
+	if res.ID != "long-order-id" {
+		t.Errorf("expected order ID 'long-order-id', got '%s'", res.ID)
+	}
+
+	// 4. Exit/Close short order should still be allowed
+	mockClient.sendOrderFunc = func(req api.OrderRequest) (*api.OrderResponse, error) {
+		return &api.OrderResponse{OrderId: "exit-order-id"}, nil
+	}
+	ordExit := order.NewOrder("order-exit", "7203", order.ACTION_BUY, 2000, 100)
+	ordExit.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	ordExit.Request = &order.OrderRequest{
+		Exchange:        order.EXCHANGE_TOSHO,
+		SecurityType:    order.SECURITY_TYPE_STOCK,
+		MarginTradeType: order.TRADE_TYPE_GENERAL_DAY,
+		AccountType:     order.ACCOUNT_SPECIAL,
+		ClosePositions:  []order.ClosePosition{{HoldID: "exec-1", Qty: 100}},
+	}
+
+	resExit, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: ordExit})
+	if err != nil {
+		t.Fatalf("expected exit/close order to be allowed, got error %v", err)
+	}
+	if resExit.ID != "exit-order-id" {
+		t.Errorf("expected order ID 'exit-order-id', got '%s'", resExit.ID)
+	}
+}
+

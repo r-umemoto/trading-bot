@@ -2,6 +2,7 @@ package kabu
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -132,7 +133,7 @@ func TestOrderDispatcher_SubmitKeys(t *testing.T) {
 	case res, ok := <-exCh1:
 		if !ok {
 			t.Error("exCh1 closed without result")
-		} else if res.Error == nil || res.Error.Error() != "order overwritten in dispatch queue" {
+		} else if res.Error == nil || !errors.Is(res.Error, order.ErrDispatchQueueBypass) {
 			t.Errorf("expected overwrite error on exCh1, got: %v", res.Error)
 		}
 	default:
@@ -163,7 +164,7 @@ func TestOrderDispatcher_SubmitKeys(t *testing.T) {
 	case res, ok := <-canCh1:
 		if !ok {
 			t.Error("canCh1 closed without result")
-		} else if res.Error == nil || res.Error.Error() != "order overwritten in dispatch queue" {
+		} else if res.Error == nil || !errors.Is(res.Error, order.ErrDispatchQueueBypass) {
 			t.Errorf("expected overwrite error on canCh1, got: %v", res.Error)
 		}
 	default:
