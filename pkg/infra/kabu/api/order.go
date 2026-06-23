@@ -61,6 +61,7 @@ type Order struct {
 	ID         string        `json:"ID"`         // 注文ID（キャンセル時に必要）
 	State      int32         `json:"State"`      // 状態（3: 処理中/待機中, 5: 終了 など）
 	OrderState int32         `json:"OrderState"` // 注文状態
+	RecvTime   string        `json:"RecvTime"`   // 受注日時
 	Symbol     string        `json:"Symbol"`     // 銘柄コード
 	Side       Side          `json:"Side"`       // 売買区分
 	OrderQty   float64       `json:"OrderQty"`   // 発注数量

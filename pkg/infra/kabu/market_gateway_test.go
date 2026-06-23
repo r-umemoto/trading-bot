@@ -137,6 +137,65 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 		})
 	}
 }
+
+func TestMarketGateway_GetOrders_CreatedAtParsing(t *testing.T) {
+	mockClient := &MockKabuClient{}
+	gateway := &MarketGateway{
+		client: mockClient,
+	}
+
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.FixedZone("Asia/Tokyo", 9*60*60)
+	}
+	todayStr := time.Now().In(loc).Format("20060102")
+	yesterdayStr := time.Now().In(loc).AddDate(0, 0, -1).Format("20060102")
+	recvTimeStr := time.Now().In(loc).Format("2006-01-02T15:04:05.123456-07:00")
+
+	mockClient.Orders = []api.Order{
+		{
+			ID:       todayStr + "0001",
+			State:    api.STATE_PROCESSING,
+			RecvTime: recvTimeStr,
+		},
+		{
+			ID:    todayStr + "0002", // Test ID prefix fallback when RecvTime is empty
+			State: api.STATE_PROCESSING,
+		},
+		{
+			ID:    yesterdayStr + "0003", // Test multi-day order retrieval and fallback parsing
+			State: api.STATE_PROCESSING,
+		},
+	}
+
+	ords, err := gateway.GetOrders(context.Background())
+	if err != nil {
+		t.Fatalf("GetOrders failed: %v", err)
+	}
+
+	if len(ords.Orders) != 3 {
+		t.Fatalf("expected exactly 3 orders, got %d", len(ords.Orders))
+	}
+
+	// Verify order 1 has CreatedAt parsed from RecvTime
+	expectedRecvTime, _ := time.Parse(time.RFC3339, recvTimeStr)
+	if !ords.Orders[0].CreatedAt.Equal(expectedRecvTime) {
+		t.Errorf("expected CreatedAt to match RecvTime %v, got %v", expectedRecvTime, ords.Orders[0].CreatedAt)
+	}
+
+	// Verify order 2 has CreatedAt fallback from ID prefix
+	expectedFallbackDate, _ := time.ParseInLocation("20060102", todayStr, loc)
+	if !ords.Orders[1].CreatedAt.Equal(expectedFallbackDate) {
+		t.Errorf("expected CreatedAt to match ID prefix date %v, got %v", expectedFallbackDate, ords.Orders[1].CreatedAt)
+	}
+
+	// Verify order 3 (yesterday's order) is retrieved and has CreatedAt fallback from yesterday ID prefix
+	expectedYesterdayFallback, _ := time.ParseInLocation("20060102", yesterdayStr, loc)
+	if !ords.Orders[2].CreatedAt.Equal(expectedYesterdayFallback) {
+		t.Errorf("expected CreatedAt to match yesterday ID prefix date %v, got %v", expectedYesterdayFallback, ords.Orders[2].CreatedAt)
+	}
+}
+
 func TestMarketGateway_SendOrderRaw_DelivType(t *testing.T) {
 	mockClient := &MockKabuClient{}
 	gateway := &MarketGateway{

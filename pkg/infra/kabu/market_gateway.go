@@ -64,9 +64,9 @@ type MarketGateway struct {
 
 	// IFD tracking fields
 	ifdMu           sync.Mutex
-	ifdTracker      map[string]*order.Order       // Key: Parent Order ID -> Value: Child Order
-	childToParent   map[string]string             // Key: Child Broker ID -> Value: Parent Broker ID
-	firedExecutions map[string]bool               // Key: Execution ID -> Value: Fired child order
+	ifdTracker      map[string]*order.Order // Key: Parent Order ID -> Value: Child Order
+	childToParent   map[string]string       // Key: Child Broker ID -> Value: Parent Broker ID
+	firedExecutions map[string]bool         // Key: Execution ID -> Value: Fired child order
 
 	// Registered symbols tracking for reconnection
 	regMu             sync.RWMutex
@@ -335,6 +335,11 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 		return order.Orders{}, fmt.Errorf("注文取得失敗: %w", err)
 	}
 
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.FixedZone("Asia/Tokyo", 9*60*60)
+	}
+
 	domainOrders := make([]order.Order, 0, len(ords))
 	for _, ord := range ords {
 		action := order.ACTION_BUY
@@ -382,16 +387,28 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 		o.CumQty = ord.CumQty
 		o.CashMargin = order.CashMarginType(ord.CashMargin)
 
-		// APIの明細履歴（Details）から最古のタイムスタンプ（受付時刻など）をパースして CreatedAt とする
+		// APIの受注日時（RecvTime）を優先的にパースして CreatedAt とする
 		var orderTime time.Time
-		for _, detail := range ord.Details {
-			t := parseExecutionTime(detail.ExecutionDay)
-			if !t.IsZero() && (orderTime.IsZero() || t.Before(orderTime)) {
-				orderTime = t
+		if ord.RecvTime != "" {
+			orderTime = parseExecutionTime(ord.RecvTime)
+		}
+		if orderTime.IsZero() {
+			// Fallback: APIの明細履歴（Details）から最古のタイムスタンプ（受付時刻など）をパース
+			for _, detail := range ord.Details {
+				t := parseExecutionTime(detail.ExecutionDay)
+				if !t.IsZero() && (orderTime.IsZero() || t.Before(orderTime)) {
+					orderTime = t
+				}
 			}
 		}
 		if !orderTime.IsZero() {
 			o.CreatedAt = orderTime
+		} else if len(ord.ID) >= 8 {
+			// Fallback: If details contain no parsable timestamps (e.g. cancelled order with empty ExecutionDay),
+			// parse the date from the order ID prefix to ensure a correct non-today CreatedAt day is set.
+			if dateVal, err := time.ParseInLocation("20060102", ord.ID[:8], loc); err == nil {
+				o.CreatedAt = dateVal
+			}
 		}
 
 		for _, execution := range ord.Details {
@@ -602,10 +619,10 @@ func (m *MarketGateway) cloneChildOrderForExecution(template *order.Order, exec 
 
 	// 決済指定（ClosePositions）をピンポイントで構築
 	child.Request = &order.OrderRequest{
-		Exchange:           template.Request.Exchange,
-		SecurityType:       template.Request.SecurityType,
-		MarginTradeType:    template.Request.MarginTradeType,
-		AccountType:        template.Request.AccountType,
+		Exchange:        template.Request.Exchange,
+		SecurityType:    template.Request.SecurityType,
+		MarginTradeType: template.Request.MarginTradeType,
+		AccountType:     template.Request.AccountType,
 		ClosePositions: []order.ClosePosition{
 			{
 				HoldID: exec.ID, // 取引所から届いた本物の約定ID
@@ -1036,7 +1053,7 @@ func (f *KabuHistoricalFeeder) FetchPreviousClose() (float64, error) {
 	dirPath := filepath.Join("./data", today)
 	if err := os.MkdirAll(dirPath, 0755); err == nil {
 		csvFilePath := filepath.Join(dirPath, "closes.csv")
-		
+
 		var records [][]string
 		if file, err := os.Open(csvFilePath); err == nil {
 			reader := csv.NewReader(file)
