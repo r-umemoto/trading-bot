@@ -356,6 +356,18 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 		o.CumQty = ord.CumQty
 		o.CashMargin = order.CashMarginType(ord.CashMargin)
 
+		// APIの明細履歴（Details）から最古のタイムスタンプ（受付時刻など）をパースして CreatedAt とする
+		var orderTime time.Time
+		for _, detail := range ord.Details {
+			t := parseExecutionTime(detail.ExecutionDay)
+			if !t.IsZero() && (orderTime.IsZero() || t.Before(orderTime)) {
+				orderTime = t
+			}
+		}
+		if !orderTime.IsZero() {
+			o.CreatedAt = orderTime
+		}
+
 		for _, execution := range ord.Details {
 			// RecType が RECTYPE_EXECUTION (8: 約定) の場合のみ Execution として追加
 			if execution.RecType != api.RECTYPE_EXECUTION || execution.ID == "" {
