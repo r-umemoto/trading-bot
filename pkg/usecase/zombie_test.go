@@ -164,7 +164,7 @@ func TestTradeUseCase_SendOrderTimeoutReconciliation(t *testing.T) {
 		t.Fatalf("GetOrders failed: %v", err)
 	}
 
-	op.UpdateOrders(ords)
+	op.Update(ords, baseTime)
 
 	// 7. 復旧後のアクティブ注文を確認。墓標から復活し、IDがサーバー側 (bt_order_1) に書き換わっていることを確認
 	activeOrders = nest.GetSniperActiveOrders(s.ID)

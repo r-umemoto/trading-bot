@@ -184,6 +184,15 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 					t.ord.OrderQty == ext.OrderQty &&
 					t.ord.OrderPrice == ext.OrderPrice {
 
+					// API注文の作成時刻が現在（ポーリング時刻）から60秒以内のもののみマッチングを許可（前日等の古い注文の誤マッチングを防ぐ）
+					timeDiff := now.Sub(ext.CreatedAt)
+					if timeDiff < 0 {
+						timeDiff = -timeDiff
+					}
+					if timeDiff > 60*time.Second {
+						continue
+					}
+
 					if ot.logger != nil {
 						ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
 							slog.String("sniper", sniperID),

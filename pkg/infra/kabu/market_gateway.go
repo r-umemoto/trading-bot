@@ -3,6 +3,7 @@ package kabu
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -33,6 +34,7 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		childToParent:     make(map[string]string),
 		firedExecutions:   make(map[string]bool),
 		registeredSymbols: make(map[string]market.ResisterSymbolRequest),
+		shortDisabled:     make(map[string]bool),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
 	m.dataPool = tick.NewDefaultDataPool(kabuProvider)
@@ -62,13 +64,16 @@ type MarketGateway struct {
 
 	// IFD tracking fields
 	ifdMu           sync.Mutex
-	ifdTracker      map[string]*order.Order       // Key: Parent Order ID -> Value: Child Order
-	childToParent   map[string]string             // Key: Child Broker ID -> Value: Parent Broker ID
-	firedExecutions map[string]bool               // Key: Execution ID -> Value: Fired child order
+	ifdTracker      map[string]*order.Order // Key: Parent Order ID -> Value: Child Order
+	childToParent   map[string]string       // Key: Child Broker ID -> Value: Parent Broker ID
+	firedExecutions map[string]bool         // Key: Execution ID -> Value: Fired child order
 
 	// Registered symbols tracking for reconnection
 	regMu             sync.RWMutex
 	registeredSymbols map[string]market.ResisterSymbolRequest
+
+	shortDisabledMu sync.RWMutex
+	shortDisabled   map[string]bool // key: symbol
 }
 
 var _ market.MarketGateway = (*MarketGateway)(nil)
@@ -103,6 +108,19 @@ func (m *MarketGateway) DataPool() tick.DataPool {
 // SendOrder は market.MarketGateway (Orderer) の実装です。
 // 結果が出るまで内部的にブロックします（SniperNest等から非同期で呼ばれる想定）。
 func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
+	ord := input.Order
+
+	// Check if this is a short entry order and it is locally disabled due to regulation
+	isShortEntry := (ord.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY && ord.Action == order.ACTION_SELL)
+	if isShortEntry {
+		m.shortDisabledMu.RLock()
+		disabled := m.shortDisabled[ord.Symbol]
+		m.shortDisabledMu.RUnlock()
+		if disabled {
+			return ord, fmt.Errorf("%w: 売建規制銘柄のため、新規の売建（ショート）注文の発注を見合わせます (Symbol: %s)", order.ErrOrderSkipped, ord.Symbol)
+		}
+	}
+
 	priority := 10 // Entry
 	jobID := input.Order.ID
 	if input.Order.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
@@ -117,6 +135,14 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 		return input.Order, ctx.Err()
 	case res := <-resCh:
 		if res.Error != nil {
+			var apiErr *api.KabuAPIError
+			if errors.As(res.Error, &apiErr) && apiErr.Code == 100302 {
+				m.shortDisabledMu.Lock()
+				m.shortDisabled[ord.Symbol] = true
+				m.shortDisabledMu.Unlock()
+				slog.Error("🚫 売建規制（100302）を検知したため、本セッション中の新規売建を禁止します", slog.String("symbol", ord.Symbol))
+				return input.Order, fmt.Errorf("%w: %w", order.ErrShortRegulated, res.Error)
+			}
 			return input.Order, res.Error
 		}
 		if res.Order != nil {
@@ -309,6 +335,11 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 		return order.Orders{}, fmt.Errorf("注文取得失敗: %w", err)
 	}
 
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.FixedZone("Asia/Tokyo", 9*60*60)
+	}
+
 	domainOrders := make([]order.Order, 0, len(ords))
 	for _, ord := range ords {
 		action := order.ACTION_BUY
@@ -355,6 +386,30 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 		o.BypassTransition(status, internalState)
 		o.CumQty = ord.CumQty
 		o.CashMargin = order.CashMarginType(ord.CashMargin)
+
+		// APIの受注日時（RecvTime）を優先的にパースして CreatedAt とする
+		var orderTime time.Time
+		if ord.RecvTime != "" {
+			orderTime = parseExecutionTime(ord.RecvTime)
+		}
+		if orderTime.IsZero() {
+			// Fallback: APIの明細履歴（Details）から最古のタイムスタンプ（受付時刻など）をパース
+			for _, detail := range ord.Details {
+				t := parseExecutionTime(detail.ExecutionDay)
+				if !t.IsZero() && (orderTime.IsZero() || t.Before(orderTime)) {
+					orderTime = t
+				}
+			}
+		}
+		if !orderTime.IsZero() {
+			o.CreatedAt = orderTime
+		} else if len(ord.ID) >= 8 {
+			// Fallback: If details contain no parsable timestamps (e.g. cancelled order with empty ExecutionDay),
+			// parse the date from the order ID prefix to ensure a correct non-today CreatedAt day is set.
+			if dateVal, err := time.ParseInLocation("20060102", ord.ID[:8], loc); err == nil {
+				o.CreatedAt = dateVal
+			}
+		}
 
 		for _, execution := range ord.Details {
 			// RecType が RECTYPE_EXECUTION (8: 約定) の場合のみ Execution として追加
@@ -564,10 +619,10 @@ func (m *MarketGateway) cloneChildOrderForExecution(template *order.Order, exec 
 
 	// 決済指定（ClosePositions）をピンポイントで構築
 	child.Request = &order.OrderRequest{
-		Exchange:           template.Request.Exchange,
-		SecurityType:       template.Request.SecurityType,
-		MarginTradeType:    template.Request.MarginTradeType,
-		AccountType:        template.Request.AccountType,
+		Exchange:        template.Request.Exchange,
+		SecurityType:    template.Request.SecurityType,
+		MarginTradeType: template.Request.MarginTradeType,
+		AccountType:     template.Request.AccountType,
 		ClosePositions: []order.ClosePosition{
 			{
 				HoldID: exec.ID, // 取引所から届いた本物の約定ID
@@ -998,7 +1053,7 @@ func (f *KabuHistoricalFeeder) FetchPreviousClose() (float64, error) {
 	dirPath := filepath.Join("./data", today)
 	if err := os.MkdirAll(dirPath, 0755); err == nil {
 		csvFilePath := filepath.Join(dirPath, "closes.csv")
-		
+
 		var records [][]string
 		if file, err := os.Open(csvFilePath); err == nil {
 			reader := csv.NewReader(file)

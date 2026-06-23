@@ -3,8 +3,8 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -158,12 +158,14 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 	case sniper.OrderBullet:
 		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: act.Order})
 		if err != nil {
-			if strings.Contains(err.Error(), "in dispatch queue") {
+			if errors.Is(err, order.ErrDispatchQueueBypass) {
 				slog.Info("ℹ️ [SendOrder_API_BYPASS] 注文は送信前にキュー内で上書きまたはキャンセルされました。",
 					slog.String("symbol", act.Order.Symbol),
 					slog.String("localID", act.Order.ID),
 					slog.Any("error", err),
 				)
+			} else if errors.Is(err, order.ErrOrderSkipped) {
+				slog.Info("ℹ️ [SendOrder_API_SKIPPED] " + err.Error())
 			} else {
 				slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。注文を一時的に墓標へ退避させます。",
 					slog.String("symbol", act.Order.Symbol),
