@@ -165,7 +165,7 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 					slog.Any("error", err),
 				)
 			} else if errors.Is(err, order.ErrOrderSkipped) {
-				slog.Info("ℹ️ [SendOrder_API_SKIPPED] " + err.Error())
+				slog.Debug("ℹ️ [SendOrder_API_SKIPPED] " + err.Error())
 			} else {
 				slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。注文を一時的に墓標へ退避させます。",
 					slog.String("symbol", act.Order.Symbol),

@@ -34,7 +34,7 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 		childToParent:     make(map[string]string),
 		firedExecutions:   make(map[string]bool),
 		registeredSymbols: make(map[string]market.ResisterSymbolRequest),
-		shortDisabled:     make(map[string]bool),
+		shortDisabledUntil: make(map[string]time.Time),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
 	m.dataPool = tick.NewDefaultDataPool(kabuProvider)
@@ -73,7 +73,7 @@ type MarketGateway struct {
 	registeredSymbols map[string]market.ResisterSymbolRequest
 
 	shortDisabledMu sync.RWMutex
-	shortDisabled   map[string]bool // key: symbol
+	shortDisabledUntil map[string]time.Time // key: symbol
 }
 
 var _ market.MarketGateway = (*MarketGateway)(nil)
@@ -114,9 +114,9 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 	isShortEntry := (ord.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY && ord.Action == order.ACTION_SELL)
 	if isShortEntry {
 		m.shortDisabledMu.RLock()
-		disabled := m.shortDisabled[ord.Symbol]
+		until, ok := m.shortDisabledUntil[ord.Symbol]
 		m.shortDisabledMu.RUnlock()
-		if disabled {
+		if ok && time.Now().Before(until) {
 			return ord, fmt.Errorf("%w: 売建規制銘柄のため、新規の売建（ショート）注文の発注を見合わせます (Symbol: %s)", order.ErrOrderSkipped, ord.Symbol)
 		}
 	}
@@ -138,9 +138,9 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 			var apiErr *api.KabuAPIError
 			if errors.As(res.Error, &apiErr) && apiErr.Code == 100302 {
 				m.shortDisabledMu.Lock()
-				m.shortDisabled[ord.Symbol] = true
+				m.shortDisabledUntil[ord.Symbol] = time.Now().Add(1 * time.Hour)
 				m.shortDisabledMu.Unlock()
-				slog.Error("🚫 売建規制（100302）を検知したため、本セッション中の新規売建を禁止します", slog.String("symbol", ord.Symbol))
+				slog.Error("🚫 売建規制（100302）を検知したため、新規売建を1時間禁止します", slog.String("symbol", ord.Symbol))
 				return input.Order, fmt.Errorf("%w: %w", order.ErrShortRegulated, res.Error)
 			}
 			return input.Order, res.Error

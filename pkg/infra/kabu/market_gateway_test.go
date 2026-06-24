@@ -569,10 +569,10 @@ func TestMarketGateway_ShortRegulation(t *testing.T) {
 
 	// Verify symbol is marked as short-disabled
 	gateway.shortDisabledMu.RLock()
-	disabled := gateway.shortDisabled["7203"]
+	until, ok := gateway.shortDisabledUntil["7203"]
 	gateway.shortDisabledMu.RUnlock()
-	if !disabled {
-		t.Error("expected 7203 to be marked as short disabled")
+	if !ok || time.Now().After(until) {
+		t.Error("expected 7203 to be marked as short disabled until some future time")
 	}
 
 	// 2. Subsequent short entry order should be blocked locally
