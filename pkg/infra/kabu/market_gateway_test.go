@@ -624,3 +624,62 @@ func TestMarketGateway_ShortRegulation(t *testing.T) {
 	}
 }
 
+func TestMarketGateway_GetOrders_RestoresClosePositions(t *testing.T) {
+	mockClient := &MockKabuClient{}
+	gateway := NewMarketGateway(nil, nil)
+	gateway.client = mockClient
+
+	// 1. Setup childToParent and childClosePositions manually
+	childOrderID := "child-order-1"
+	parentOrderID := "parent-order-1"
+	closePositions := []order.ClosePosition{
+		{HoldID: "exec-1", Qty: 100},
+	}
+
+	gateway.ifdMu.Lock()
+	gateway.childToParent[childOrderID] = parentOrderID
+	gateway.childClosePositions[childOrderID] = closePositions
+	gateway.ifdMu.Unlock()
+
+	// 2. Setup mockClient.Orders
+	mockClient.Orders = []api.Order{
+		{
+			ID:         childOrderID,
+			Symbol:     "7203",
+			Side:       api.SIDE_SELL,
+			OrderQty:   100,
+			CumQty:     0,
+			CashMargin: int(order.CASH_MARGIN_MARGIN_EXIT),
+			State:      api.STATE_PROCESSING,
+		},
+	}
+
+	// 3. Call GetOrders and verify it restores ClosePositions
+	ords, err := gateway.GetOrders(context.Background())
+	if err != nil {
+		t.Fatalf("GetOrders failed: %v", err)
+	}
+
+	if len(ords.Orders) != 1 {
+		t.Fatalf("expected 1 order, got %d", len(ords.Orders))
+	}
+
+	o := ords.Orders[0]
+	if o.ParentOrderID != parentOrderID {
+		t.Errorf("expected ParentOrderID to be %s, got %s", parentOrderID, o.ParentOrderID)
+	}
+
+	if o.Request == nil {
+		t.Fatal("expected Request to be non-nil")
+	}
+
+	if len(o.Request.ClosePositions) != 1 {
+		t.Fatalf("expected 1 close position, got %d", len(o.Request.ClosePositions))
+	}
+
+	cp := o.Request.ClosePositions[0]
+	if cp.HoldID != "exec-1" || cp.Qty != 100 {
+		t.Errorf("unexpected close position: %+v", cp)
+	}
+}
+

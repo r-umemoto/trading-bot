@@ -454,3 +454,76 @@ func TestOrderTracker_PrepareActiveOrders_Full(t *testing.T) {
 	}
 }
 
+func TestOrderTracker_Update_PreservesChildRequest(t *testing.T) {
+	ot := sniper.NewOrderTracker(nil)
+	sniperID := "test-sniper"
+	symbolDetail := symbol.Symbol{Code: "7203"}
+
+	// 1. Setup parent order in tracker with IfDone
+	parent := order.NewOrder("parent-1", "7203", order.ACTION_BUY, 2000, 100)
+	parent.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+
+	childTemplate := order.NewOrder("child-local", "7203", order.ACTION_SELL, 2005, 100)
+	childTemplate.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	parent.IfDone = childTemplate
+
+	ot.Add(sniperID, parent)
+
+	// 2. Setup mock execution on parent order
+	parent.AddExecution(order.Execution{
+		ID:            "exec-1",
+		Price:         2000,
+		Qty:           100,
+		ExecutionTime: time.Now(),
+	})
+
+	// 3. Setup the API report containing the child order
+	// In the report, the child order has a Request (populated with ClosePositions)
+	apiChild := order.NewOrder("child-server-1", "7203", order.ACTION_SELL, 2005, 100)
+	apiChild.ParentOrderID = "parent-1"
+	apiChild.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	apiChild.Request = &order.OrderRequest{
+		ClosePositions: []order.ClosePosition{
+			{HoldID: "exec-1", Qty: 100},
+		},
+	}
+
+	report := order.Orders{
+		Orders: []order.Order{
+			*parent,
+			*apiChild,
+		},
+	}
+
+	// 4. Call Update
+	ot.Update(report, symbolDetail, time.Now(), func(sid string, exec order.Execution, act order.Action, oca time.Time, po *order.Order) {
+	})
+
+	// 5. Verify child order was added to tracker with Request (ClosePositions) preserved
+	activeOrders := ot.GetActive(sniperID)
+	var child *order.Order
+	for _, o := range activeOrders {
+		if o.ID == "child-server-1" {
+			child = o
+			break
+		}
+	}
+
+	if child == nil {
+		t.Fatalf("expected child-server-1 to be in active orders, got: %+v", activeOrders)
+	}
+
+	if child.Request == nil {
+		t.Fatal("expected child order Request to be preserved, got nil")
+	}
+
+	if len(child.Request.ClosePositions) != 1 {
+		t.Fatalf("expected 1 close position, got %d", len(child.Request.ClosePositions))
+	}
+
+	cp := child.Request.ClosePositions[0]
+	if cp.HoldID != "exec-1" || cp.Qty != 100 {
+		t.Errorf("expected HoldID exec-1, Qty 100; got %+v", cp)
+	}
+}
+
