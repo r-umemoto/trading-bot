@@ -26,15 +26,16 @@ import (
 
 func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGateway {
 	m := &MarketGateway{
-		client:            client,
-		wsClient:          wsClient,
-		tickChannels:      make(map[string]chan tick.Tick),
-		orderChannels:     make(map[string]chan order.Orders),
-		ifdTracker:        make(map[string]*order.Order),
-		childToParent:     make(map[string]string),
-		firedExecutions:   make(map[string]bool),
-		registeredSymbols: make(map[string]market.ResisterSymbolRequest),
-		shortDisabledUntil: make(map[string]time.Time),
+		client:              client,
+		wsClient:            wsClient,
+		tickChannels:        make(map[string]chan tick.Tick),
+		orderChannels:       make(map[string]chan order.Orders),
+		ifdTracker:          make(map[string]*order.Order),
+		childToParent:       make(map[string]string),
+		childClosePositions: make(map[string][]order.ClosePosition),
+		firedExecutions:     make(map[string]bool),
+		registeredSymbols:   make(map[string]market.ResisterSymbolRequest),
+		shortDisabledUntil:  make(map[string]time.Time),
 	}
 	kabuProvider := NewKabuHistoricalFeederProvider(m.client)
 	m.dataPool = tick.NewDefaultDataPool(kabuProvider)
@@ -63,10 +64,11 @@ type MarketGateway struct {
 	dispatcher    *OrderDispatcher
 
 	// IFD tracking fields
-	ifdMu           sync.Mutex
-	ifdTracker      map[string]*order.Order // Key: Parent Order ID -> Value: Child Order
-	childToParent   map[string]string       // Key: Child Broker ID -> Value: Parent Broker ID
-	firedExecutions map[string]bool         // Key: Execution ID -> Value: Fired child order
+	ifdMu               sync.Mutex
+	ifdTracker          map[string]*order.Order // Key: Parent Order ID -> Value: Child Order
+	childToParent       map[string]string       // Key: Child Broker ID -> Value: Parent Broker ID
+	childClosePositions map[string][]order.ClosePosition // Key: Child Broker ID -> Value: ClosePositions specified
+	firedExecutions     map[string]bool         // Key: Execution ID -> Value: Fired child order
 
 	// Registered symbols tracking for reconnection
 	regMu             sync.RWMutex
@@ -430,8 +432,17 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 			)
 		}
 		m.ifdMu.Lock()
-		if parentID, ok := m.childToParent[ord.ID]; ok {
-			o.ParentOrderID = parentID
+		if m.childToParent != nil {
+			if parentID, ok := m.childToParent[ord.ID]; ok {
+				o.ParentOrderID = parentID
+			}
+		}
+		if m.childClosePositions != nil {
+			if closePositions, ok := m.childClosePositions[ord.ID]; ok {
+				o.Request = &order.OrderRequest{
+					ClosePositions: closePositions,
+				}
+			}
 		}
 		m.ifdMu.Unlock()
 
@@ -578,7 +589,18 @@ func (m *MarketGateway) checkAndFireIFD(ctx context.Context, ords order.Orders) 
 						c.Symbol, exec.ID, res.Error)
 				} else {
 					m.ifdMu.Lock()
+					if m.childToParent == nil {
+						m.childToParent = make(map[string]string)
+					}
 					m.childToParent[res.OrderID] = parentID
+					if m.childClosePositions == nil {
+						m.childClosePositions = make(map[string][]order.ClosePosition)
+					}
+					var closePos []order.ClosePosition
+					if c.Request != nil {
+						closePos = c.Request.ClosePositions
+					}
+					m.childClosePositions[res.OrderID] = closePos
 					m.ifdMu.Unlock()
 					fmt.Printf("✅ [MarketGateway] 部分決済自動発注成功 (ID: %s, ExecID: %s)\n",
 						res.OrderID, exec.ID)

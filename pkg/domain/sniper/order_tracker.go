@@ -144,6 +144,7 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 								ext.OrderQty,
 								order.WithType(o.IfDone.Type),
 								order.WithCashMargin(o.IfDone.CashMargin),
+								order.WithRequest(ext.Request),
 								order.WithReason(o.IfDone.Reason),
 							)
 							matchedChild.BypassTransition(ext.Status(), order.STATE_ACTIVE)
