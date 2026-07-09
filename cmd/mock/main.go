@@ -1,4 +1,3 @@
-// mock_server/main.go
 package main
 
 import (
@@ -11,12 +10,17 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-var csvPath string
+var (
+	csvPath       string
+	lastPrices    = make(map[string]float64)
+	lastPricesMu  sync.RWMutex
+)
 
 func main() {
 	flag.StringVar(&csvPath, "csv", "", "配信用のCSVファイルパス")
@@ -109,6 +113,10 @@ func streamCSV(conn *websocket.Conn) {
 
 		// CSVレコードからJSONメッセージを組み立て
 		price, _ := strconv.ParseFloat(record[2], 64)
+		lastPricesMu.Lock()
+		lastPrices[record[1]] = price
+		lastPricesMu.Unlock()
+
 		volume, _ := strconv.ParseFloat(record[3], 64)
 		vwap, _ := strconv.ParseFloat(record[4], 64)
 
@@ -205,6 +213,10 @@ func streamDummy(conn *websocket.Conn) {
 	for {
 		// 配列のインデックスをループさせる
 		currentPrice := priceWave[tick%len(priceWave)]
+		lastPricesMu.Lock()
+		lastPrices["7201"] = currentPrice
+		lastPrices["9434"] = currentPrice
+		lastPricesMu.Unlock()
 
 		// ランダムな出来高（今回は簡単のために価格変動時に100〜500株の約定があったことにする擬似ロジック）
 		// ここではモックなので固定の擬似乱数的な変動として、インデックスを利用しつつ多少ばらけさせます
@@ -313,6 +325,7 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 		Price          float64 `json:"Price"`
 		FrontOrderType int     `json:"FrontOrderType"`
 		AccountType    int32   `json:"AccountType"`
+		CashMargin     int     `json:"CashMargin"` // 信用区分 (2: 信用新規, 3: 信用返済)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
@@ -323,79 +336,116 @@ func handleSendOrder(w http.ResponseWriter, r *http.Request) {
 		case "2":
 			actionStr = "買"
 		}
-		fmt.Printf("[Mock] 注文内容: 【%s】 銘柄: %s, 数量: %.0f株, 価格%.0f\n", actionStr, req.Symbol, req.Qty, req.Price)
+		fmt.Printf("[Mock] 注文内容: 【%s】 信用区分(CashMargin): %d, 銘柄: %s, 数量: %.0f株, 価格%.0f\n", actionStr, req.CashMargin, req.Symbol, req.Qty, req.Price)
 
-		// 2. 買い注文の場合（建玉を増やす）
-		switch req.Side {
-		case "2":
-			// 今回はシンプルに新しい建玉データとして追加します
+		// 成行注文 (Price == 0) の場合、最新価格を適用する
+		orderPrice := req.Price
+		if orderPrice == 0 {
+			lastPricesMu.RLock()
+			orderPrice = lastPrices[req.Symbol]
+			lastPricesMu.RUnlock()
+			if orderPrice == 0 {
+				orderPrice = 1000.0 // デフォルトのフォールバック価格
+			}
+		}
+
+		// 2. 建玉の管理
+		// 信用区分 CashMargin: 2=信用新規(Entry), 3=信用返済(Exit)
+		if req.CashMargin == 2 {
+			// 新規建て（ロング/ショート）
 			mockPositions = append(mockPositions, map[string]interface{}{
 				"ExecutionID":     fmt.Sprintf("exec_%d", time.Now().UnixNano()),
 				"Symbol":          req.Symbol,
 				"SymbolName":      "シミュレーション銘柄",
 				"LeavesQty":       req.Qty,
-				"Price":           req.Price,
+				"HoldQty":         req.Qty,
+				"Price":           orderPrice,
+				"Side":            req.Side, // "2"なら買い建玉(ロング), "1"なら売り建玉(ショート)
 				"AccountType":     req.AccountType,
 				"MarginTradeType": 3,
 			})
-			fmt.Printf("[Mock] 📈 %s の建玉が %.0f株 追加されました。\n", req.Symbol, req.Qty)
+			fmt.Printf("[Mock] 📈 %s の新規建玉（Side: %s）が %.0f株 追加されました (価格: %.1f)\n", req.Symbol, req.Side, req.Qty, orderPrice)
+		} else if req.CashMargin == 3 {
+			// 返済（決済）
+			// 買い戻し(Side: "2")なら対象はショート建玉(Side: "1")
+			// 転売返済(Side: "1")なら対象はロング建玉(Side: "2")
+			targetSide := "2"
+			if req.Side == "2" {
+				targetSide = "1"
+			}
 
-		case "1":
 			var newPositions []map[string]interface{}
-			for _, pos := range mockPositions {
-				if pos["Symbol"] == req.Symbol {
-					// 今持っている株数から、売った株数を引き算する
-					currentQty := pos["LeavesQty"].(float64)
-					newQty := currentQty - req.Qty
+			qtyToReduce := req.Qty
 
-					if newQty > 0 {
-						pos["LeavesQty"] = newQty // 減らした状態にして残す
+			for _, pos := range mockPositions {
+				posSymbol := pos["Symbol"].(string)
+				posSide := pos["Side"].(string)
+
+				if posSymbol == req.Symbol && posSide == targetSide && qtyToReduce > 0 {
+					currentQty := pos["LeavesQty"].(float64)
+					if currentQty > qtyToReduce {
+						pos["LeavesQty"] = currentQty - qtyToReduce
+						pos["HoldQty"] = currentQty - qtyToReduce
+						qtyToReduce = 0
 						newPositions = append(newPositions, pos)
-						fmt.Printf("[Mock] 📉 %s の建玉が %.0f株 に減りました（一部決済）。\n", req.Symbol, newQty)
+						fmt.Printf("[Mock] 📉 %s の建玉（Side: %s）が %.0f株 に減りました（一部決済）。\n", req.Symbol, targetSide, pos["LeavesQty"])
 					} else {
-						// 0株以下になったら、配列から完全に消し去る
-						fmt.Printf("[Mock] 🗑️ %s の建玉がゼロになったため削除しました（完全決済）。\n", req.Symbol)
+						qtyToReduce -= currentQty
+						fmt.Printf("[Mock] 🗑️ %s の建玉（Side: %s）がゼロになったため削除しました（完全決済）。\n", req.Symbol, targetSide)
 					}
 				} else {
-					// 違う銘柄の建玉はそのまま残す
 					newPositions = append(newPositions, pos)
 				}
 			}
-			// 更新された状態を上書き保存
 			mockPositions = newPositions
+		} else {
+			// 現物等のフォールバック
+			if req.Side == "2" {
+				mockPositions = append(mockPositions, map[string]interface{}{
+					"ExecutionID":     fmt.Sprintf("exec_%d", time.Now().UnixNano()),
+					"Symbol":          req.Symbol,
+					"SymbolName":      "シミュレーション銘柄",
+					"LeavesQty":       req.Qty,
+					"HoldQty":         req.Qty,
+					"Price":           orderPrice,
+					"Side":            "2",
+					"AccountType":     req.AccountType,
+					"MarginTradeType": 3,
+				})
+			}
 		}
+
+		// 3. 注文履歴の追加
+		uniqueID := fmt.Sprintf("mock_order_%d", time.Now().UnixNano())
+		response := map[string]interface{}{
+			"Result":  0,
+			"OrderId": uniqueID,
+		}
+
+		uniqueExID := fmt.Sprintf("mock_order_ex_%d", time.Now().UnixNano())
+
+		mockOrders = append(mockOrders, map[string]interface{}{
+			"ID":          uniqueID,
+			"Symbol":      req.Symbol,
+			"State":       3,
+			"Side":        req.Side,
+			"CumQty":      req.Qty,
+			"OrderQty":    req.Qty,
+			"AccountType": req.AccountType,
+			"Details": []map[string]interface{}{{
+				"Price":        orderPrice,
+				"Qty":          req.Qty,
+				"ExecutionID":  uniqueExID,
+				"ExecutionDay": time.Now().Format(time.RFC3339),
+				"RecType":      8,
+			}},
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
 	} else {
 		fmt.Printf("[Mock] ⚠️ リクエストの解析に失敗しました: %v\n", err)
 	}
-
-	// 4. いつも通りユニークな受付IDを返す
-	uniqueID := fmt.Sprintf("mock_order_%d", time.Now().UnixNano())
-	response := map[string]interface{}{
-		"Result":  0,
-		"OrderId": uniqueID,
-	}
-
-	uniqueExID := fmt.Sprintf("mock_order_ex_%d", time.Now().UnixNano())
-
-	mockOrders = append(mockOrders, map[string]interface{}{
-		"ID":          uniqueID,
-		"Symbol":      req.Symbol,
-		"State":       3,
-		"Side":        req.Side,
-		"CumQty":      req.Qty,
-		"OrderQty":    req.Qty,
-		"AccountType": req.AccountType,
-		"Details": []map[string]interface{}{{
-			"Price":        req.Price,
-			"Qty":          req.Qty,
-			"ExecutionID":  uniqueExID,
-			"ExecutionDay": time.Now().Format(time.RFC3339),
-			"RecType":      8,
-		}},
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
 // mock_server/main.go に追記
