@@ -138,11 +138,11 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 	case res := <-resCh:
 		if res.Error != nil {
 			var apiErr *api.KabuAPIError
-			if errors.As(res.Error, &apiErr) && apiErr.Code == 100302 {
+			if errors.As(res.Error, &apiErr) && (apiErr.Code == 100302 || apiErr.Code == 4002013) {
 				m.shortDisabledMu.Lock()
 				m.shortDisabledUntil[ord.Symbol] = time.Now().Add(1 * time.Hour)
 				m.shortDisabledMu.Unlock()
-				slog.Error("🚫 売建規制（100302）を検知したため、新規売建を1時間禁止します", slog.String("symbol", ord.Symbol))
+				slog.Error("🚫 売建規制（100302 または 4002013）を検知したため、新規売建を1時間禁止します", slog.String("symbol", ord.Symbol))
 				return input.Order, fmt.Errorf("%w: %w", order.ErrShortRegulated, res.Error)
 			}
 			return input.Order, res.Error
