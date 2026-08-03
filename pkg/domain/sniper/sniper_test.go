@@ -229,7 +229,7 @@ func TestSniper_Tick_PreparingOrderHandling(t *testing.T) {
 		t.Errorf("expected block (nil bullet) when signal matches prep order, got %v", bullet)
 	}
 
-	// 3. Latest target differs from prep order -> directly issues new OrderBullet to overwrite
+	// 3. Latest target differs from prep order -> returns CancelBullet to cancel the prep order first
 	strat.evaluateFn = func(input strategy.StrategyInput) strategy.TargetPosition {
 		return strategy.TargetPosition{
 			Qty:       50, // different qty
@@ -239,11 +239,24 @@ func TestSniper_Tick_PreparingOrderHandling(t *testing.T) {
 	}
 	bullet = testTick(s, nest, obs)
 	if bullet == nil {
-		t.Fatal("expected order bullet to overwrite prep order")
+		t.Fatal("expected cancel bullet to cancel prep order first")
+	}
+	cb2, ok := bullet.(CancelBullet)
+	if !ok || cb2.OrderID != "prep-order" {
+		t.Errorf("expected CancelBullet for prep-order, got %+v", bullet)
+	}
+
+	// Simulate deletion of the cancelled order
+	nest.orders.FailOrder(s.ID, prepOrd)
+	obs.ActiveOrders = nil
+
+	bullet = testTick(s, nest, obs)
+	if bullet == nil {
+		t.Fatal("expected order bullet after cancel")
 	}
 	ob, ok := bullet.(OrderBullet)
 	if !ok || ob.Order.OrderQty != 50 {
-		t.Errorf("expected overwrite order with qty 50, got %+v", bullet)
+		t.Errorf("expected new order with qty 50, got %+v", bullet)
 	}
 }
 

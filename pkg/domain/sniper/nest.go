@@ -528,13 +528,9 @@ func (n *SniperNest) ReconcileTarget(
 			return nil
 		}
 
-		if matchingOrder.InternalState() == order.STATE_PREPARING {
-			// 送信前の場合は、キャンセル要求を送らずに新規上書き注文の発行へ進む
-		} else {
-			matchingOrder.ToCancelSent()
-			matchingOrder.CancelSentAt = now
-			return CancelBullet{OrderID: matchingOrder.ID}
-		}
+		matchingOrder.ToCancelSent()
+		matchingOrder.CancelSentAt = now
+		return CancelBullet{OrderID: matchingOrder.ID}
 	}
 	activeOrders := n.orders.GetActive(sniperID)
 	lockedHoldIDs := order.ActiveOrders(activeOrders).LockedHoldIDs()
