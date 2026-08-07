@@ -109,6 +109,58 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 		bullet := n.ReconcileTarget(s.ID, obs.Tick, virtualPos, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 
 		if bullet != nil {
+			// 🌟 不公正取引（自己対当クロス）の自動調停ロジック
+			if ordBullet, ok := bullet.(OrderBullet); ok {
+				newOrd := ordBullet.Order
+				
+				var conflictingOrder *order.Order
+				var conflictingSniperID string
+				
+				// 他のスナイパーが持つ「売買方向が反対」の未約定注文を探す
+				for otherSniperID, otherOrders := range n.orders.activeOrders {
+					if otherSniperID == s.ID {
+						continue
+					}
+					for _, actOrd := range otherOrders {
+						if actOrd.Action != newOrd.Action {
+							conflictingOrder = actOrd
+							conflictingSniperID = otherSniperID
+							break
+						}
+					}
+					if conflictingOrder != nil {
+						break
+					}
+				}
+
+				if conflictingOrder != nil {
+					if newOrd.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+						// 返済（決済）注文を優先するため、競合する反対側の新規指値注文などをキャンセルする
+						n.Logger.Warn("⚠️ [CrossTradeRegulation] 返済注文を優先するため、競合する反対側の未約定注文を自動キャンセルします",
+							slog.String("symbol", n.SymbolCode),
+							slog.String("exit_sniper", s.ID),
+							slog.String("canceling_order_id", conflictingOrder.ID),
+							slog.String("canceling_sniper", conflictingSniperID))
+						
+						// キャンセル命令を発行して送信リストに追加
+						actions = append(actions, FireAction{
+							SniperID: conflictingSniperID,
+							Bullet:   CancelBullet{OrderID: conflictingOrder.ID},
+						})
+					} else {
+						// 新規エントリー注文の場合は、単に発注をスキップして様子見する
+						n.Logger.Warn("⚠️ [CrossTradeRegulation] 不公正取引（自己対当クロス）を防止するため、新規エントリーを一時的に抑止します",
+							slog.String("symbol", n.SymbolCode),
+							slog.String("entry_sniper", s.ID),
+							slog.String("conflicting_order_id", conflictingOrder.ID),
+							slog.String("conflicting_sniper", conflictingSniperID))
+					}
+					
+					// 今回の発注は一旦スキップし、次のループに回す
+					continue
+				}
+			}
+
 			actions = append(actions, FireAction{
 				SniperID: s.ID,
 				Bullet:   bullet,

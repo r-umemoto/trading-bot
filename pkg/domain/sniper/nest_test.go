@@ -870,4 +870,80 @@ func TestSniperNest_HandleTick_StoppedLifecycle(t *testing.T) {
 	}
 }
 
+func TestSniperNest_CrossTradeRegulation(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203", Name: "Toyota"}
+	
+	// スナイパー1：未約定の買い注文を持っているスナイパー
+	strat1 := &mockNestStrategy{
+		evaluateFn: func(input strategy.StrategyInput) strategy.TargetPosition {
+			return strategy.TargetPosition{
+				Qty:       100, // 未約定注文 buy-1 と整合させる
+				Price:     2000,
+				OrderType: order.ORDER_TYPE_LIMIT,
+			}
+		},
+	}
+	s1 := NewSniper("sniper-1", sym, strat1, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 
+	// スナイパー2：発注を試みるスナイパー
+	strat2 := &mockNestStrategy{}
+	s2 := NewSniper("sniper-2", sym, strat2, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	nest := NewSniperNest("7203", sym, []*Sniper{s1, s2}, nil)
+
+	// 競合する買い注文を sniper-1 に登録（Active）
+	activeBuy := order.NewOrder("buy-1", "7203", order.ACTION_BUY, 2000, 100)
+	activeBuy.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	activeBuy.Reason = "sniper-1"
+	nest.AddOrder("sniper-1", activeBuy)
+
+	// 1. 新規エントリー（売り）をしようとするケース -> スキップ（抑止）されるか検証
+	strat2.evaluateFn = func(input strategy.StrategyInput) strategy.TargetPosition {
+		return strategy.TargetPosition{
+			Qty:       -100, // 新規ショート
+			Price:     0,
+			OrderType: order.ORDER_TYPE_MARKET,
+			Reason:    "NewShortEntry",
+		}
+	}
+	
+	actions1 := nest.HandleTick(tick.Tick{Symbol: "7203", Price: 2000})
+	// s1 は静観、s2 は新規売りのため、抑止されて actions は 0件になるはず
+	if len(actions1) != 0 {
+		t.Errorf("expected 0 actions due to entry suppression, got %d", len(actions1))
+	}
+
+	// 2. 返済クローズ（売り）をしようとするケース -> 反対の新規買い注文がキャンセルされるか検証
+	strat2.evaluateFn = func(input strategy.StrategyInput) strategy.TargetPosition {
+		return strategy.TargetPosition{
+			Qty:       0, // ポジションを0にする返済
+			Price:     0,
+			OrderType: order.ORDER_TYPE_MARKET,
+			Reason:    "CloseLongExit",
+		}
+	}
+	
+	// sniper-2 の現在の仮想ポジションを設定（ロング建玉を100持っていると仮定して、それを返済する状況）
+	nest.positions.positions["sniper-2"] = []position.Position{
+		{ExecutionID: "hold-2", LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
+	}
+
+	actions2 := nest.HandleTick(tick.Tick{Symbol: "7203", Price: 2000})
+	// 返済注文のため、対向する未約定買い注文(buy-1)のキャンセルアクション (CancelBullet) が1件発生し、発注自体はスキップされるはず
+	if len(actions2) != 1 {
+		t.Fatalf("expected 1 action (cancel action), got %d", len(actions2))
+	}
+	
+	act := actions2[0]
+	if act.SniperID != "sniper-1" {
+		t.Errorf("expected cancel target sniper-1, got %s", act.SniperID)
+	}
+	
+	cancelBullet, ok := act.Bullet.(CancelBullet)
+	if !ok {
+		t.Fatalf("expected CancelBullet type, got %T", act.Bullet)
+	}
+	if cancelBullet.OrderID != "buy-1" {
+		t.Errorf("expected cancel order ID 'buy-1', got '%s'", cancelBullet.OrderID)
+	}
+}
