@@ -8,7 +8,7 @@
 
 ## 1. 取引戦略インターフェースの実装
 
-独自のストラテジー型を定義し、[strategy.Strategy](file:///home/umemoto/trading-workspace/trading-bot/pkg/domain/sniper/strategy/strategy.go#L111) インターフェースの3つのメソッドを実装します。
+独自のストラテジー型を定義し、[strategy.Strategy](../pkg/domain/sniper/strategy/strategy.go) インターフェースの3つのメソッドを実装します。
 
 ```go
 type Strategy interface {
@@ -23,7 +23,7 @@ type Strategy interface {
 * **`AnalysisLogger() *slog.Logger`**: ストラテジー固有の解析・可視化ログ用のロガーを返します（不要な場合は `nil`）。
 
 ### 💡 注文キャンセルの制御
-必要に応じて、[strategy.CancelChecker](file:///home/umemoto/trading-workspace/trading-bot/pkg/domain/sniper/strategy/strategy.go#L107) インターフェースを合わせて実装することで、未約定注文に対する動的なキャンセル可否判定（例: 一定時間経過後に指値をキャンセルする等）も実装可能です。
+必要に応じて、[strategy.CancelChecker](../pkg/domain/sniper/strategy/strategy.go) インターフェースを合わせて実装することで、未約定注文に対する動的なキャンセル可否判定（例: 一定時間経過後に指値をキャンセルする等）も実装可能です。
 ```go
 type CancelChecker interface {
 	ShouldCancel(input StrategyInput, ord *order.Order) bool
@@ -113,7 +113,7 @@ func main() {
 ```
 
 ### 設定ファイルへの適用
-登録した戦略を使用するには、[configuration.md](file:///home/umemoto/trading-workspace/trading-bot/docs/configuration.md) に従って、`configs/operations.json` 内の適用戦略リストに対象の登録名を指定します：
+登録した戦略を使用するには、[configuration.md](./configuration.md) に従って、`configs/operations.json` 内の適用戦略リストに対象の登録名を指定します：
 ```json
 "strategies": ["my_custom_strategy"]
 ```
