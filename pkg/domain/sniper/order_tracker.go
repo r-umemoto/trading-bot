@@ -2,6 +2,7 @@ package sniper
 
 import (
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
@@ -274,7 +275,8 @@ func (ot *OrderTracker) PrepareActiveOrders(sniperID string, t tick.Tick, policy
 			hasProcessingTrade = true
 		}
 
-		if policy != nil && !curr.IsPending() && !curr.IsCancelSent() && !curr.IsCompleted() {
+		isVerifiedServerOrder := !strings.HasPrefix(curr.ID, order.LOCAL_ID_PREFIX)
+		if policy != nil && !curr.IsPending() && !curr.IsCancelSent() && !curr.IsCompleted() && isVerifiedServerOrder {
 			policy.ApplySyntheticFill(curr, t)
 		}
 
