@@ -68,7 +68,7 @@ func (e *Engine) monitorKillSwitch(ctx context.Context, cancel context.CancelFun
 		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
-			if t.Hour() == 15 && t.Minute() >= 15 {
+			if t.Hour() == 15 && t.Minute() >= 20 {
 				fmt.Println("\n⏰【キルスイッチ作動】指定時刻到達。全スナイパーに撤収を命じます！")
 				cancel()
 				return
