@@ -423,9 +423,7 @@ func (n *SniperNest) ReconcileTarget(
 			}
 		} else {
 			if o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
-				if target.Price == 0 {
-					shouldCancel = true
-				}
+				shouldCancel = true
 			}
 		}
 
