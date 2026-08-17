@@ -947,3 +947,31 @@ func TestSniperNest_CrossTradeRegulation(t *testing.T) {
 		t.Errorf("expected cancel order ID 'buy-1', got '%s'", cancelBullet.OrderID)
 	}
 }
+
+func TestSniperNest_ReconcileTarget_FlatTargetWithNonZeroPrice(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// 1. Setup active entry buy order (CASH_MARGIN_MARGIN_ENTRY)
+	ord := order.NewOrder("buy-entry-ord", "7203", order.ACTION_BUY, 2000, 100)
+	ord.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	nest.AddOrder(sniperID, ord)
+
+	// 2. Target position qty is 0 (flat), but price is non-zero (limit exit order, e.g. stop loss)
+	target := strategy.TargetPosition{
+		Qty:       0,
+		Price:     1995,
+		OrderType: order.ORDER_TYPE_LIMIT,
+		Reason:    "StopLoss",
+	}
+
+	// 3. We have virtual long position due to synthetic fill
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.Position{Qty: 100, AveragePrice: 2000}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+
+	// 4. Verify that the active entry order is cancelled instead of placing an exit order
+	cancelBullet, ok := bullet.(CancelBullet)
+	if !ok || cancelBullet.OrderID != "buy-entry-ord" {
+		t.Errorf("expected CancelBullet for buy-entry-ord, got %+v", bullet)
+	}
+}
