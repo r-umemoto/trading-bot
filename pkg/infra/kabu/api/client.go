@@ -71,12 +71,18 @@ func (e *KabuAPIError) IsClientError() bool {
 		return true
 	}
 
-	// エラーコード 8 (決済指定内容誤り) など、特定のカブコムエラーコードの場合
-	if e.Code == 8 {
+	// 確定的なエラーコード（8: 決済指定内容誤り, 21: 可能額不足, 4004001: 該当注文なし）
+	if e.Code == 8 || e.Code == 21 || e.Code == 4004001 {
 		return true
 	}
 
 	return false
+}
+
+// IsRejected returns true if this error represents a definitive reject.
+// Implements domain.RejectError.
+func (e *KabuAPIError) IsRejected() bool {
+	return e.IsClientError()
 }
 
 // DecodeResponse はHTTPレスポンスのステータスコードをチェックし、正常であればJSONデコードを行います

@@ -268,6 +268,14 @@ func (o *PairTradingOperation) FailSendingOrder(sniperID string, ord *order.Orde
 	}
 }
 
+func (o *PairTradingOperation) DestroySendingOrder(sniperID string, ord *order.Order) {
+	if o.nestA.HasSniper(sniperID) {
+		o.nestA.DestroySendingOrder(sniperID, ord)
+	} else if o.nestB.HasSniper(sniperID) {
+		o.nestB.DestroySendingOrder(sniperID, ord)
+	}
+}
+
 func (o *PairTradingOperation) UpdateOrderID(sniperID string, ord *order.Order, newID string) {
 	if o.nestA.HasSniper(sniperID) {
 		o.nestA.UpdateOrderID(sniperID, ord, newID)

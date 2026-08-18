@@ -259,6 +259,13 @@ func (n *SniperNest) FailSendingOrder(sniperID string, ord *order.Order) {
 	}
 }
 
+// DestroySendingOrder は対象のスナイパーから注文を即座に完全抹消します（確定失敗用）
+func (n *SniperNest) DestroySendingOrder(sniperID string, ord *order.Order) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.orders.DestroyOrder(sniperID, ord)
+}
+
 // UpdateOrderID は対象のスナイパーが持つ注文IDを最新に更新します。
 func (n *SniperNest) UpdateOrderID(sniperID string, ord *order.Order, newID string) {
 	n.mu.Lock()
