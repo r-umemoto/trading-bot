@@ -74,6 +74,19 @@ func (ot *OrderTracker) FailOrder(sniperID string, ord *order.Order) bool {
 	return false
 }
 
+// DestroyOrder completely deletes an order from activeOrders without placing it into Tombstones.
+// Used for definitive API reject errors (e.g. buying power insufficient).
+func (ot *OrderTracker) DestroyOrder(sniperID string, ord *order.Order) bool {
+	orders := ot.activeOrders[sniperID]
+	for i, o := range orders {
+		if o == ord {
+			ot.activeOrders[sniperID] = append(orders[:i], orders[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
 func (ot *OrderTracker) UpdateOrderID(sniperID string, ord *order.Order, newID string) {
 	orders := ot.activeOrders[sniperID]
 	for _, o := range orders {

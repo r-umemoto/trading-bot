@@ -20,6 +20,7 @@ type Operation interface {
 
 	HasSniper(sniperID string) bool
 	FailSendingOrder(sniperID string, ord *order.Order)
+	DestroySendingOrder(sniperID string, ord *order.Order)
 	UpdateOrderID(sniperID string, ord *order.Order, newID string)
 
 	GetPerformance(sniperID string) Performance
