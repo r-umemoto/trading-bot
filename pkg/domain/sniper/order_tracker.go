@@ -16,6 +16,14 @@ type tombstoneEntry struct {
 	deletedAt time.Time
 }
 
+type pendingExecEntry struct {
+	sniperID       string
+	execution      *order.Execution
+	action         order.Action
+	orderCreatedAt time.Time
+	parentOrder    *order.Order
+}
+
 // OrderTracker handles active orders, tombstones recovery, and execution deduplication.
 //
 // DESIGN DECISION:
@@ -29,6 +37,7 @@ type OrderTracker struct {
 	tombstones          map[string][]tombstoneEntry
 	processedExecutions map[string]bool
 	logger              *slog.Logger
+	pendingExits        map[string][]pendingExecEntry // Key: HoldID -> Value: 保留されている約定情報のリスト
 }
 
 func NewOrderTracker(logger *slog.Logger) *OrderTracker {
@@ -37,6 +46,7 @@ func NewOrderTracker(logger *slog.Logger) *OrderTracker {
 		tombstones:          make(map[string][]tombstoneEntry),
 		processedExecutions: make(map[string]bool),
 		logger:              logger,
+		pendingExits:        make(map[string][]pendingExecEntry),
 	}
 }
 
@@ -254,8 +264,149 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 		ot.tombstones[sniperID] = nextTombstones
 
 		for _, pe := range newExecs {
-			onExecution(sniperID, pe.Execution, pe.Action, pe.OrderCreatedAt, pe.ParentOrder)
-			pe.ParentOrder.AddExecution(pe.Execution)
+			isEntry := true
+			if pe.ParentOrder != nil {
+				isEntry = pe.ParentOrder.CashMargin != order.CASH_MARGIN_MARGIN_EXIT
+			}
+
+			if isEntry {
+				// --- 1. 親約定（ENTRY）の場合 ---
+				// A. まず親約定をそのまま Nest コールバックして適用
+				onExecution(sniperID, pe.Execution, pe.Action, pe.OrderCreatedAt, pe.ParentOrder)
+				pe.ParentOrder.AddExecution(pe.Execution)
+				ot.processedExecutions[pe.Execution.ID] = true
+
+				// B. 保留されている決済約定があれば解決する
+				if pending, exists := ot.pendingExits[pe.Execution.ID]; exists {
+					parentRemainingQty := pe.Execution.Qty
+					for _, pEntry := range pending {
+						if parentRemainingQty <= 0 {
+							break
+						}
+
+						// 1. 今届いた親の分の解決
+						closeQty := pEntry.execution.Qty
+						if pEntry.parentOrder != nil && pEntry.parentOrder.Request != nil {
+							for _, cp := range pEntry.parentOrder.Request.ClosePositions {
+								if cp.HoldID == pe.Execution.ID {
+									closeQty = cp.Qty
+									break
+								}
+							}
+						}
+
+						if closeQty > parentRemainingQty {
+							closeQty = parentRemainingQty
+						}
+						if closeQty > pEntry.execution.Qty {
+							closeQty = pEntry.execution.Qty
+						}
+
+						if closeQty > 0 {
+							execToSend := *pEntry.execution
+							execToSend.Qty = closeQty
+							// 🌟 重複処理ガードを回避するため、HoldID を付与して約定IDをユニーク化
+							execToSend.ID = execToSend.ID + "-" + pe.Execution.ID
+
+							// この HoldID (pe.Execution.ID) だけを指定した注文コピーを渡してピンポイントで消し込む
+							orderCopy := makeCloseOrderCopy(pEntry.parentOrder, pe.Execution.ID, closeQty)
+
+							onExecution(pEntry.sniperID, execToSend, pEntry.action, pEntry.orderCreatedAt, orderCopy)
+							pEntry.parentOrder.AddExecution(execToSend)
+
+							pEntry.execution.Qty -= closeQty
+							parentRemainingQty -= closeQty
+						}
+
+						// 2. すでにメモリ上に存在している他の親（processedExecutions に入っているもの）についても、この約定の残り数量を使って解決する
+						if pEntry.execution.Qty > 0 && pEntry.parentOrder != nil && pEntry.parentOrder.Request != nil {
+							for _, cp := range pEntry.parentOrder.Request.ClosePositions {
+								if pEntry.execution.Qty <= 0 {
+									break
+								}
+								if cp.HoldID != pe.Execution.ID && ot.processedExecutions[cp.HoldID] {
+									otherCloseQty := cp.Qty
+									if otherCloseQty > pEntry.execution.Qty {
+										otherCloseQty = pEntry.execution.Qty
+									}
+
+									if otherCloseQty > 0 {
+										execToSend := *pEntry.execution
+										execToSend.Qty = otherCloseQty
+										// 🌟 重複処理ガードを回避するため、HoldID を付与して約定IDをユニーク化
+										execToSend.ID = execToSend.ID + "-" + cp.HoldID
+
+										// この HoldID (cp.HoldID) だけを指定した注文コピーを渡してピンポイントで消し込む
+										orderCopy := makeCloseOrderCopy(pEntry.parentOrder, cp.HoldID, otherCloseQty)
+
+										onExecution(pEntry.sniperID, execToSend, pEntry.action, pEntry.orderCreatedAt, orderCopy)
+										pEntry.parentOrder.AddExecution(execToSend)
+
+										pEntry.execution.Qty -= otherCloseQty
+									}
+								}
+							}
+						}
+
+						// 3. 決済約定を完全に使い切った場合の処理
+						if pEntry.execution.Qty <= 0 {
+							ot.processedExecutions[pEntry.execution.ID] = true
+
+							// すべての保留キーからこの約定IDを一斉消去してクリーンアップ
+							for k, list := range ot.pendingExits {
+								if k == pe.Execution.ID {
+									continue
+								}
+								var filteredList []pendingExecEntry
+								for _, item := range list {
+									if item.execution.ID != pEntry.execution.ID {
+										filteredList = append(filteredList, item)
+									}
+								}
+								if len(filteredList) == 0 {
+									delete(ot.pendingExits, k)
+								} else {
+									ot.pendingExits[k] = filteredList
+								}
+							}
+						}
+					}
+					delete(ot.pendingExits, pe.Execution.ID)
+				}
+
+			} else {
+				// --- 2. 決済約定（EXIT）の場合 ---
+				var missingHoldIDs []string
+				if pe.ParentOrder != nil && pe.ParentOrder.Request != nil {
+					for _, cp := range pe.ParentOrder.Request.ClosePositions {
+						if !ot.processedExecutions[cp.HoldID] {
+							missingHoldIDs = append(missingHoldIDs, cp.HoldID)
+						}
+					}
+				}
+
+				if len(missingHoldIDs) > 0 {
+					// 親が1つでも未達なので、決済約定の適用を一切行わずに保留スタックに退避する
+					// ヒープ上に約定の独立したコピーを明示的に確保
+					execCopyPtr := new(order.Execution)
+					*execCopyPtr = pe.Execution
+
+					for _, holdID := range missingHoldIDs {
+						ot.pendingExits[holdID] = append(ot.pendingExits[holdID], pendingExecEntry{
+							sniperID:       sniperID,
+							execution:      execCopyPtr,
+							action:         pe.Action,
+							orderCreatedAt: pe.OrderCreatedAt,
+							parentOrder:    pe.ParentOrder,
+						})
+					}
+				} else {
+					// すべて揃っているので、そのまま適用
+					onExecution(sniperID, pe.Execution, pe.Action, pe.OrderCreatedAt, pe.ParentOrder)
+					pe.ParentOrder.AddExecution(pe.Execution)
+					ot.processedExecutions[pe.Execution.ID] = true
+				}
+			}
 		}
 	}
 }
@@ -398,4 +549,19 @@ func (ot *OrderTracker) GetInflightStats(sniperID string) InflightStats {
 		}
 	}
 	return stats
+}
+
+func makeCloseOrderCopy(orig *order.Order, holdID string, qty float64) *order.Order {
+	if orig == nil {
+		return nil
+	}
+	orderCopy := *orig
+	if orig.Request != nil {
+		reqCopy := *orig.Request
+		reqCopy.ClosePositions = []order.ClosePosition{
+			{HoldID: holdID, Qty: qty},
+		}
+		orderCopy.Request = &reqCopy
+	}
+	return &orderCopy
 }

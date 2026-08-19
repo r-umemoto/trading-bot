@@ -173,12 +173,12 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 				isDefinitiveReject := errors.As(err, &rejectErr) && rejectErr.IsRejected()
 
 				if isDefinitiveReject {
-					slog.Error("❌ [SendOrder_REJECTED] 発注が取引所側で完全に拒絶されました。注文を即座に抹消します。",
+					slog.Error("❌ [SendOrder_REJECTED] 発注が取引所側で完全に拒絶されました。注文を即座に抹消し、関連建玉をクリーンアップします。",
 						slog.String("symbol", act.Order.Symbol),
 						slog.String("localID", act.Order.ID),
 						slog.Any("error", err),
 					)
-					op.DestroySendingOrder(sniperID, act.Order)
+					op.HandleOrderRejection(sniperID, act.Order, err)
 				} else {
 					slog.Warn("⚠️ [SendOrder_API_ERROR] 発注処理中にエラーまたはタイムアウトを検知しました。注文を一時的に墓標へ退避させます。",
 						slog.String("symbol", act.Order.Symbol),

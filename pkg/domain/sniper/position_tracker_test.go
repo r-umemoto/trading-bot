@@ -282,3 +282,45 @@ func TestPositionTracker_GetCopy(t *testing.T) {
 		t.Error("mutating copy affected internal state of PositionTracker")
 	}
 }
+
+func TestPositionTracker_ReducePositions_SkipFIFOSignaled(t *testing.T) {
+	pt := sniper.NewPositionTracker(nil)
+	sniperID := "test-sniper"
+
+	// 1. 古い建玉A（buy-A）を登録
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-A", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(pnl float64) {})
+
+	// 2. 存在しない建玉Bを指定した返済約定（決済売り）を適用する
+	exitOrder := order.NewOrder(
+		"exit-1",
+		"7203",
+		order.ACTION_SELL,
+		2100,
+		100,
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+		order.WithRequest(&order.OrderRequest{
+			ClosePositions: []order.ClosePosition{
+				{HoldID: "buy-B", Qty: 100}, // 未登録の建玉Bを指定
+			},
+		}),
+	)
+
+	// 返済の Execution を適用
+	pt.ApplyExecution(
+		sniperID,
+		"7203",
+		order.Execution{ID: "exit-exec-1", Qty: 100, Price: 2100},
+		order.ACTION_SELL,
+		exitOrder,
+		func(pnl float64) {},
+	)
+
+	// 3. 安全ガードにより、無関係な建玉A（buy-A）が誤って消し込まれず、100株残っていることを検証する
+	pos := pt.GetCopy(sniperID)
+	if len(pos) != 1 {
+		t.Fatalf("expected 1 position to remain, got %d", len(pos))
+	}
+	if pos[0].ExecutionID != "buy-A" || pos[0].LeavesQty != 100 {
+		t.Errorf("expected buy-A to remain with 100 qty, got %+v", pos[0])
+	}
+}

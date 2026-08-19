@@ -1,6 +1,7 @@
 package sniper
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -264,6 +265,23 @@ func (n *SniperNest) DestroySendingOrder(sniperID string, ord *order.Order) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.orders.DestroyOrder(sniperID, ord)
+}
+
+// HandleOrderRejection は発注が取引所で拒絶された際のクリーンアップを行います
+func (n *SniperNest) HandleOrderRejection(sniperID string, ord *order.Order, err error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.orders.DestroyOrder(sniperID, ord)
+
+	// 建玉強制削除は、「決済指定内容に誤りがある（取引所にその建玉IDが実在しない）エラー」の時のみ行う。
+	var rejectErr order.RejectError
+	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && ord.Request != nil && len(ord.Request.ClosePositions) > 0 {
+		if errors.As(err, &rejectErr) && rejectErr.IsPositionMissing() {
+			for _, cp := range ord.Request.ClosePositions {
+				n.positions.RemovePosition(sniperID, cp.HoldID)
+			}
+		}
+	}
 }
 
 // UpdateOrderID は対象のスナイパーが持つ注文IDを最新に更新します。
