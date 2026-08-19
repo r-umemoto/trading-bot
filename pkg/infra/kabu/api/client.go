@@ -85,6 +85,11 @@ func (e *KabuAPIError) IsRejected() bool {
 	return e.IsClientError()
 }
 
+// IsPositionMissing returns true if this error is due to missing target positions (Code 8).
+func (e *KabuAPIError) IsPositionMissing() bool {
+	return e.Code == 8
+}
+
 // DecodeResponse はHTTPレスポンスのステータスコードをチェックし、正常であればJSONデコードを行います
 func (c *KabuClient) DecodeResponse(resp *http.Response, out interface{}) error {
 	defer resp.Body.Close()

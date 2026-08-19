@@ -18,4 +18,5 @@ var (
 type RejectError interface {
 	error
 	IsRejected() bool
+	IsPositionMissing() bool
 }

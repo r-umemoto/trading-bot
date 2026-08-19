@@ -21,7 +21,7 @@ func NewPositionTracker(logger *slog.Logger) *PositionTracker {
 	}
 }
 
-func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, exec order.Execution, action order.Action, parentOrder *order.Order, recordPnL func(float64)) {
+func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, exec *order.Execution, action order.Action, parentOrder *order.Order, recordPnL func(float64)) {
 	isExit := false
 	exchange := order.EXCHANGE_TOSHO
 	tradeType := order.TRADE_TYPE_GENERAL_DAY
@@ -72,12 +72,21 @@ func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, ex
 			}
 			reason = parentOrder.Reason
 		}
-		pt.reducePositions(sniperID, symbolCode, exec.Qty, exec.Price, exec.ExecutionTime, closePositions, reason, recordPnL)
+		pt.reducePositions(sniperID, symbolCode, exec, closePositions, reason, recordPnL)
 	}
 }
 
-func (pt *PositionTracker) reducePositions(sniperID string, symbolCode string, sellQty float64, sellPrice float64, sellTime time.Time, closePositions []order.ClosePosition, closeReason string, recordPnL func(float64)) {
-	remainingToSell := sellQty
+func (pt *PositionTracker) reducePositions(
+	sniperID string,
+	symbolCode string,
+	exec *order.Execution,
+	closePositions []order.ClosePosition,
+	closeReason string,
+	recordPnL func(float64),
+) {
+	remainingToSell := exec.Qty
+	sellPrice := exec.Price
+	sellTime := exec.ExecutionTime
 	var totalTradePnL float64
 	var earliestEntryTime time.Time
 
@@ -113,6 +122,7 @@ func (pt *PositionTracker) reducePositions(sniperID string, symbolCode string, s
 				totalTradePnL += tradePnL
 				recordPnL(tradePnL)
 
+				exec.Qty -= closeQty
 				p.LeavesQty -= closeQty
 				closeMap[p.ExecutionID] -= closeQty
 				remainingToSell -= closeQty
@@ -125,6 +135,9 @@ func (pt *PositionTracker) reducePositions(sniperID string, symbolCode string, s
 			}
 		}
 		positions = newPositions
+		// 決済指定（ClosePositions）が明示されている場合は、
+		// 指定外の建玉を誤って消し込まないよう、以降の FIFO フォールバックをスキップする
+		remainingToSell = 0
 	}
 
 	if remainingToSell > 0 {
@@ -152,6 +165,7 @@ func (pt *PositionTracker) reducePositions(sniperID string, symbolCode string, s
 			totalTradePnL += tradePnL
 			recordPnL(tradePnL)
 
+			exec.Qty -= closeQty
 			if p.LeavesQty <= remainingToSell {
 				remainingToSell -= p.LeavesQty
 			} else {
@@ -239,4 +253,24 @@ func (pt *PositionTracker) GetCopy(sniperID string) []position.Position {
 	posCopy := make([]position.Position, len(pos))
 	copy(posCopy, pos)
 	return posCopy
+}
+
+// RemovePosition は特定の建玉を PositionTracker から強制削除します（不整合発生時の自己復旧用）
+func (pt *PositionTracker) RemovePosition(sniperID string, holdID string) {
+	positions := pt.positions[sniperID]
+	var newPositions []position.Position
+	for _, p := range positions {
+		if p.ExecutionID == holdID {
+			if pt.logger != nil {
+				pt.logger.Warn("❌ [PositionTracker] 取引所拒絶によりメモリ上の建玉を強制抹消しました",
+					slog.String("sniper", sniperID),
+					slog.String("holdID", holdID),
+					slog.Float64("qty", p.LeavesQty),
+				)
+			}
+			continue
+		}
+		newPositions = append(newPositions, p)
+	}
+	pt.positions[sniperID] = newPositions
 }
