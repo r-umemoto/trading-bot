@@ -310,7 +310,13 @@ func (m *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
 		return nil
 	}
 
-	// 2. なければ、取引所に対して実際にキャンセルを送信する
+	// 2. ローカルIDの場合は、キューになければ取引所に送信しても無効なため、
+	// 取引所への送信は行わずにエラーを返す。
+	if strings.HasPrefix(orderID, order.LOCAL_ID_PREFIX) {
+		return fmt.Errorf("%w: local order not in queue (might be in-flight or already processed)", order.ErrDispatchQueueBypass)
+	}
+
+	// 3. なければ、取引所に対して実際にキャンセルを送信する
 	jobID := "cancel_" + orderID
 	resCh := m.dispatcher.Submit(jobID, "", nil, orderID, 30)
 	select {

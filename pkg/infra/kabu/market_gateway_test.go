@@ -683,3 +683,40 @@ func TestMarketGateway_GetOrders_RestoresClosePositions(t *testing.T) {
 	}
 }
 
+func TestMarketGateway_CancelOrder_LocalBypass(t *testing.T) {
+	mockClient := &MockKabuClient{}
+	gateway := NewMarketGateway(nil, nil)
+	gateway.client = mockClient
+
+	gateway.dispatcher.Start(context.Background())
+
+	// シナリオ1: キューに存在するローカル注文のキャンセル
+	ord := order.NewOrder("local-test-id-1", "7203", order.ACTION_BUY, 2000, 100)
+	resCh := gateway.dispatcher.Submit("job-1", "7203", ord, "", 10)
+
+	// キャンセルを実行
+	err := gateway.CancelOrder(context.Background(), "local-test-id-1")
+	if err != nil {
+		t.Fatalf("expected cancellation to succeed, got %v", err)
+	}
+
+	// キューから発注ジョブが削除され、Bypass エラーが返ることを確認
+	select {
+	case res := <-resCh:
+		if !errors.Is(res.Error, order.ErrDispatchQueueBypass) {
+			t.Errorf("expected ErrDispatchQueueBypass, got %v", res.Error)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("timeout waiting for order result channel")
+	}
+
+	// シナリオ2: キューに存在しないローカル注文 hometown (API呼び出しを行わずにエラーになるべき)
+	err = gateway.CancelOrder(context.Background(), "local-test-id-not-exist")
+	if err == nil {
+		t.Fatal("expected error for non-existent local order cancellation, got nil")
+	}
+	if !errors.Is(err, order.ErrDispatchQueueBypass) {
+		t.Errorf("expected ErrDispatchQueueBypass, got %v", err)
+	}
+}
+
