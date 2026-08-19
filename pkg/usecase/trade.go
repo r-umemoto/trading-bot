@@ -164,8 +164,10 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 					slog.String("localID", act.Order.ID),
 					slog.Any("error", err),
 				)
+				op.DestroySendingOrder(sniperID, act.Order)
 			} else if errors.Is(err, order.ErrOrderSkipped) {
 				slog.Debug("ℹ️ [SendOrder_API_SKIPPED] " + err.Error())
+				op.DestroySendingOrder(sniperID, act.Order)
 			} else {
 				var rejectErr order.RejectError
 				isDefinitiveReject := errors.As(err, &rejectErr) && rejectErr.IsRejected()
