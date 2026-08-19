@@ -21,7 +21,7 @@ func NewPositionTracker(logger *slog.Logger) *PositionTracker {
 	}
 }
 
-func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, exec *order.Execution, action order.Action, parentOrder *order.Order, recordPnL func(float64)) {
+func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, exec order.Execution, action order.Action, parentOrder *order.Order, recordPnL func(float64)) {
 	isExit := false
 	exchange := order.EXCHANGE_TOSHO
 	tradeType := order.TRADE_TYPE_GENERAL_DAY
@@ -72,21 +72,21 @@ func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, ex
 			}
 			reason = parentOrder.Reason
 		}
-		pt.reducePositions(sniperID, symbolCode, exec, closePositions, reason, recordPnL)
+		pt.reducePositions(sniperID, symbolCode, exec.Qty, exec.Price, exec.ExecutionTime, closePositions, reason, recordPnL)
 	}
 }
 
 func (pt *PositionTracker) reducePositions(
 	sniperID string,
 	symbolCode string,
-	exec *order.Execution,
+	sellQty float64,
+	sellPrice float64,
+	sellTime time.Time,
 	closePositions []order.ClosePosition,
 	closeReason string,
 	recordPnL func(float64),
 ) {
-	remainingToSell := exec.Qty
-	sellPrice := exec.Price
-	sellTime := exec.ExecutionTime
+	remainingToSell := sellQty
 	var totalTradePnL float64
 	var earliestEntryTime time.Time
 
@@ -122,7 +122,6 @@ func (pt *PositionTracker) reducePositions(
 				totalTradePnL += tradePnL
 				recordPnL(tradePnL)
 
-				exec.Qty -= closeQty
 				p.LeavesQty -= closeQty
 				closeMap[p.ExecutionID] -= closeQty
 				remainingToSell -= closeQty
@@ -165,7 +164,6 @@ func (pt *PositionTracker) reducePositions(
 			totalTradePnL += tradePnL
 			recordPnL(tradePnL)
 
-			exec.Qty -= closeQty
 			if p.LeavesQty <= remainingToSell {
 				remainingToSell -= p.LeavesQty
 			} else {

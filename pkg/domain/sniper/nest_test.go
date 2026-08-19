@@ -290,7 +290,7 @@ func TestSniperNest_ReducePositions_SpecifiedClose(t *testing.T) {
 		},
 	}
 
-	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, &exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
+	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
 		nest.performance.RecordPnL(sniperID, pnl)
 	})
 
@@ -332,7 +332,7 @@ func TestSniperNest_ReducePositions_FIFOAndLossPerformance(t *testing.T) {
 	parentOrder := order.NewOrder("exit-order", "7203", order.ACTION_SELL, 1990, 120)
 	parentOrder.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
 
-	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, &exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
+	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
 		nest.performance.RecordPnL(sniperID, pnl)
 	})
 
@@ -370,7 +370,7 @@ func TestSniperNest_ReducePositions_FlatPnL(t *testing.T) {
 	parentOrder := order.NewOrder("exit-order", "7203", order.ACTION_SELL, 2000, 100)
 	parentOrder.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
 
-	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, &exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
+	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
 		nest.performance.RecordPnL(sniperID, pnl)
 	})
 

@@ -53,13 +53,6 @@ type FireAction struct {
 	Bullet   Bullet
 }
 
-type pendingExit struct {
-	sniperID    string
-	exec        *order.Execution
-	action      order.Action
-	parentOrder *order.Order
-}
-
 // SniperNest は特定の銘柄（Symbol）におけるスナイパーたちを束ねるドメイン集約（Aggregate Root）です。
 // 子コンポーネント（OrderTracker, PositionTracker, PerformanceTracker, CooldownTracker）をオーケストレートし、銘柄ごとの取引状態を保護します。
 type SniperNest struct {
@@ -73,7 +66,6 @@ type SniperNest struct {
 	Logger       *slog.Logger
 	mu           sync.Mutex
 	lastTickTime time.Time // 🌟 最新のシミュレーション時刻を保存（エラー発生時の時間軸統一用）
-	pendingExits map[string][]pendingExit // Key: HoldID -> Value: 保留されている約定情報のリスト
 }
 
 func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger *slog.Logger) *SniperNest {
@@ -81,15 +73,14 @@ func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger 
 		logger = slog.Default()
 	}
 	return &SniperNest{
-		SymbolCode:   code,
-		Detail:       detail,
-		snipers:      snipers,
-		orders:       NewOrderTracker(logger),
-		positions:    NewPositionTracker(logger),
-		performance:  NewPerformanceTracker(),
-		cooldowns:    NewCooldownTracker(),
-		Logger:       logger,
-		pendingExits: make(map[string][]pendingExit),
+		SymbolCode:  code,
+		Detail:      detail,
+		snipers:     snipers,
+		orders:      NewOrderTracker(logger),
+		positions:   NewPositionTracker(logger),
+		performance: NewPerformanceTracker(),
+		cooldowns:   NewCooldownTracker(),
+		Logger:      logger,
 	}
 }
 
@@ -343,84 +334,7 @@ func (n *SniperNest) applyExecution(sniperID string, exec order.Execution, actio
 	}
 	n.orders.MarkExecutionProcessed(exec.ID)
 
-	isEntry := true
-	if parentOrder != nil {
-		isEntry = parentOrder.CashMargin != order.CASH_MARGIN_MARGIN_EXIT
-	}
-	if isEntry {
-		// 1. 通常通り建玉を生成
-		n.positions.ApplyExecution(sniperID, n.Detail.Code, &exec, action, parentOrder, func(pnl float64) {
-			n.performance.RecordPnL(sniperID, pnl)
-		})
-
-		// 2. この新規約定ID (exec.ID = HoldID) に対する保留中の返済約定がないか確認して解決
-		if pending, exists := n.pendingExits[exec.ID]; exists {
-			for _, pe := range pending {
-				n.positions.ApplyExecution(pe.sniperID, n.Detail.Code, pe.exec, pe.action, pe.parentOrder, func(pnl float64) {
-					n.performance.RecordPnL(pe.sniperID, pnl)
-				})
-
-				// 解決した結果、約定数量をすべて使い切った (pe.exec.Qty <= 0) 場合のみ
-				// すべての保留キーから完全に一斉消去して二重解決を防ぐ
-				if pe.exec.Qty <= 0 {
-					for k, list := range n.pendingExits {
-						var nextList []pendingExit
-						for _, item := range list {
-							if item.exec.ID != pe.exec.ID {
-								nextList = append(nextList, item)
-							}
-						}
-						if len(nextList) == 0 {
-							delete(n.pendingExits, k)
-						} else {
-							n.pendingExits[k] = nextList
-						}
-					}
-				}
-			}
-			delete(n.pendingExits, exec.ID)
-		}
-		return
-	}
-
-	// 返済（MARGIN_EXIT）の場合
-	if parentOrder != nil && parentOrder.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-		var missingHoldIDs []string
-		if parentOrder.Request != nil {
-			for _, cp := range parentOrder.Request.ClosePositions {
-				hasPos := false
-				for _, p := range n.positions.GetCopy(sniperID) {
-					if p.ExecutionID == cp.HoldID {
-						hasPos = true
-						break
-					}
-				}
-				if !hasPos {
-					missingHoldIDs = append(missingHoldIDs, cp.HoldID)
-				}
-			}
-		}
-
-		if len(missingHoldIDs) > 0 {
-			// いずれかの建玉がまだメモリ上に存在しない（親の約定通知が未達）ため、保留スタックに退避する
-			if n.pendingExits == nil {
-				n.pendingExits = make(map[string][]pendingExit)
-			}
-			execCopy := exec
-			for _, holdID := range missingHoldIDs {
-				n.pendingExits[holdID] = append(n.pendingExits[holdID], pendingExit{
-					sniperID:    sniperID,
-					exec:        &execCopy,
-					action:      action,
-					parentOrder: parentOrder,
-				})
-			}
-			return
-		}
-	}
-
-	// すでに建玉が存在する、または通常の決済約定の場合
-	n.positions.ApplyExecution(sniperID, n.Detail.Code, &exec, action, parentOrder, func(pnl float64) {
+	n.positions.ApplyExecution(sniperID, n.Detail.Code, exec, action, parentOrder, func(pnl float64) {
 		n.performance.RecordPnL(sniperID, pnl)
 	})
 }
