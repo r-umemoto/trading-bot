@@ -46,8 +46,14 @@ func TestSystemUseCase_Initialize_RegisterError(t *testing.T) {
 	s := sniper.NewSniper("test_sniper", detail, sniper.NewInstructionStrategy(), &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 	nest := sniper.NewSniperNest("7203", detail, []*sniper.Sniper{s}, nil)
 	op := sniper.NewDefaultOperation("Op_7203", nest)
-
-	su := usecase.NewSystemUseCase([]sniper.Operation{op}, eg)
+	watchTargets := []symbol.WatchTarget{
+		{
+			Detail:       detail,
+			Exchange:     order.EXCHANGE_TOSHO,
+			StrategyName: "test_strategy",
+		},
+	}
+	su := usecase.NewSystemUseCase(watchTargets, []sniper.Operation{op}, eg)
 
 	err := su.Initialize(context.Background())
 	if !errors.Is(err, mockErr) {
@@ -67,8 +73,14 @@ func TestSystemUseCase_Shutdown_UnregisterError(t *testing.T) {
 	s := sniper.NewSniper("test_sniper", detail, sniper.NewInstructionStrategy(), &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 	nest := sniper.NewSniperNest("7203", detail, []*sniper.Sniper{s}, nil)
 	op := sniper.NewDefaultOperation("Op_7203", nest)
-
-	su := usecase.NewSystemUseCase([]sniper.Operation{op}, eg)
+	watchTargets := []symbol.WatchTarget{
+		{
+			Detail:       detail,
+			Exchange:     order.EXCHANGE_TOSHO,
+			StrategyName: "test_strategy",
+		},
+	}
+	su := usecase.NewSystemUseCase(watchTargets, []sniper.Operation{op}, eg)
 
 	err := su.Shutdown(context.Background())
 	if !errors.Is(err, mockErr) {
@@ -88,8 +100,19 @@ func TestSystemUseCase_Initialize_DuplicateFilter(t *testing.T) {
 	s2 := sniper.NewSniper("test_sniper_2", detail, sniper.NewInstructionStrategy(), &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 	nest2 := sniper.NewSniperNest("7203", detail, []*sniper.Sniper{s2}, nil)
 	op2 := sniper.NewDefaultOperation("Op_7203_2", nest2)
-
-	su := usecase.NewSystemUseCase([]sniper.Operation{op1, op2}, bg)
+	watchTargets := []symbol.WatchTarget{
+		{
+			Detail:       detail,
+			Exchange:     order.EXCHANGE_TOSHO,
+			StrategyName: "test_strategy",
+		},
+		{
+			Detail:       detail,
+			Exchange:     order.EXCHANGE_TOSHO,
+			StrategyName: "test_strategy",
+		},
+	}
+	su := usecase.NewSystemUseCase(watchTargets, []sniper.Operation{op1, op2}, bg)
 
 	// Initialize should complete successfully and the duplicate should have been filtered
 	err := su.Initialize(context.Background())
