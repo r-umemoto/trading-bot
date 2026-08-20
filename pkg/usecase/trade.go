@@ -36,8 +36,13 @@ func NewTradeUseCase(operations []sniper.Operation, gateway market.MarketGateway
 
 // Start は市場データ受信を開始し、各作戦ごとのイベントループを起動します
 func (u *TradeUseCase) Start(ctx context.Context, chs *market.MarketChannels) {
+	activeSymbols := make(map[string]bool)
+
 	for _, op := range u.operations {
 		symbols := op.GetSymbolCodes()
+		for _, sym := range symbols {
+			activeSymbols[sym] = true
+		}
 
 		mergedTickCh := make(chan tick.Tick, 100)
 		mergedOrderCh := make(chan order.Orders, 100)
@@ -70,6 +75,28 @@ func (u *TradeUseCase) Start(ctx context.Context, chs *market.MarketChannels) {
 		}
 
 		go u.runOperationEventLoop(ctx, op, mergedTickCh, mergedOrderCh)
+	}
+
+	// 実取引で使用されていない（観測用のみの）銘柄チャネルをドレイン（吸い出し）して詰まりを防ぐ
+	if chs != nil {
+		for sym, tickCh := range chs.Ticks {
+			if !activeSymbols[sym] {
+				go func(c <-chan tick.Tick) {
+					for range c {
+						// 観測用なので捨てる
+					}
+				}(tickCh)
+			}
+		}
+		for sym, orderCh := range chs.Orders {
+			if !activeSymbols[sym] {
+				go func(c <-chan order.Orders) {
+					for range c {
+						// 観測用なので捨てる
+					}
+				}(orderCh)
+			}
+		}
 	}
 }
 
