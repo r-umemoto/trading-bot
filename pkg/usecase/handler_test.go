@@ -27,7 +27,14 @@ func TestUseCaseHandler_Lifecycle(t *testing.T) {
 	operations := []sniper.Operation{op}
 
 	// 3. Create usecases
-	systemUC := usecase.NewSystemUseCase(operations, gateway)
+	watchTargets := []symbol.WatchTarget{
+		{
+			Detail:       detail,
+			Exchange:     order.EXCHANGE_TOSHO,
+			StrategyName: "test_strategy",
+		},
+	}
+	systemUC := usecase.NewSystemUseCase(watchTargets, operations, gateway)
 	tradeUC := usecase.NewTradeUseCase(operations, gateway, nil)
 
 	// 4. Create handler

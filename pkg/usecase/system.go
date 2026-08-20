@@ -6,24 +6,27 @@ import (
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper"
+	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 )
 
 // SystemUseCase はシステムの起動時・終了時のライフサイクル処理を行うユースケースです
 type SystemUseCase struct {
-	operations []sniper.Operation
-	cleaner    *PositionCleaner
-	gateway    market.MarketGateway
+	watchTargets []symbol.WatchTarget
+	operations   []sniper.Operation
+	cleaner      *PositionCleaner
+	gateway      market.MarketGateway
 }
 
-func NewSystemUseCase(operations []sniper.Operation, gateway market.MarketGateway) *SystemUseCase {
+func NewSystemUseCase(watchTargets []symbol.WatchTarget, operations []sniper.Operation, gateway market.MarketGateway) *SystemUseCase {
 	targets := make([]CleanableTarget, len(operations))
 	for i, op := range operations {
 		targets[i] = op
 	}
 	return &SystemUseCase{
-		operations: operations,
-		cleaner:    NewPositionCleaner(targets, gateway),
-		gateway:    gateway,
+		watchTargets: watchTargets,
+		operations:   operations,
+		cleaner:      NewPositionCleaner(targets, gateway),
+		gateway:      gateway,
 	}
 }
 
@@ -39,20 +42,16 @@ func (s *SystemUseCase) Initialize(ctx context.Context) error {
 	var reqs []market.ResisterSymbolRequest
 	seen := make(map[string]bool)
 
-	for _, op := range s.operations {
-		for _, exchange := range op.GetExchanges() {
-			for _, sym := range op.GetSymbolCodes() {
-				key := fmt.Sprintf("%s:%d", sym, exchange)
-				if seen[key] {
-					continue
-				}
-				reqs = append(reqs, market.ResisterSymbolRequest{
-					Symbol:   sym,
-					Exchange: exchange,
-				})
-				seen[key] = true
-			}
+	for _, target := range s.watchTargets {
+		key := fmt.Sprintf("%s:%d", target.Detail.Code, target.Exchange)
+		if seen[key] {
+			continue
 		}
+		reqs = append(reqs, market.ResisterSymbolRequest{
+			Symbol:   target.Detail.Code,
+			Exchange: target.Exchange,
+		})
+		seen[key] = true
 	}
 
 	if err := s.gateway.RegisterSymbols(ctx, reqs); err != nil {

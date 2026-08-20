@@ -49,10 +49,25 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	// 4. 作戦（Operation）の構築
 	operations := buildOperationsFromConfigs(gateway.DataPool(), snipers, opTargets)
 
+	var allWatchTargets []symbol.WatchTarget
+	for _, t := range targets {
+		if !t.Enabled {
+			continue
+		}
+		detail, err := gateway.GetSymbol(ctx, t.Symbol, t.Exchange)
+		if err != nil {
+			return nil, fmt.Errorf("銘柄情報取得に失敗 (%s): %w", t.Symbol, err)
+		}
+		allWatchTargets = append(allWatchTargets, symbol.WatchTarget{
+			Detail:   detail,
+			Exchange: t.Exchange,
+		})
+	}
+
 	reportRepo := buildReportRepository(ctx)
 
 	tradeUC := usecase.NewTradeUseCase(operations, gateway, reportRepo)
-	systemUC := usecase.NewSystemUseCase(operations, gateway)
+	systemUC := usecase.NewSystemUseCase(allWatchTargets, operations, gateway)
 	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
 	// 5. エンジンの完成
