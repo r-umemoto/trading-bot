@@ -500,7 +500,7 @@ func (aos ActiveOrders) LockedHoldIDs() map[string]bool {
 			continue
 		}
 		// 1. Fully active exit orders specify ClosePositions in their Request
-		if !o.IsCompleted() && !o.IsCancelSent() && o.CashMargin == CASH_MARGIN_MARGIN_EXIT && o.Request != nil {
+		if !o.IsCompleted() && o.CashMargin == CASH_MARGIN_MARGIN_EXIT && o.Request != nil {
 			for _, cp := range o.Request.ClosePositions {
 				locked[cp.HoldID] = true
 			}
