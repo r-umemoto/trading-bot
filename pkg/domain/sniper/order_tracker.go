@@ -38,15 +38,17 @@ type OrderTracker struct {
 	processedExecutions map[string]bool
 	logger              *slog.Logger
 	pendingExits        map[string][]pendingExecEntry // Key: HoldID -> Value: 保留されている約定情報のリスト
+	positions           *PositionTracker              // 🌟
 }
 
-func NewOrderTracker(logger *slog.Logger) *OrderTracker {
+func NewOrderTracker(positions *PositionTracker, logger *slog.Logger) *OrderTracker {
 	return &OrderTracker{
 		activeOrders:        make(map[string][]*order.Order),
 		tombstones:          make(map[string][]tombstoneEntry),
 		processedExecutions: make(map[string]bool),
 		logger:              logger,
 		pendingExits:        make(map[string][]pendingExecEntry),
+		positions:           positions,
 	}
 }
 
@@ -78,6 +80,9 @@ func (ot *OrderTracker) FailOrder(sniperID string, ord *order.Order) bool {
 				ord:       o,
 				deletedAt: time.Now(),
 			})
+			if ot.positions != nil {
+				ot.positions.UnlockPositions(sniperID, o.ID)
+			}
 			return true
 		}
 	}
@@ -91,6 +96,9 @@ func (ot *OrderTracker) DestroyOrder(sniperID string, ord *order.Order) bool {
 	for i, o := range orders {
 		if o == ord {
 			ot.activeOrders[sniperID] = append(orders[:i], orders[i+1:]...)
+			if ot.positions != nil {
+				ot.positions.UnlockPositions(sniperID, o.ID)
+			}
 			return true
 		}
 	}
@@ -242,6 +250,22 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 		combined = append(combined, resurrected...)
 
 		reconciled, newExecs := order.ReconcileOrders(combined, report, detail.Code, ot.processedExecutions, now)
+
+		// Unlock positions for orders that are no longer active
+		for _, old := range combined {
+			found := false
+			for _, curr := range reconciled {
+				if curr.ID == old.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				if ot.positions != nil {
+					ot.positions.UnlockPositions(sniperID, old.ID)
+				}
+			}
+		}
 
 		// 3. Clean up the tombstones list (remove resurrected ones and keep only ones created within 30s)
 		var nextTombstones []tombstoneEntry

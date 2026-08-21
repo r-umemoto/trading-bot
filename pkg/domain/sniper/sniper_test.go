@@ -313,7 +313,7 @@ func TestSniper_MatchPositionsToClose(t *testing.T) {
 	nest.positions.positions["test-sniper"] = positions
 
 	// 1. Closes Long positions (exit Sell order matches Buy positions)
-	closePositions, _ := nest.positions.MatchPositionsToClose("test-sniper", order.ACTION_SELL, 80, nil)
+	closePositions, _ := nest.positions.MatchPositionsToClose("test-sniper", order.ACTION_SELL, 80)
 	if len(closePositions) != 2 {
 		t.Fatalf("expected 2 close positions, got %d", len(closePositions))
 	}
@@ -327,8 +327,10 @@ func TestSniper_MatchPositionsToClose(t *testing.T) {
 	}
 
 	// 2. Closes Long positions skipping locked execution-1
-	locked := map[string]bool{"exec-1": true}
-	closePositions, _ = nest.positions.MatchPositionsToClose("test-sniper", order.ACTION_SELL, 80, locked)
+	if err := nest.positions.LockPositions("test-sniper", "dummy-order", []order.ClosePosition{{HoldID: "exec-1", Qty: 60}}); err != nil {
+		t.Fatalf("failed to lock: %v", err)
+	}
+	closePositions, _ = nest.positions.MatchPositionsToClose("test-sniper", order.ACTION_SELL, 80)
 	if len(closePositions) != 1 {
 		t.Fatalf("expected 1 close position, got %d", len(closePositions))
 	}

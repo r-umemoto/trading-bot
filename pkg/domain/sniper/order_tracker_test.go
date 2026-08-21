@@ -12,7 +12,7 @@ import (
 )
 
 func TestOrderTracker_BasicOperations(t *testing.T) {
-	ot := sniper.NewOrderTracker(nil)
+	ot := sniper.NewOrderTracker(nil, nil)
 	sniperID := "test-sniper"
 
 	// 1. Add and GetActive / GetAllActive
@@ -56,7 +56,7 @@ func TestOrderTracker_BasicOperations(t *testing.T) {
 }
 
 func TestOrderTracker_FailOrder(t *testing.T) {
-	ot := sniper.NewOrderTracker(nil)
+	ot := sniper.NewOrderTracker(nil, nil)
 	sniperID := "test-sniper"
 
 	ord := order.NewOrder("local-1", "7203", order.ACTION_BUY, 2000, 100)
@@ -78,7 +78,7 @@ func TestOrderTracker_FailOrder(t *testing.T) {
 }
 
 func TestOrderTracker_GetInflightStats(t *testing.T) {
-	ot := sniper.NewOrderTracker(nil)
+	ot := sniper.NewOrderTracker(nil, nil)
 	sniperID := "test-sniper"
 
 	// Nil element handling
@@ -199,7 +199,7 @@ func TestOrderTracker_GetInflightStats(t *testing.T) {
 }
 
 func TestOrderTracker_Update(t *testing.T) {
-	ot := sniper.NewOrderTracker(nil)
+	ot := sniper.NewOrderTracker(nil, nil)
 	sniperID := "test-sniper"
 	sym := symbol.Symbol{Code: "7203"}
 
@@ -247,7 +247,7 @@ func TestOrderTracker_Update(t *testing.T) {
 }
 
 func TestOrderTracker_PrepareActiveOrders(t *testing.T) {
-	ot := sniper.NewOrderTracker(nil)
+	ot := sniper.NewOrderTracker(nil, nil)
 	sniperID := "test-sniper"
 
 	// Add preparing order
@@ -272,7 +272,7 @@ func TestOrderTracker_PrepareActiveOrders(t *testing.T) {
 }
 
 func TestOrderTracker_Update_IFDPromotion(t *testing.T) {
-	ot := sniper.NewOrderTracker(nil)
+	ot := sniper.NewOrderTracker(nil, nil)
 	sniperID := "test-sniper"
 	sym := symbol.Symbol{Code: "7203"}
 
@@ -315,7 +315,7 @@ func TestOrderTracker_Update_IFDPromotion(t *testing.T) {
 func TestOrderTracker_Update_TombstoneResurrection(t *testing.T) {
 	// Path A: Tombstone order matches an ID directly present in the report
 	t.Run("Resurrection Path A", func(t *testing.T) {
-		ot := sniper.NewOrderTracker(nil)
+		ot := sniper.NewOrderTracker(nil, nil)
 		sniperID := "test-sniper"
 		sym := symbol.Symbol{Code: "7203"}
 
@@ -343,7 +343,7 @@ func TestOrderTracker_Update_TombstoneResurrection(t *testing.T) {
 
 	// Path B: Tombstone local ID matches untracked API order properties
 	t.Run("Resurrection Path B", func(t *testing.T) {
-		ot := sniper.NewOrderTracker(nil)
+		ot := sniper.NewOrderTracker(nil, nil)
 		sniperID := "test-sniper"
 		sym := symbol.Symbol{Code: "7203"}
 
@@ -382,7 +382,7 @@ func (m *mockPolicy) ApplySyntheticFill(o *order.Order, t tick.Tick) {
 }
 
 func TestOrderTracker_PrepareActiveOrders_Full(t *testing.T) {
-	ot := sniper.NewOrderTracker(nil)
+	ot := sniper.NewOrderTracker(nil, nil)
 	sniperID := "test-sniper"
 
 	// 1. Completed parent order with IfDone child (not preparing)
@@ -455,7 +455,7 @@ func TestOrderTracker_PrepareActiveOrders_Full(t *testing.T) {
 }
 
 func TestOrderTracker_Update_PreservesChildRequest(t *testing.T) {
-	ot := sniper.NewOrderTracker(nil)
+	ot := sniper.NewOrderTracker(nil, nil)
 	sniperID := "test-sniper"
 	symbolDetail := symbol.Symbol{Code: "7203"}
 

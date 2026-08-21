@@ -72,12 +72,13 @@ func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger 
 	if logger == nil {
 		logger = slog.Default()
 	}
+	positions := NewPositionTracker(logger)
 	return &SniperNest{
 		SymbolCode:  code,
 		Detail:      detail,
 		snipers:     snipers,
-		orders:      NewOrderTracker(logger),
-		positions:   NewPositionTracker(logger),
+		orders:      NewOrderTracker(positions, logger),
+		positions:   positions,
 		performance: NewPerformanceTracker(),
 		cooldowns:   NewCooldownTracker(),
 		Logger:      logger,
@@ -303,6 +304,9 @@ func (n *SniperNest) AddOrder(sniperID string, ord *order.Order) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.orders.Add(sniperID, ord)
+	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && ord.Request != nil {
+		_ = n.positions.LockPositions(sniperID, ord.ID, ord.Request.ClosePositions)
+	}
 }
 
 // GetSniperActiveOrders は特定のスナイパーのアクティブな注文リストを返します。
@@ -607,10 +611,7 @@ func (n *SniperNest) ReconcileTarget(
 		matchingOrder.CancelSentAt = now
 		return CancelBullet{OrderID: matchingOrder.ID}
 	}
-	activeOrders := n.orders.GetActive(sniperID)
-	lockedHoldIDs := order.ActiveOrders(activeOrders).LockedHoldIDs()
-
-	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType, lockedHoldIDs)
+	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType)
 	if exit != nil {
 		entry.IfDone = exit
 	}
@@ -629,13 +630,12 @@ func (n *SniperNest) buildOrderPairFromTarget(
 	exchange order.ExchangeMarket,
 	marginType order.MarginTradeType,
 	accountType order.AccountType,
-	lockedHoldIDs map[string]bool,
 ) (*order.Order, *order.Order) {
 	isExit := (cashMargin == order.CASH_MARGIN_MARGIN_EXIT)
 
 	var closePositions []order.ClosePosition
 	if isExit {
-		closePositions, _ = n.positions.MatchPositionsToClose(sniperID, action, qty, lockedHoldIDs)
+		closePositions, _ = n.positions.MatchPositionsToClose(sniperID, action, qty)
 	}
 
 	entryReq := &order.OrderRequest{

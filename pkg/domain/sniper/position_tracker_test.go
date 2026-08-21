@@ -247,14 +247,15 @@ func TestPositionTracker_MatchPositionsToClose(t *testing.T) {
 	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-2", Qty: 80, Price: 2010}, order.ACTION_BUY, nil, func(pnl float64) {})
 	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-3", Qty: 80, Price: 2015}, order.ACTION_BUY, nil, func(pnl float64) {})
 
-	locked := map[string]bool{
-		"buy-1": true, // buy-1 is locked/blocked
+	// Lock buy-1 using order ID "dummy-order"
+	if err := pt.LockPositions(sniperID, "dummy-order", []order.ClosePosition{{HoldID: "buy-1", Qty: 100}}); err != nil {
+		t.Fatalf("failed to lock: %v", err)
 	}
 
 	// We want to sell 50 shares. This means we must close existing Buy positions.
 	// buy-1 is locked, buy-2 has 80, so buy-2 will fulfill the 50 shares completely.
 	// This will cause remainingQty to become <= 0 and trigger the break condition when checking buy-3.
-	closePos, orderType := pt.MatchPositionsToClose(sniperID, order.ACTION_SELL, 50, locked)
+	closePos, orderType := pt.MatchPositionsToClose(sniperID, order.ACTION_SELL, 50)
 	if orderType != order.CLOSE_POSITION_ORDER_NONE {
 		t.Errorf("unexpected close position order type: %v", orderType)
 	}
