@@ -661,8 +661,8 @@ func TestActiveOrders_LockedHoldIDs(t *testing.T) {
 	if locked["hold-completed"] {
 		t.Errorf("completed order should not lock hold ID")
 	}
-	if locked["hold-cancelsent"] {
-		t.Errorf("cancel sent order should not lock hold ID")
+	if !locked["hold-cancelsent"] {
+		t.Errorf("expected hold-cancelsent to be locked")
 	}
 	if !locked["hold-ifdone-exec"] {
 		t.Errorf("expected hold-ifdone-exec to be locked via parent execution")
