@@ -2,13 +2,10 @@ package sniper
 
 import (
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
-	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
-	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 type tombstoneEntry struct {
@@ -38,15 +35,17 @@ type OrderTracker struct {
 	processedExecutions map[string]bool
 	logger              *slog.Logger
 	pendingExits        map[string][]pendingExecEntry // Key: HoldID -> Value: 保留されている約定情報のリスト
+	positions           *PositionTracker              // 🌟
 }
 
-func NewOrderTracker(logger *slog.Logger) *OrderTracker {
+func NewOrderTracker(positions *PositionTracker, logger *slog.Logger) *OrderTracker {
 	return &OrderTracker{
 		activeOrders:        make(map[string][]*order.Order),
 		tombstones:          make(map[string][]tombstoneEntry),
 		processedExecutions: make(map[string]bool),
 		logger:              logger,
 		pendingExits:        make(map[string][]pendingExecEntry),
+		positions:           positions,
 	}
 }
 
@@ -78,6 +77,9 @@ func (ot *OrderTracker) FailOrder(sniperID string, ord *order.Order) bool {
 				ord:       o,
 				deletedAt: time.Now(),
 			})
+			if ot.positions != nil {
+				ot.positions.UnlockPositions(sniperID, o.ID)
+			}
 			return true
 		}
 	}
@@ -91,6 +93,9 @@ func (ot *OrderTracker) DestroyOrder(sniperID string, ord *order.Order) bool {
 	for i, o := range orders {
 		if o == ord {
 			ot.activeOrders[sniperID] = append(orders[:i], orders[i+1:]...)
+			if ot.positions != nil {
+				ot.positions.UnlockPositions(sniperID, o.ID)
+			}
 			return true
 		}
 	}
@@ -242,6 +247,22 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 		combined = append(combined, resurrected...)
 
 		reconciled, newExecs := order.ReconcileOrders(combined, report, detail.Code, ot.processedExecutions, now)
+
+		// Unlock positions for orders that are no longer active
+		for _, old := range combined {
+			found := false
+			for _, curr := range reconciled {
+				if curr.ID == old.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				if ot.positions != nil {
+					ot.positions.UnlockPositions(sniperID, old.ID)
+				}
+			}
+		}
 
 		// 3. Clean up the tombstones list (remove resurrected ones and keep only ones created within 30s)
 		var nextTombstones []tombstoneEntry
@@ -411,144 +432,20 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 	}
 }
 
-// PrepareActiveOrders filters completed orders, promotes IFD child orders, and applies synthetic fills.
-func (ot *OrderTracker) PrepareActiveOrders(sniperID string, t tick.Tick, policy strategy.ExecutionPolicy) ([]*order.Order, bool, *order.Order) {
-	var reconciled []*order.Order
-	var hasProcessingTrade bool
-	var blockingOrder *order.Order
-
+// PrepareActiveOrders filters completed orders and promotes IFD child orders.
+func (ot *OrderTracker) PrepareActiveOrders(sniperID string) []*order.Order {
 	orders := ot.activeOrders[sniperID]
-	for _, curr := range orders {
-		if curr.IsCompleted() {
-			if curr.IsFilled() && curr.IfDone != nil {
-				if curr.IfDone.InternalState() == order.STATE_PREPARING {
-					reconciled = append(reconciled, curr)
-					hasProcessingTrade = true
-					continue
-				}
-				child := curr.IfDone
-				curr.IfDone = nil
-				reconciled = append(reconciled, child)
-				hasProcessingTrade = true
-			}
-			continue
-		}
-
-		reconciled = append(reconciled, curr)
-		if curr.InternalState() != order.STATE_PREPARING {
-			hasProcessingTrade = true
-		}
-
-		isVerifiedServerOrder := !strings.HasPrefix(curr.ID, order.LOCAL_ID_PREFIX)
-		if policy != nil && !curr.IsPending() && !curr.IsCancelSent() && !curr.IsCompleted() && isVerifiedServerOrder {
-			policy.ApplySyntheticFill(curr, t)
-		}
-
-		if !curr.IsCompleted() && curr.InternalState() != order.STATE_PREPARING {
-			blockingOrder = curr
-		}
-	}
-	ot.activeOrders[sniperID] = reconciled
-
-	return reconciled, hasProcessingTrade, blockingOrder
-}
-
-// InflightStats holds aggregated stats for active orders of a sniper.
-type InflightStats struct {
-	InflightBuyEntry  float64
-	InflightSellEntry float64
-	InflightBuyExit   float64
-	InflightSellExit  float64
-	ActiveOrders      []*order.Order
-	PreparingOrder    *order.Order
-	OutstandingOrder  *order.Order
-	CancelingOrders   []*order.Order
+	aos := order.ActiveOrders(orders)
+	aos.Prepare()
+	ot.activeOrders[sniperID] = []*order.Order(aos)
+	return []*order.Order(aos)
 }
 
 // GetInflightStats aggregates and categorizes active orders for a sniper.
-func (ot *OrderTracker) GetInflightStats(sniperID string) InflightStats {
-	var stats InflightStats
+func (ot *OrderTracker) GetInflightStats(sniperID string) order.InflightStats {
 	orders := ot.activeOrders[sniperID]
-
-	// Build a map of execution IDs already covered by active/pending exit orders
-	coveredExecIDs := make(map[string]bool)
-	for _, o := range orders {
-		if o == nil || o.IsCompleted() || o.IsCancelSent() {
-			continue
-		}
-		if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && o.Request != nil {
-			for _, cp := range o.Request.ClosePositions {
-				coveredExecIDs[cp.HoldID] = true
-			}
-		}
-	}
-
-	for _, o := range orders {
-		if o == nil {
-			continue
-		}
-
-		// Track unmatched child exit orders for parent orders that have executions
-		if o.IfDone != nil {
-			for _, exec := range o.Executions {
-				if !coveredExecIDs[exec.ID] {
-					if o.IfDone.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-						if o.IfDone.Action == order.ACTION_BUY {
-							stats.InflightBuyExit += exec.Qty
-						} else if o.IfDone.Action == order.ACTION_SELL {
-							stats.InflightSellExit += exec.Qty
-						}
-					}
-				}
-			}
-		}
-
-		if o.IsCompleted() {
-			continue
-		}
-
-		if o.IsCancelSent() {
-			stats.CancelingOrders = append(stats.CancelingOrders, o)
-			continue
-		}
-
-		stats.ActiveOrders = append(stats.ActiveOrders, o)
-
-		if o.InternalState() == order.STATE_PREPARING {
-			stats.PreparingOrder = o
-		} else {
-			stats.OutstandingOrder = o
-		}
-
-		// Sum up inflight quantities (excluding orders expected to fill synthetically as they are already accounted for)
-		if !o.IsFillExpected() {
-			if o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
-				if o.Action == order.ACTION_BUY {
-					stats.InflightBuyEntry += o.OrderQty
-				} else if o.Action == order.ACTION_SELL {
-					stats.InflightSellEntry += o.OrderQty
-				}
-			} else if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-				if o.Action == order.ACTION_BUY {
-					stats.InflightBuyExit += o.OrderQty
-				} else if o.Action == order.ACTION_SELL {
-					stats.InflightSellExit += o.OrderQty
-				}
-			}
-		} else {
-			// If the order is expected to fill synthetically, its IfDone exits are also expected to activate
-			if o.IfDone != nil {
-				if o.IfDone.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-					if o.IfDone.Action == order.ACTION_BUY {
-						stats.InflightBuyExit += o.IfDone.OrderQty
-					} else if o.IfDone.Action == order.ACTION_SELL {
-						stats.InflightSellExit += o.IfDone.OrderQty
-					}
-				}
-			}
-		}
-	}
-	return stats
+	aos := order.ActiveOrders(orders)
+	return aos.GetInflightStats()
 }
 
 func makeCloseOrderCopy(orig *order.Order, holdID string, qty float64) *order.Order {
