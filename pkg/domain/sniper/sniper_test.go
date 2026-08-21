@@ -56,7 +56,7 @@ func TestSniper_BasicGettersAndMetadata(t *testing.T) {
 }
 
 func testTick(s *Sniper, nest *SniperNest, obs Observation) Bullet {
-	virtualPos := obs.CalculateVirtualPosition()
+	virtualPos := s.CalculateVirtualPosition(obs.Positions, obs.ActiveOrders)
 	input := strategy.StrategyInput{
 		Position:   virtualPos,
 		LatestTick: obs.Tick,
@@ -360,12 +360,12 @@ func TestSniperNest_UpdateAndObserve(t *testing.T) {
 	nest.Update(report, time.Now())
 
 	// 3. Observation の確認
-	obs := nest.PrepareObservation(sniperID, tick.Tick{Price: 2005}, &strategy.NoopPolicy{})
+	obs := nest.PrepareObservation(sniperID, tick.Tick{Price: 2005})
 	if len(obs.Positions) != 1 {
 		t.Fatalf("expected 1 position, got %d", len(obs.Positions))
 	}
-	if obs.HoldQty() != 100 {
-		t.Errorf("expected hold qty 100, got %f", obs.HoldQty())
+	if obs.Positions.TotalHoldQty() != 100 {
+		t.Errorf("expected hold qty 100, got %f", obs.Positions.TotalHoldQty())
 	}
 }
 
@@ -382,7 +382,8 @@ func TestSniperNest_Tick_Timeout(t *testing.T) {
 	}
 	nest.AddOrder(sniperID, ord)
 
-	nest.PrepareObservation(sniperID, tick.Tick{Price: 2000, CurrentPriceTime: time.Now()}, policy)
+	ApplyPolicyHelper(policy, nest.GetSniperActiveOrders(sniperID), tick.Tick{Price: 2000, CurrentPriceTime: time.Now()})
+	nest.PrepareObservation(sniperID, tick.Tick{Price: 2000, CurrentPriceTime: time.Now()})
 
 	if ord.Status() != order.ORDER_STATUS_WAITING {
 		t.Errorf("expected status to revert to WAITING, got %v", ord.Status())
@@ -425,7 +426,8 @@ func TestSniperNest_NoSyntheticFillOnCancelSent(t *testing.T) {
 	nest.AddOrder(sniperID, ord)
 
 	// 2. 貫通する Tick を渡す（本来なら FILL_EXPECTED に上書きされる条件）
-	nest.PrepareObservation(sniperID, tick.Tick{Price: 1990, CurrentPriceTime: time.Now()}, policy)
+	ApplyPolicyHelper(policy, nest.GetSniperActiveOrders(sniperID), tick.Tick{Price: 1990, CurrentPriceTime: time.Now()})
+	nest.PrepareObservation(sniperID, tick.Tick{Price: 1990, CurrentPriceTime: time.Now()})
 
 	// 3. ステータスが上書きされていないことを確認
 	if ord.Status() != order.ORDER_STATUS_CANCEL_SENT {

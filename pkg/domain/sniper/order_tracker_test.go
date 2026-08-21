@@ -254,15 +254,10 @@ func TestOrderTracker_PrepareActiveOrders(t *testing.T) {
 	ord := order.NewOrder("local-1", "7203", order.ACTION_BUY, 2000, 100)
 	ot.Add(sniperID, ord)
 
-	active, hasProcessing, blocking := ot.PrepareActiveOrders(sniperID, tick.Tick{Price: 2000}, &strategy.NoopPolicy{})
+	sniper.ApplyPolicyHelper(&strategy.NoopPolicy{}, ot.GetActive(sniperID), tick.Tick{Price: 2000})
+	active := ot.PrepareActiveOrders(sniperID)
 	if len(active) != 1 || active[0].ID != "local-1" {
 		t.Errorf("expected 1 active order, got %v", active)
-	}
-	if hasProcessing {
-		t.Error("expected hasProcessing to be false")
-	}
-	if blocking != nil {
-		t.Errorf("expected blocking to be nil, got %+v", blocking)
 	}
 
 	// The status should remain preparing
@@ -377,8 +372,9 @@ type mockPolicy struct {
 	applied []*order.Order
 }
 
-func (m *mockPolicy) ApplySyntheticFill(o *order.Order, t tick.Tick) {
+func (m *mockPolicy) ShouldFill(o *order.Order, t tick.Tick) bool {
 	m.applied = append(m.applied, o)
+	return true
 }
 
 func TestOrderTracker_PrepareActiveOrders_Full(t *testing.T) {
@@ -408,7 +404,8 @@ func TestOrderTracker_PrepareActiveOrders_Full(t *testing.T) {
 	ot.Add(sniperID, oActive)
 
 	policy := &mockPolicy{}
-	active, hasProcessing, blocking := ot.PrepareActiveOrders(sniperID, tick.Tick{Price: 2000}, policy)
+	sniper.ApplyPolicyHelper(policy, ot.GetActive(sniperID), tick.Tick{Price: 2000})
+	active := ot.PrepareActiveOrders(sniperID)
 
 	// Verification
 	// - p1 is completed & filled, its child c1 (pending) is promoted and p1 is discarded.
@@ -436,16 +433,6 @@ func TestOrderTracker_PrepareActiveOrders_Full(t *testing.T) {
 	}
 	if !foundC1 || !foundP2 || !foundActive {
 		t.Errorf("unexpected active orders list: %+v", active)
-	}
-
-	// hasProcessing should be true because outstanding active and promoted children exist
-	if !hasProcessing {
-		t.Error("expected hasProcessing to be true")
-	}
-
-	// blockingOrder should be oActive (it is not preparing, not completed, active)
-	if blocking != oActive {
-		t.Errorf("expected blocking order to be active-1, got %v", blocking)
 	}
 
 	// ApplySyntheticFill should be called only on oActive (since c1 is promoted within the loop, the loop continues and c1 doesn't go through ApplySyntheticFill in the same call)

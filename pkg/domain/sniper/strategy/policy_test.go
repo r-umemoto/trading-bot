@@ -12,6 +12,26 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
+func applySyntheticFillHelper(policy strategy.ExecutionPolicy, ord *order.Order, t tick.Tick) {
+	if !ord.IsEligibleForSyntheticFill() {
+		return
+	}
+	policy.UpdateState(ord, t)
+	if policy.ShouldReset(ord, t) {
+		ord.ResetSynthetic()
+		return
+	}
+	if ord.IsFillExpected() {
+		if policy.ShouldTimeout(ord, t) {
+			ord.MarkAsTimedOut()
+		}
+		return
+	}
+	if policy.ShouldFill(ord, t) {
+		ord.MarkAsFillExpected(t.CurrentPriceTime)
+	}
+}
+
 func TestTouchTTLPolicy_ApplySyntheticFill(t *testing.T) {
 	policy := &strategy.TouchTTLPolicy{TTL: 1 * time.Second}
 	now := time.Now()
@@ -21,7 +41,7 @@ func TestTouchTTLPolicy_ApplySyntheticFill(t *testing.T) {
 		ord.ToCancelSent()
 
 		// CancelSent order should not trigger fill expected
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 1999})
 		if ord.IsFillExpected() {
 			t.Error("expected CancelSent order not to trigger fill expected")
 		}
@@ -31,7 +51,7 @@ func TestTouchTTLPolicy_ApplySyntheticFill(t *testing.T) {
 		ord2.ToFilled()
 
 		// Completed order should not trigger fill expected
-		policy.ApplySyntheticFill(ord2, tick.Tick{Price: 1999})
+		applySyntheticFillHelper(policy, ord2, tick.Tick{Price: 1999})
 		if ord2.IsWaiting() { // should not change out of terminal state
 			t.Error("expected completed order to remain unchanged")
 		}
@@ -40,13 +60,13 @@ func TestTouchTTLPolicy_ApplySyntheticFill(t *testing.T) {
 	t.Run("Invalid prices", func(t *testing.T) {
 		// Zero order price or zero tick price should do nothing
 		ord := order.NewOrder("test", "7203", order.ACTION_BUY, 0, 100)
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000})
 		if ord.IsFillExpected() {
 			t.Error("expected zero order price not to trigger fill expected")
 		}
 
 		ord2 := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
-		policy.ApplySyntheticFill(ord2, tick.Tick{Price: 0})
+		applySyntheticFillHelper(policy, ord2, tick.Tick{Price: 0})
 		if ord2.IsFillExpected() {
 			t.Error("expected zero tick price not to trigger fill expected")
 		}
@@ -57,7 +77,7 @@ func TestTouchTTLPolicy_ApplySyntheticFill(t *testing.T) {
 		ord.ToInProgress()
 
 		// Touch (tick <= ord.OrderPrice)
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000, CurrentPriceTime: now})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000, CurrentPriceTime: now})
 		if !ord.IsFillExpected() {
 			t.Error("expected order to be FillExpected on touch")
 		}
@@ -66,13 +86,13 @@ func TestTouchTTLPolicy_ApplySyntheticFill(t *testing.T) {
 		}
 
 		// Subsequent touch before TTL expires should remain FillExpected
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000, CurrentPriceTime: now.Add(500 * time.Millisecond)})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000, CurrentPriceTime: now.Add(500 * time.Millisecond)})
 		if !ord.IsFillExpected() {
 			t.Error("expected order to remain FillExpected before TTL")
 		}
 
 		// Touch after TTL expires should timeout and revert to Waiting
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000, CurrentPriceTime: now.Add(1500 * time.Millisecond)})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000, CurrentPriceTime: now.Add(1500 * time.Millisecond)})
 		if !ord.IsWaiting() {
 			t.Errorf("expected order to revert to Waiting on timeout, got %v", ord.Status())
 		}
@@ -81,19 +101,19 @@ func TestTouchTTLPolicy_ApplySyntheticFill(t *testing.T) {
 		}
 
 		// Re-touch during TouchTimeout and same price should not trigger expected again
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000, CurrentPriceTime: now.Add(2000 * time.Millisecond)})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000, CurrentPriceTime: now.Add(2000 * time.Millisecond)})
 		if ord.IsFillExpected() {
 			t.Error("expected order not to trigger FillExpected again while TouchTimeout is true")
 		}
 
 		// Price moves away (tick > ord.OrderPrice for buy) -> reset TouchTimeout
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2001, CurrentPriceTime: now.Add(2500 * time.Millisecond)})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2001, CurrentPriceTime: now.Add(2500 * time.Millisecond)})
 		if ord.Synthetic.TouchTimeout {
 			t.Error("expected TouchTimeout to be reset when price moves away")
 		}
 
 		// Touch again with zero price time (triggers fallback to time.Now)
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000})
 		if !ord.IsFillExpected() {
 			t.Error("expected order to be FillExpected again after reset")
 		}
@@ -104,13 +124,13 @@ func TestTouchTTLPolicy_ApplySyntheticFill(t *testing.T) {
 		ord.ToInProgress()
 
 		// Touch (tick >= ord.OrderPrice)
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000, CurrentPriceTime: now})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000, CurrentPriceTime: now})
 		if !ord.IsFillExpected() {
 			t.Error("expected order to be FillExpected on touch")
 		}
 
 		// Price moves away (tick < ord.OrderPrice for sell) -> reset
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999, CurrentPriceTime: now})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 1999, CurrentPriceTime: now})
 		if ord.IsFillExpected() {
 			t.Error("expected FillExpected to be reset when price moves away")
 		}
@@ -123,13 +143,13 @@ func TestStrictPiercePolicy_ApplySyntheticFill(t *testing.T) {
 	t.Run("Early returns and invalid prices", func(t *testing.T) {
 		ord := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
 		ord.ToCancelSent()
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 1999})
 		if ord.IsFillExpected() {
 			t.Error("expected cancel sent order to be ignored")
 		}
 
 		ord2 := order.NewOrder("test", "7203", order.ACTION_BUY, 0, 100)
-		policy.ApplySyntheticFill(ord2, tick.Tick{Price: 2000})
+		applySyntheticFillHelper(policy, ord2, tick.Tick{Price: 2000})
 		if ord2.IsFillExpected() {
 			t.Error("expected zero price order to be ignored")
 		}
@@ -140,19 +160,19 @@ func TestStrictPiercePolicy_ApplySyntheticFill(t *testing.T) {
 		ord.ToInProgress()
 
 		// Touch only (price == ord.OrderPrice) -> should NOT fill expected
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000})
 		if ord.IsFillExpected() {
 			t.Error("expected touch only not to trigger Pierce fill expected")
 		}
 
 		// Pierce (price < ord.OrderPrice) -> should fill expected
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 1999})
 		if !ord.IsFillExpected() {
 			t.Error("expected pierce to trigger fill expected")
 		}
 
 		// Move away (price >= ord.OrderPrice) -> reset
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000})
 		if ord.IsFillExpected() {
 			t.Error("expected fill expected to reset when price is no longer pierced")
 		}
@@ -163,13 +183,13 @@ func TestStrictPiercePolicy_ApplySyntheticFill(t *testing.T) {
 		ord.ToInProgress()
 
 		// Pierce (price > ord.OrderPrice) -> should fill expected
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2001})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2001})
 		if !ord.IsFillExpected() {
 			t.Error("expected pierce to trigger fill expected")
 		}
 
 		// Move away (price <= ord.OrderPrice) -> reset
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 2000})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 2000})
 		if ord.IsFillExpected() {
 			t.Error("expected fill expected to reset when price is no longer pierced")
 		}
@@ -185,8 +205,6 @@ func TestStrictPiercePolicy_ApplySyntheticFill(t *testing.T) {
 	})
 }
 
-
-
 func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 	policy := &strategy.VolumeConsumptionPolicy{QueueOffsetRatio: 0.8}
 	now := time.Now()
@@ -194,19 +212,19 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 	t.Run("Early returns and invalid prices", func(t *testing.T) {
 		ord := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
 		ord.ToCancelSent()
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 1999})
 		if ord.IsFillExpected() {
 			t.Error("expected cancel sent order to be ignored")
 		}
 
 		ord2 := order.NewOrder("test", "7203", order.ACTION_BUY, 0, 100)
-		policy.ApplySyntheticFill(ord2, tick.Tick{Price: 2000})
+		applySyntheticFillHelper(policy, ord2, tick.Tick{Price: 2000})
 		if ord2.IsFillExpected() {
 			t.Error("expected zero price order to be ignored")
 		}
 
 		ord3 := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
-		policy.ApplySyntheticFill(ord3, tick.Tick{Price: 0})
+		applySyntheticFillHelper(policy, ord3, tick.Tick{Price: 0})
 		if ord3.IsFillExpected() {
 			t.Error("expected zero price tick to be ignored")
 		}
@@ -217,13 +235,13 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		ord.ToInProgress()
 
 		// Pierce Buy -> Instant FillExpected
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999, CurrentPriceTime: now})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 1999, CurrentPriceTime: now})
 		if !ord.IsFillExpected() {
 			t.Error("expected instant fill expected on pierce")
 		}
 
 		// Pierce again when already FillExpected -> should do nothing / remain FillExpected
-		policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999, CurrentPriceTime: now})
+		applySyntheticFillHelper(policy, ord, tick.Tick{Price: 1999, CurrentPriceTime: now})
 		if !ord.IsFillExpected() {
 			t.Error("expected to remain fill expected")
 		}
@@ -234,7 +252,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 
 		// Touch (price == ord.OrderPrice)
 		// First touch: records InitialQueueQty, LastVolumeUpdate, sets ConsumedVolume=0
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:         2000,
 			TradingVolume: 10000,
 			BestBid:       tick.FirstQuote{Qty: 100},
@@ -248,7 +266,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		}
 
 		// Volume increase (but under threshold of 100 * 0.8 = 80)
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:         2000,
 			TradingVolume: 10050,
 		})
@@ -260,7 +278,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		}
 
 		// Volume increase above threshold
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:            2000,
 			TradingVolume:    10100,
 			CurrentPriceTime: now,
@@ -270,7 +288,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		}
 
 		// Subsequent ticks check elapsed time (under timeout of 2s)
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:            2000,
 			TradingVolume:    10150,
 			CurrentPriceTime: now.Add(1 * time.Second),
@@ -280,7 +298,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		}
 
 		// Timeout (elapsed > 2s) with fallback price time to time.Now
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:            2000,
 			TradingVolume:    10200,
 			CurrentPriceTime: now.Add(4 * time.Second),
@@ -293,7 +311,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		ord := order.NewOrder("test", "7203", order.ACTION_SELL, 2000, 100)
 		ord.ToInProgress()
 
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:         2000,
 			TradingVolume: 10000,
 			BestBid:       tick.FirstQuote{Qty: 50},
@@ -306,7 +324,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		// Sell Pierce -> Instant FillExpected
 		ord2 := order.NewOrder("test2", "7203", order.ACTION_SELL, 2000, 100)
 		ord2.ToInProgress()
-		policy.ApplySyntheticFill(ord2, tick.Tick{Price: 2001, CurrentPriceTime: now})
+		applySyntheticFillHelper(policy, ord2, tick.Tick{Price: 2001, CurrentPriceTime: now})
 		if !ord2.IsFillExpected() {
 			t.Error("expected instant fill expected on sell pierce")
 		}
@@ -316,14 +334,14 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		ord := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
 		ord.ToInProgress()
 
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:         2000,
 			TradingVolume: 10000,
 			BestBid:       tick.FirstQuote{Qty: 100},
 		})
 
 		// Volume increase above threshold, but CurrentPriceTime is Zero
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:         2000,
 			TradingVolume: 10100,
 		})
@@ -340,7 +358,7 @@ func TestVolumeConsumptionPolicy_ApplySyntheticFill(t *testing.T) {
 		ord := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
 		ord.ToInProgress()
 
-		policy.ApplySyntheticFill(ord, tick.Tick{
+		applySyntheticFillHelper(policy, ord, tick.Tick{
 			Price:         2001,
 			TradingVolume: 10000,
 		})
@@ -364,7 +382,7 @@ func TestNoopPolicy(t *testing.T) {
 	ord := order.NewOrder("test", "7203", order.ACTION_BUY, 2000, 100)
 	ord.ToInProgress()
 
-	policy.ApplySyntheticFill(ord, tick.Tick{Price: 1999})
+	applySyntheticFillHelper(policy, ord, tick.Tick{Price: 1999})
 	if ord.IsFillExpected() {
 		t.Error("expected NoopPolicy not to apply synthetic fill")
 	}
@@ -484,4 +502,3 @@ func TestIsOrderDesiredDefault(t *testing.T) {
 		}
 	})
 }
-

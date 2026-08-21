@@ -492,5 +492,167 @@ func (o *Order) TransitionToInternalState(to InternalState) {
 // ActiveOrders is a collection of tracked order pointers.
 type ActiveOrders []*Order
 
+// InflightStats holds aggregated stats for active orders of a sniper.
+type InflightStats struct {
+	InflightBuyEntry  float64
+	InflightSellEntry float64
+	InflightBuyExit   float64
+	InflightSellExit  float64
+	ActiveOrders      []*Order
+	PreparingOrder    *Order
+	OutstandingOrder  *Order
+	CancelingOrders   []*Order
+}
+
+// Prepare filters completed orders and promotes IFD child orders.
+// It modifies the slice elements in-place.
+func (aos *ActiveOrders) Prepare() {
+	var reconciled ActiveOrders
+
+	current := *aos
+	for _, curr := range current {
+		if curr == nil {
+			continue
+		}
+		if curr.IsCompleted() {
+			if curr.IsFilled() && curr.IfDone != nil {
+				if curr.IfDone.InternalState() == STATE_PREPARING {
+					reconciled = append(reconciled, curr)
+					continue
+				}
+				child := curr.IfDone
+				curr.IfDone = nil
+				reconciled = append(reconciled, child)
+			}
+			continue
+		}
+
+		reconciled = append(reconciled, curr)
+	}
+	*aos = reconciled
+}
+
+// GetInflightStats aggregates and categorizes active orders.
+func (aos ActiveOrders) GetInflightStats() InflightStats {
+	var stats InflightStats
+
+	// Build a map of execution IDs already covered by active/pending exit orders
+	coveredExecIDs := make(map[string]bool)
+	for _, o := range aos {
+		if o == nil || o.IsCompleted() || o.IsCancelSent() {
+			continue
+		}
+		if o.CashMargin == CASH_MARGIN_MARGIN_EXIT && o.Request != nil {
+			for _, cp := range o.Request.ClosePositions {
+				coveredExecIDs[cp.HoldID] = true
+			}
+		}
+	}
+
+	for _, o := range aos {
+		if o == nil {
+			continue
+		}
+
+		// Track unmatched child exit orders for parent orders that have executions
+		if o.IfDone != nil {
+			for _, exec := range o.Executions {
+				if !coveredExecIDs[exec.ID] {
+					if o.IfDone.CashMargin == CASH_MARGIN_MARGIN_EXIT {
+						if o.IfDone.Action == ACTION_BUY {
+							stats.InflightBuyExit += exec.Qty
+						} else if o.IfDone.Action == ACTION_SELL {
+							stats.InflightSellExit += exec.Qty
+						}
+					}
+				}
+			}
+		}
+
+		if o.IsCompleted() {
+			continue
+		}
+
+		if o.IsCancelSent() {
+			stats.CancelingOrders = append(stats.CancelingOrders, o)
+			continue
+		}
+
+		stats.ActiveOrders = append(stats.ActiveOrders, o)
+
+		if o.InternalState() == STATE_PREPARING {
+			stats.PreparingOrder = o
+		} else {
+			stats.OutstandingOrder = o
+		}
+
+		// Sum up inflight quantities (excluding orders expected to fill synthetically as they are already accounted for)
+		if !o.IsFillExpected() {
+			if o.CashMargin == CASH_MARGIN_MARGIN_ENTRY {
+				if o.Action == ACTION_BUY {
+					stats.InflightBuyEntry += o.OrderQty
+				} else if o.Action == ACTION_SELL {
+					stats.InflightSellEntry += o.OrderQty
+				}
+			} else if o.CashMargin == CASH_MARGIN_MARGIN_EXIT {
+				if o.Action == ACTION_BUY {
+					stats.InflightBuyExit += o.OrderQty
+				} else if o.Action == ACTION_SELL {
+					stats.InflightSellExit += o.OrderQty
+				}
+			}
+		} else {
+			// If the order is expected to fill synthetically, its IfDone exits are also expected to activate
+			if o.IfDone != nil {
+				if o.IfDone.CashMargin == CASH_MARGIN_MARGIN_EXIT {
+					if o.IfDone.Action == ACTION_BUY {
+						stats.InflightBuyExit += o.IfDone.OrderQty
+					} else if o.IfDone.Action == ACTION_SELL {
+						stats.InflightSellExit += o.IfDone.OrderQty
+					}
+				}
+			}
+		}
+	}
+	return stats
+}
+
+// ResetSynthetic resets all synthetic fill state parameters to initial values.
+func (o *Order) ResetSynthetic() {
+	if o.IsFillExpected() {
+		o.ToWaiting()
+	}
+	o.Synthetic.TouchTimeout = false
+	o.Synthetic.ExpectedAt = time.Time{}
+	o.Synthetic.InitialQueueQty = 0
+	o.Synthetic.ConsumedVolume = 0
+	o.Synthetic.LastVolumeUpdate = 0
+}
+
+// MarkAsFillExpected marks the order as fill expected with the specified expected time.
+func (o *Order) MarkAsFillExpected(expectedAt time.Time) {
+	o.ToFillExpected()
+	o.Synthetic.ExpectedAt = expectedAt
+	if o.Synthetic.ExpectedAt.IsZero() {
+		o.Synthetic.ExpectedAt = time.Now()
+	}
+}
+
+// MarkAsTimedOut reverts the order status to WAITING and records touch timeout.
+func (o *Order) MarkAsTimedOut() {
+	o.ToWaiting()
+	o.Synthetic.TouchTimeout = true
+}
+
+// IsEligibleForSyntheticFill returns true if the order is active and eligible for synthetic fill evaluation.
+// Returns false if the order is nil, completed, or in the process of being canceled.
+func (o *Order) IsEligibleForSyntheticFill() bool {
+	if o == nil {
+		return false
+	}
+	return !o.IsCompleted() && !o.IsCancelSent()
+}
+
+
 
 
