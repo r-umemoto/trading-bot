@@ -524,9 +524,9 @@ func TestTradeUseCase_OutofOrderReconciliation(t *testing.T) {
 	}
 
 	// 確定損益を確認
-	obs := nest.PrepareObservation("test_sniper_7203", tick.Tick{Price: 2600}, &strategy.NoopPolicy{})
-	if obs.Performance.RealizedPnL != 10000.0 {
-		t.Errorf("expected 10000.0 realized PnL from the matched pending exit, got %f", obs.Performance.RealizedPnL)
+	perf := nest.GetPerformance("test_sniper_7203")
+	if perf.RealizedPnL != 10000.0 {
+		t.Errorf("expected 10000.0 realized PnL from the matched pending exit, got %f", perf.RealizedPnL)
 	}
 }
 
@@ -600,9 +600,9 @@ func TestTradeUseCase_OutofOrderReconciliation_MultiClose(t *testing.T) {
 	}
 
 	// 両方の決済PnLが計上され、確定損益が 20,000円になっていること
-	obs2 := nest.PrepareObservation("test_sniper_7203", tick.Tick{Price: 2600}, &strategy.NoopPolicy{})
-	if obs2.Performance.RealizedPnL != 20000.0 {
-		t.Errorf("expected 20000.0 realized PnL, got %f", obs2.Performance.RealizedPnL)
+	perf2 := nest.GetPerformance("test_sniper_7203")
+	if perf2.RealizedPnL != 20000.0 {
+		t.Errorf("expected 20000.0 realized PnL, got %f", perf2.RealizedPnL)
 	}
 }
 
@@ -655,9 +655,9 @@ func TestTradeUseCase_OutofOrderReconciliation_PartialClose(t *testing.T) {
 	op.UpdateOrders(order.Orders{Orders: []order.Order{*parentOrder1}})
 
 	// E_1 は正常に消し込まれ（含み損益は 0.0 になるが、まだ E_2 が無いので全体の確定損益は 10,000円になっていること）
-	obs1 := nest.PrepareObservation("test_sniper_7203", tick.Tick{Price: 2600}, &strategy.NoopPolicy{})
-	if obs1.Performance.RealizedPnL != 10000.0 {
-		t.Errorf("expected 10000.0 realized PnL after E_1 resolved, got %f", obs1.Performance.RealizedPnL)
+	perf1 := nest.GetPerformance("test_sniper_7203")
+	if perf1.RealizedPnL != 10000.0 {
+		t.Errorf("expected 10000.0 realized PnL after E_1 resolved, got %f", perf1.RealizedPnL)
 	}
 
 	// 3. 後から親建玉2 (E_2) の約定が届く
@@ -673,8 +673,8 @@ func TestTradeUseCase_OutofOrderReconciliation_PartialClose(t *testing.T) {
 		t.Errorf("expected 0.0 unrealized PnL (both closed), got %f", op.GetUnrealizedPnL("test_sniper_7203", 2600.0))
 	}
 
-	obs2_multi := nest.PrepareObservation("test_sniper_7203", tick.Tick{Price: 2600}, &strategy.NoopPolicy{})
-	if obs2_multi.Performance.RealizedPnL != 20000.0 {
-		t.Errorf("expected 20000.0 final realized PnL, got %f", obs2_multi.Performance.RealizedPnL)
+	perf2_multi := nest.GetPerformance("test_sniper_7203")
+	if perf2_multi.RealizedPnL != 20000.0 {
+		t.Errorf("expected 20000.0 final realized PnL, got %f", perf2_multi.RealizedPnL)
 	}
 }

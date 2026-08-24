@@ -154,8 +154,8 @@ func TestObservation_HoldQty(t *testing.T) {
 			{LeavesQty: 5, Action: order.ACTION_SELL},
 		},
 	}
-	if obs.HoldQty() != 5 {
-		t.Errorf("expected 5, got %f", obs.HoldQty())
+	if obs.Positions.TotalHoldQty() != 5 {
+		t.Errorf("expected 5, got %f", obs.Positions.TotalHoldQty())
 	}
 }
 
@@ -217,23 +217,17 @@ func TestSniperNest_PrepareObservation_IfDoneChild(t *testing.T) {
 
 	// 1. When the child order is still in STATE_PREPARING (not yet placed by infrastructure),
 	// PrepareObservation should keep the parent order active to block further actions.
-	obs := nest.PrepareObservation(sniperID, tick.Tick{Price: 2000}, nil)
+	obs := nest.PrepareObservation(sniperID, tick.Tick{Price: 2000})
 	if len(obs.ActiveOrders) != 1 || obs.ActiveOrders[0].ID != "parent" {
 		t.Errorf("expected parent order to remain active while child is preparing, got: %v", obs.ActiveOrders)
-	}
-	if !obs.HasProcessingTrade {
-		t.Error("expected HasProcessingTrade to be true")
 	}
 
 	// 2. Once the child order transitions to STATE_ACTIVE (placement confirmed),
 	// PrepareObservation should extract the child order and remove the parent order.
 	childOrd.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_ACTIVE)
-	obs = nest.PrepareObservation(sniperID, tick.Tick{Price: 2000}, nil)
+	obs = nest.PrepareObservation(sniperID, tick.Tick{Price: 2000})
 	if len(obs.ActiveOrders) != 1 || obs.ActiveOrders[0].ID != "child" {
 		t.Errorf("expected child order to be extracted once active, got: %v", obs.ActiveOrders)
-	}
-	if !obs.HasProcessingTrade {
-		t.Error("expected HasProcessingTrade to be true")
 	}
 }
 
@@ -802,6 +796,7 @@ func TestSniperNest_ReconcileTarget_PosInversion(t *testing.T) {
 }
 
 func TestObservation_CalculateVirtualPosition(t *testing.T) {
+	s := &Sniper{}
 	// Active orders contain entry BUY and entry SELL (short) which are FillExpected
 	oBuy := order.NewOrder("oBuy", "7203", order.ACTION_BUY, 2000, 100)
 	oBuy.BypassTransition(order.ORDER_STATUS_FILL_EXPECTED, order.STATE_ACTIVE)
@@ -818,7 +813,7 @@ func TestObservation_CalculateVirtualPosition(t *testing.T) {
 		ActiveOrders: []*order.Order{oBuy, oSell},
 	}
 
-	vpos := obs.CalculateVirtualPosition()
+	vpos := s.CalculateVirtualPosition(obs.Positions, obs.ActiveOrders)
 	// Physical position: 50
 	// Entry Buy: +100
 	// Entry Sell: -40
@@ -838,7 +833,7 @@ func TestObservation_CalculateVirtualPosition(t *testing.T) {
 		},
 		ActiveOrders: []*order.Order{},
 	}
-	vposShort := obsShort.CalculateVirtualPosition()
+	vposShort := s.CalculateVirtualPosition(obsShort.Positions, obsShort.ActiveOrders)
 	if vposShort.Qty != -100 {
 		t.Errorf("expected virtual qty -100, got %f", vposShort.Qty)
 	}

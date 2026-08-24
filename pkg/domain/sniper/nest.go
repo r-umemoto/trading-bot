@@ -26,25 +26,9 @@ type ReportableTarget interface {
 // Observation は SniperNest が観測し、整理した「現在の事実」です。
 // Sniper はこれを受け取って判断を下します。
 type Observation struct {
-	Tick               tick.Tick
-	Positions          []position.Position
-	Performance        Performance
-	ActiveOrders       []*order.Order
-	HasProcessingTrade bool
-	BlockingOrder      *order.Order
-}
-
-// HoldQty は現在の事実上の保有数量を返します
-func (o Observation) HoldQty() float64 {
-	var total float64
-	for _, p := range o.Positions {
-		if p.Action == order.ACTION_SELL {
-			total -= p.LeavesQty
-		} else {
-			total += p.LeavesQty
-		}
-	}
-	return total
+	Tick         tick.Tick
+	Positions    position.Positions
+	ActiveOrders []*order.Order
 }
 
 // FireAction はスナイパーの意思決定と、実行すべきアクションのペアです。
@@ -72,12 +56,13 @@ func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger 
 	if logger == nil {
 		logger = slog.Default()
 	}
+	positions := NewPositionTracker(logger)
 	return &SniperNest{
 		SymbolCode:  code,
 		Detail:      detail,
 		snipers:     snipers,
-		orders:      NewOrderTracker(logger),
-		positions:   NewPositionTracker(logger),
+		orders:      NewOrderTracker(positions, logger),
+		positions:   positions,
 		performance: NewPerformanceTracker(),
 		cooldowns:   NewCooldownTracker(),
 		Logger:      logger,
@@ -97,9 +82,39 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 		if s.GetLifecycle() == LifecycleStopped {
 			continue
 		}
-		obs := n.PrepareObservation(s.ID, t, s.ExecutionPolicy)
+		policy := s.ExecutionPolicy
+		if policy != nil {
+			activeOrders := n.orders.GetActive(s.ID)
+			for _, curr := range activeOrders {
+				if !curr.IsEligibleForSyntheticFill() {
+					continue
+				}
 
-		virtualPos := obs.CalculateVirtualPosition()
+				policy.UpdateState(curr, t)
+
+				if policy.ShouldReset(curr, t) {
+					curr.ResetSynthetic()
+					fmt.Printf("🔄 [%s] 価格が離れたため疑似約定ステータスをリセットしました: %s\n", curr.Symbol, curr.ID)
+					continue
+				}
+
+				if curr.IsFillExpected() {
+					if policy.ShouldTimeout(curr, t) {
+						curr.MarkAsTimedOut()
+						fmt.Printf("💔 [%s] 疑似約定がタイムアウトしました: %s\n", curr.Symbol, curr.ID)
+					}
+					continue
+				}
+
+				if policy.ShouldFill(curr, t) {
+					curr.MarkAsFillExpected(t.CurrentPriceTime)
+					fmt.Printf("⚡ [%s] 疑似約定を検知しました: %s (Price: %f, Tick: %f)\n", curr.Symbol, curr.ID, curr.OrderPrice, t.Price)
+				}
+			}
+		}
+		obs := n.PrepareObservation(s.ID, t)
+
+		virtualPos := s.CalculateVirtualPosition(obs.Positions, obs.ActiveOrders)
 
 		input := strategy.StrategyInput{
 			Position:   virtualPos,
@@ -113,10 +128,10 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 			// 🌟 不公正取引（自己対当クロス）の自動調停ロジック
 			if ordBullet, ok := bullet.(OrderBullet); ok {
 				newOrd := ordBullet.Order
-				
+
 				var conflictingOrder *order.Order
 				var conflictingSniperID string
-				
+
 				// 他のスナイパーが持つ「売買方向が反対」の未約定注文を探す
 				for otherSniperID, otherOrders := range n.orders.activeOrders {
 					if otherSniperID == s.ID {
@@ -142,7 +157,7 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 							slog.String("exit_sniper", s.ID),
 							slog.String("canceling_order_id", conflictingOrder.ID),
 							slog.String("canceling_sniper", conflictingSniperID))
-						
+
 						// キャンセル命令を発行して送信リストに追加
 						actions = append(actions, FireAction{
 							SniperID: conflictingSniperID,
@@ -156,7 +171,7 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 							slog.String("conflicting_order_id", conflictingOrder.ID),
 							slog.String("conflicting_sniper", conflictingSniperID))
 					}
-					
+
 					// 今回の発注は一旦スキップし、次のループに回す
 					continue
 				}
@@ -303,6 +318,9 @@ func (n *SniperNest) AddOrder(sniperID string, ord *order.Order) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.orders.Add(sniperID, ord)
+	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && ord.Request != nil {
+		_ = n.positions.LockPositions(sniperID, ord.ID, ord.Request.ClosePositions)
+	}
 }
 
 // GetSniperActiveOrders は特定のスナイパーのアクティブな注文リストを返します。
@@ -350,22 +368,19 @@ func (n *SniperNest) Update(report order.Orders, now time.Time) {
 }
 
 // PrepareObservation は最新の Tick をもとに、指定した Sniper に渡すためのスナップショットを作成します。
-func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick, policy strategy.ExecutionPolicy) Observation {
+func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick) Observation {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	n.lastTickTime = t.CurrentPriceTime // 🌟 最新のシミュレーション時刻を保存
+	n.lastTickTime = t.CurrentPriceTime // 🌟 最新 of simulation time
 
-	activeOrders, hasProcessingTrade, blockingOrder := n.orders.PrepareActiveOrders(sniperID, t, policy)
+	activeOrders := n.orders.PrepareActiveOrders(sniperID)
 	posCopy := n.positions.GetCopy(sniperID)
 
 	return Observation{
-		Tick:               t,
-		Positions:          posCopy,
-		Performance:        n.performance.Get(sniperID),
-		ActiveOrders:       activeOrders,
-		HasProcessingTrade: hasProcessingTrade,
-		BlockingOrder:      blockingOrder,
+		Tick:         t,
+		Positions:    posCopy,
+		ActiveOrders: activeOrders,
 	}
 }
 
@@ -607,10 +622,7 @@ func (n *SniperNest) ReconcileTarget(
 		matchingOrder.CancelSentAt = now
 		return CancelBullet{OrderID: matchingOrder.ID}
 	}
-	activeOrders := n.orders.GetActive(sniperID)
-	lockedHoldIDs := order.ActiveOrders(activeOrders).LockedHoldIDs()
-
-	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType, lockedHoldIDs)
+	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType)
 	if exit != nil {
 		entry.IfDone = exit
 	}
@@ -629,13 +641,12 @@ func (n *SniperNest) buildOrderPairFromTarget(
 	exchange order.ExchangeMarket,
 	marginType order.MarginTradeType,
 	accountType order.AccountType,
-	lockedHoldIDs map[string]bool,
 ) (*order.Order, *order.Order) {
 	isExit := (cashMargin == order.CASH_MARGIN_MARGIN_EXIT)
 
 	var closePositions []order.ClosePosition
 	if isExit {
-		closePositions, _ = n.positions.MatchPositionsToClose(sniperID, action, qty, lockedHoldIDs)
+		closePositions, _ = n.positions.MatchPositionsToClose(sniperID, action, qty)
 	}
 
 	entryReq := &order.OrderRequest{
@@ -697,38 +708,4 @@ func (n *SniperNest) buildOrderPairFromTarget(
 	return entry, exit
 }
 
-// CalculateVirtualPosition は Observation の状態から約定予定分を含んだ仮想ポジションを計算します
-func (obs Observation) CalculateVirtualPosition() strategy.Position {
-	var totalQty float64
-	var totalCost float64
-	for _, p := range obs.Positions {
-		if p.Action == order.ACTION_SELL {
-			totalQty -= p.LeavesQty
-			totalCost -= p.Price * p.LeavesQty
-		} else {
-			totalQty += p.LeavesQty
-			totalCost += p.Price * p.LeavesQty
-		}
-	}
-	for _, curr := range obs.ActiveOrders {
-		if curr != nil && curr.IsFillExpected() {
-			// 🌟 エントリー注文（新規建て）の約定予定のみを仮想ポジションに加算する。
-			// 決済注文（返済）の約定予定は、物理ポジションから減算しない（決済完了までポジション維持として扱う）。
-			if curr.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
-				switch curr.Action {
-				case order.ACTION_BUY:
-					totalQty += curr.OrderQty
-					totalCost += curr.OrderPrice * curr.OrderQty
-				case order.ACTION_SELL:
-					totalQty -= curr.OrderQty
-					totalCost -= curr.OrderPrice * curr.OrderQty
-				}
-			}
-		}
-	}
-	avgPrice := 0.0
-	if totalQty != 0 {
-		avgPrice = math.Abs(totalCost / totalQty)
-	}
-	return strategy.Position{Qty: totalQty, AveragePrice: avgPrice}
-}
+

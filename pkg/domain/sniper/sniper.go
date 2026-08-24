@@ -3,10 +3,12 @@ package sniper
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 )
@@ -170,6 +172,42 @@ func (s *Sniper) GetID() string {
 
 func (s *Sniper) GetStrategyName() string {
 	return s.Strategy.Name()
+}
+
+// CalculateVirtualPosition は物理ポジションとアクティブ注文から約定予定分を含んだ仮想ポジションを計算します
+func (s *Sniper) CalculateVirtualPosition(positions []position.Position, activeOrders []*order.Order) strategy.Position {
+	var totalQty float64
+	var totalCost float64
+	for _, p := range positions {
+		if p.Action == order.ACTION_SELL {
+			totalQty -= p.LeavesQty
+			totalCost -= p.Price * p.LeavesQty
+		} else {
+			totalQty += p.LeavesQty
+			totalCost += p.Price * p.LeavesQty
+		}
+	}
+	for _, curr := range activeOrders {
+		if curr != nil && curr.IsFillExpected() {
+			// 🌟 エントリー注文（新規建て）の約定予定のみを仮想ポジションに加算する。
+			// 決済注文（返済）の約定予定は、物理ポジションから減算しない（決済完了までポジション維持として扱う）。
+			if curr.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+				switch curr.Action {
+				case order.ACTION_BUY:
+					totalQty += curr.OrderQty
+					totalCost += curr.OrderPrice * curr.OrderQty
+				case order.ACTION_SELL:
+					totalQty -= curr.OrderQty
+					totalCost -= curr.OrderPrice * curr.OrderQty
+				}
+			}
+		}
+	}
+	avgPrice := 0.0
+	if totalQty != 0 {
+		avgPrice = math.Abs(totalCost / totalQty)
+	}
+	return strategy.Position{Qty: totalQty, AveragePrice: avgPrice}
 }
 
 

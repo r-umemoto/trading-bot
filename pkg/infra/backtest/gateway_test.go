@@ -330,7 +330,7 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	obs1 := sniper.Observation{
 		Tick: tick.Tick{Price: 400.0, CurrentPriceTime: baseTime},
 	}
-	virtualPos1 := obs1.CalculateVirtualPosition()
+	virtualPos1 := s.CalculateVirtualPosition(obs1.Positions, obs1.ActiveOrders)
 	input1 := strategy.StrategyInput{
 		Position:   virtualPos1,
 		LatestTick: obs1.Tick,
@@ -366,8 +366,8 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	strat.hasPosition = true
 
 	// ---- 2. 決済（買い戻し）の評価と発注 ----
-	obs2 := nest.PrepareObservation(s.ID, tick.Tick{Price: 395.0, CurrentPriceTime: baseTime.Add(2 * time.Second)}, s.ExecutionPolicy)
-	virtualPos2 := obs2.CalculateVirtualPosition()
+	obs2 := nest.PrepareObservation(s.ID, tick.Tick{Price: 395.0, CurrentPriceTime: baseTime.Add(2 * time.Second)})
+	virtualPos2 := s.CalculateVirtualPosition(obs2.Positions, obs2.ActiveOrders)
 	input2 := strategy.StrategyInput{
 		Position:   virtualPos2,
 		LatestTick: obs2.Tick,

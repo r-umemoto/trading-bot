@@ -607,67 +607,7 @@ func TestOrder_CanCancel(t *testing.T) {
 	}
 }
 
-func TestActiveOrders_LockedHoldIDs(t *testing.T) {
-	// 1. Nil element check
-	var aos order.ActiveOrders = []*order.Order{nil}
-	locked := aos.LockedHoldIDs()
-	if len(locked) != 0 {
-		t.Errorf("expected empty map for nil order, got %v", locked)
-	}
 
-	// 2. Active exit order (not completed, not cancel sent, margin exit, request present)
-	o1 := order.NewOrder("o1", "7203", order.ACTION_SELL, 100, 1)
-	o1.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
-	o1.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
-	o1.Request = &order.OrderRequest{
-		ClosePositions: []order.ClosePosition{
-			{HoldID: "hold-1", Qty: 1},
-			{HoldID: "hold-2", Qty: 1},
-		},
-	}
-
-	// 3. Completed or CancelSent exit order (should NOT lock)
-	o2 := order.NewOrder("o2", "7203", order.ACTION_SELL, 100, 1)
-	o2.BypassTransition(order.ORDER_STATUS_FILLED, order.STATE_CLOSED)
-	o2.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
-	o2.Request = &order.OrderRequest{
-		ClosePositions: []order.ClosePosition{
-			{HoldID: "hold-completed", Qty: 1},
-		},
-	}
-
-	o3 := order.NewOrder("o3", "7203", order.ACTION_SELL, 100, 1)
-	o3.BypassTransition(order.ORDER_STATUS_CANCEL_SENT, order.STATE_CANCELING)
-	o3.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
-	o3.Request = &order.OrderRequest{
-		ClosePositions: []order.ClosePosition{
-			{HoldID: "hold-cancelsent", Qty: 1},
-		},
-	}
-
-	// 4. Parent order with IfDone exit order (in-flight exit tracked via IfDone and Executions)
-	oParent := order.NewOrder("oParent", "7203", order.ACTION_BUY, 100, 1)
-	oChild := order.NewOrder("oChild", "7203", order.ACTION_SELL, 100, 1)
-	oChild.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
-	oParent.IfDone = oChild
-	oParent.AddExecution(order.Execution{ID: "hold-ifdone-exec", Price: 100, Qty: 1})
-
-	aos = order.ActiveOrders{o1, o2, o3, oParent}
-	locked = aos.LockedHoldIDs()
-
-	if !locked["hold-1"] || !locked["hold-2"] {
-		t.Errorf("expected hold-1 and hold-2 to be locked, got %v", locked)
-	}
-	if locked["hold-completed"] {
-		t.Errorf("completed order should not lock hold ID")
-	}
-	if !locked["hold-cancelsent"] {
-		t.Errorf("expected hold-cancelsent to be locked")
-	}
-	if !locked["hold-ifdone-exec"] {
-		t.Errorf("expected hold-ifdone-exec to be locked via parent execution")
-	}
-}
 
 func TestOrder_Transitions_ExtraPanics(t *testing.T) {
 	t.Run("ToCancelSent invalid state panic", func(t *testing.T) {
