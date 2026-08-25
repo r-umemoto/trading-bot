@@ -188,7 +188,7 @@ func (s *Sniper) CalculateVirtualPosition(positions []position.Position, activeO
 		}
 	}
 	for _, curr := range activeOrders {
-		if curr != nil && curr.IsFillExpected() {
+		if curr != nil && (curr.IsFillExpected() || curr.Type == order.ORDER_TYPE_MARKET) {
 			// 🌟 エントリー注文（新規建て）の約定予定のみを仮想ポジションに加算する。
 			// 決済注文（返済）の約定予定は、物理ポジションから減算しない（決済完了までポジション維持として扱う）。
 			if curr.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
