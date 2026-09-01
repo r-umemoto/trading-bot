@@ -46,6 +46,11 @@ func RunBot() error {
 		opTargets = nil
 	}
 
+	// 2.5 ポートフォリオおよび作戦の整合性バリデーション（API 50銘柄上限、マスタ一致等）
+	if err := portfolio.Validate(targets, opTargets); err != nil {
+		return fmt.Errorf("設定バリデーションエラー: %w", err)
+	}
+
 	// 3. アプリケーションの組み立て
 	e, err := engine.BuildEngine(ctx, cfg, targets, opTargets)
 	if err != nil {
