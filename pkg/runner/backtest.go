@@ -70,6 +70,11 @@ func RunBacktest() error {
 		opTargets = nil
 	}
 
+	// 2.5 ポートフォリオおよび作戦の整合性バリデーション（API 50銘柄上限、マスタ一致等）
+	if err := portfolio.Validate(targets, opTargets); err != nil {
+		return fmt.Errorf("設定バリデーションエラー: %w", err)
+	}
+
 	// 3. バックテスト用インフラ（Mock Gateway）の準備
 	gateway := backtest.NewSyncBacktestGateway(execModel, latency)
 	if err := gateway.LoadPreviousCloses(csvPath); err != nil {
