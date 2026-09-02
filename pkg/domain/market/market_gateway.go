@@ -38,6 +38,7 @@ type MarketGateway interface {
 	GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error)
 	GetOrders(ctx context.Context) (order.Orders, error)
 	GetSymbol(ctx context.Context, symbol string, exchange order.ExchangeMarket) (symbol.Symbol, error)
+	FetchPreviousClose(ctx context.Context, symbol string) (float64, error)
 	RegisterSymbol(ctx context.Context, req ResisterSymbolRequest) error
 	RegisterSymbols(ctx context.Context, reqs []ResisterSymbolRequest) error
 	UnregisterSymbolAll(ctx context.Context) error

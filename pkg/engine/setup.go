@@ -62,6 +62,14 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 			Detail:   detail,
 			Exchange: t.Exchange,
 		})
+
+		// 🌟 portfolio.jsonで有効な全銘柄の前日終値を自動取得し、closes.csvに記録・キャッシュする
+		if _, err := gateway.FetchPreviousClose(ctx, t.Symbol); err != nil {
+			slog.Warn("前日終値の取得に失敗しました (バックテスト時はデフォルト終値を使用します)",
+				slog.String("symbol", t.Symbol),
+				slog.Any("error", err),
+			)
+		}
 	}
 
 	reportRepo := buildReportRepository(ctx)

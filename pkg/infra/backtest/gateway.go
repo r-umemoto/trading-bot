@@ -603,3 +603,11 @@ func (g *SyncBacktestGateway) LoadPreviousCloses(csvPath string) error {
 	slog.Info("CSVから前日終値データを正常に読み込みました", slog.Int("count", len(loadedCloses)))
 	return nil
 }
+
+func (g *SyncBacktestGateway) FetchPreviousClose(ctx context.Context, symbol string) (float64, error) {
+	if val, ok := g.previousCloses[symbol]; ok {
+		return val, nil
+	}
+	return 0, fmt.Errorf("前日終値データが見つかりません: %s", symbol)
+}
+

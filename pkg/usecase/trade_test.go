@@ -147,6 +147,7 @@ func (m *mockGateway) CancelOrder(ctx context.Context, orderID string) error { r
 func (m *mockGateway) GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error) { return nil, nil }
 func (m *mockGateway) GetOrders(ctx context.Context) (order.Orders, error) { return order.Orders{}, nil }
 func (m *mockGateway) GetSymbol(ctx context.Context, symbolCode string, exchange order.ExchangeMarket) (symbol.Symbol, error) { return symbol.Symbol{}, nil }
+func (m *mockGateway) FetchPreviousClose(ctx context.Context, symbol string) (float64, error) { return 0, nil }
 func (m *mockGateway) RegisterSymbol(ctx context.Context, req market.ResisterSymbolRequest) error { return nil }
 func (m *mockGateway) RegisterSymbols(ctx context.Context, reqs []market.ResisterSymbolRequest) error { return nil }
 func (m *mockGateway) UnregisterSymbolAll(ctx context.Context) error { return nil }

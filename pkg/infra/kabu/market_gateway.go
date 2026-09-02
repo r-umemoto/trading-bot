@@ -913,6 +913,14 @@ func (m *MarketGateway) GetSymbol(ctx context.Context, symbolCode string, exchan
 	}, nil
 }
 
+func (m *MarketGateway) FetchPreviousClose(ctx context.Context, symbolCode string) (float64, error) {
+	feeder := &KabuHistoricalFeeder{
+		symbol: symbolCode,
+		client: m.client,
+	}
+	return feeder.FetchPreviousClose()
+}
+
 func (m *MarketGateway) UnregisterSymbolAll(ctx context.Context) error {
 	_, err := m.client.UnregisterSymbolAll()
 	if err != nil {
