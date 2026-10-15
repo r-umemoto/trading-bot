@@ -514,3 +514,45 @@ func TestOrderTracker_Update_PreservesChildRequest(t *testing.T) {
 	}
 }
 
+func TestOrderTracker_LocalIDAutoResolution(t *testing.T) {
+	ot := sniper.NewOrderTracker(nil, nil)
+	sniperID := "test-sniper"
+	symbolDetail := symbol.Symbol{Code: "4527"}
+
+	// 1. Local order in active orders before server ID was returned (race condition)
+	localID := order.GenerateLocalID()
+	localOrd := order.NewOrder(localID, "4527", order.ACTION_SELL, 0, 100,
+		order.WithType(order.ORDER_TYPE_MARKET),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY),
+	)
+	ot.Add(sniperID, localOrd)
+
+	// 2. Incoming report with server ID and execution
+	serverID := "20261015A02N76431354"
+	apiOrder := *localOrd
+	apiOrder.ID = serverID
+	apiOrder.Executions = []order.Execution{
+		{
+			ID:            "E2026101502IR2",
+			ExecutionTime: time.Now(),
+			Price:         2869.5,
+			Qty:           100,
+		},
+	}
+	report := order.Orders{Orders: []order.Order{apiOrder}}
+
+	var executedID string
+	ot.Update(report, symbolDetail, time.Now(), func(sid string, exec order.Execution, act order.Action, oca time.Time, po *order.Order) {
+		executedID = exec.ID
+	})
+
+	// 3. Verify execution was processed via auto-resolved local ID
+	if executedID != "E2026101502IR2" {
+		t.Errorf("expected execution E2026101502IR2 to be processed, got '%s'", executedID)
+	}
+
+	if localOrd.ID != serverID {
+		t.Errorf("expected local order ID to be updated to server ID '%s', got '%s'", serverID, localOrd.ID)
+	}
+}
+
