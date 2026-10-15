@@ -642,6 +642,24 @@ func (n *SniperNest) ReconcileTarget(
 		return CancelBullet{OrderID: matchingOrder.ID}
 	}
 
+	// 🌟 新規発注・重複返済の安全弁（Inflight Guard）:
+	// 送信中（PREPARING/PENDING）の注文、未約定の成行注文、または未約定の返済注文が存在する場合は、
+	// 取引所での受付・約定および建玉同期が完了するまで新規発注・重複返済を厳格に保留（多重発注防止）
+	for _, o := range stats.ActiveOrders {
+		if o == nil {
+			continue
+		}
+		if o.Type == order.ORDER_TYPE_MARKET {
+			return nil
+		}
+		if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && cashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+			return nil
+		}
+		if o.InternalState() == order.STATE_PREPARING || o.InternalState() == order.STATE_PENDING {
+			return nil
+		}
+	}
+
 	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType)
 	if exit != nil {
 		entry.IfDone = exit

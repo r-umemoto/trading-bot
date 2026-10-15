@@ -970,3 +970,69 @@ func TestSniperNest_ReconcileTarget_FlatTargetWithNonZeroPrice(t *testing.T) {
 		t.Errorf("expected CancelBullet for buy-entry-ord, got %+v", bullet)
 	}
 }
+
+func TestSniperNest_InflightMarketOrder_NoDuplicateOrder(t *testing.T) {
+	sym := symbol.Symbol{Code: "4527"}
+	nest := NewSniperNest("4527", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// 1. Inflight Market entry order exists (waiting for execution report)
+	mktOrd := order.NewOrder(order.GenerateLocalID(), "4527", order.ACTION_SELL, 0, 100,
+		order.WithType(order.ORDER_TYPE_MARKET),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY),
+	)
+	mktOrd.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_ACTIVE)
+	nest.AddOrder(sniperID, mktOrd)
+
+	// 2. Next tick arrives, target is still short 100
+	target := strategy.TargetPosition{
+		Qty:       -100,
+		Price:     0,
+		OrderType: order.ORDER_TYPE_MARKET,
+		Reason:    "ShortEntry",
+	}
+
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2870}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_GENERAL_DAY, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+
+	if bullet != nil {
+		t.Fatalf("expected nil bullet (no duplicate order while market order is inflight), got %+v", bullet)
+	}
+}
+
+func TestSniperNest_InflightExitOrder_NoDuplicateExit(t *testing.T) {
+	sym := symbol.Symbol{Code: "7186"}
+	nest := NewSniperNest("7186", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// 1. Setup position
+	nest.positions.ApplyExecution(sniperID, "7186", order.Execution{
+		ID:    "hold-1",
+		Price: 1700,
+		Qty:   100,
+	}, order.ACTION_BUY, nil, func(pnl float64) {})
+
+	// 2. Inflight exit order exists
+	exitOrd := order.NewOrder(order.GenerateLocalID(), "7186", order.ACTION_SELL, 0, 100,
+		order.WithType(order.ORDER_TYPE_MARKET),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+		order.WithRequest(&order.OrderRequest{
+			ClosePositions: []order.ClosePosition{{HoldID: "hold-1", Qty: 100}},
+		}),
+	)
+	exitOrd.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_ACTIVE)
+	nest.AddOrder(sniperID, exitOrd)
+
+	// 3. Next tick arrives with Force Exit target 0
+	target := strategy.TargetPosition{
+		Qty:       0,
+		Price:     0,
+		OrderType: order.ORDER_TYPE_MARKET,
+		Reason:    "LUNCH_BREAK_FORCE_EXIT",
+	}
+
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 1730}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_GENERAL_DAY, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+
+	if bullet != nil {
+		t.Fatalf("expected nil bullet (no duplicate exit while previous exit order is inflight), got %+v", bullet)
+	}
+}
