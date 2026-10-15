@@ -60,6 +60,11 @@ func (ot *OrderTracker) GetActive(sniperID string) []*order.Order {
 	return ordersCopy
 }
 
+// SignedQty は指定したスナイパーのアクティブ注文による純増減数量（買い+, 売り-）を返します
+func (ot *OrderTracker) SignedQty(sniperID string) float64 {
+	return order.ActiveOrders(ot.activeOrders[sniperID]).SignedQty()
+}
+
 func (ot *OrderTracker) GetAllActive() []*order.Order {
 	var all []*order.Order
 	for _, orders := range ot.activeOrders {
