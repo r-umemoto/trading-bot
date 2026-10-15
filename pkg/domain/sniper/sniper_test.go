@@ -62,7 +62,7 @@ func testTick(s *Sniper, nest *SniperNest, obs Observation) Bullet {
 		LatestTick: obs.Tick,
 	}
 	target := s.Evaluate(input)
-	return nest.ReconcileTarget(s.ID, obs.Tick, virtualPos, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+	return nest.ReconcileTarget(s.ID, obs.Tick, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 }
 
 func TestSniper_Tick_Lifecycle(t *testing.T) {

@@ -336,7 +336,7 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 		LatestTick: obs1.Tick,
 	}
 	target1 := s.Evaluate(input1)
-	bullet1 := nest.ReconcileTarget(s.ID, obs1.Tick, virtualPos1, target1, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+	bullet1 := nest.ReconcileTarget(s.ID, obs1.Tick, target1, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 
 	ordBullet1, ok1 := bullet1.(sniper.OrderBullet)
 	if !ok1 {
@@ -373,7 +373,7 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 		LatestTick: obs2.Tick,
 	}
 	target2 := s.Evaluate(input2)
-	bullet2 := nest.ReconcileTarget(s.ID, obs2.Tick, virtualPos2, target2, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+	bullet2 := nest.ReconcileTarget(s.ID, obs2.Tick, target2, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 
 	ordBullet2, ok2 := bullet2.(sniper.OrderBullet)
 	if !ok2 {

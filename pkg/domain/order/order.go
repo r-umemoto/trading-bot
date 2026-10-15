@@ -532,6 +532,22 @@ func (aos *ActiveOrders) Prepare() {
 	*aos = reconciled
 }
 
+// SignedQty はアクティブ注文による純保有数量の増減（買いはプラス、売りはマイナス）を合算して返します
+func (aos ActiveOrders) SignedQty() float64 {
+	var total float64
+	for _, o := range aos {
+		if o == nil || o.IsCompleted() || o.IsCancelSent() {
+			continue
+		}
+		if o.Action == ACTION_BUY {
+			total += o.OrderQty
+		} else if o.Action == ACTION_SELL {
+			total -= o.OrderQty
+		}
+	}
+	return total
+}
+
 // GetInflightStats aggregates and categorizes active orders.
 func (aos ActiveOrders) GetInflightStats() InflightStats {
 	var stats InflightStats
