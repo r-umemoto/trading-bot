@@ -117,6 +117,7 @@ func TestNewTick(t *testing.T) {
 		tick.PRICE_STATUS_CURRENT,
 		tick.PRICE_CHANGE_UP,
 		98.0,
+		97.5,
 		100000.0,
 		100,
 		200,
@@ -127,7 +128,8 @@ func TestNewTick(t *testing.T) {
 	if tk.Symbol != "8604" || tk.Price != 100.0 || tk.VWAP != 99.5 || tk.TradingVolume != 1000.0 ||
 		!tk.CurrentPriceTime.Equal(now) || tk.BestAsk.Price != 101 || tk.BestBid.Price != 99 ||
 		len(tk.SellBoard) != 1 || len(tk.BuyBoard) != 1 || tk.CurrentPriceStatus != tick.PRICE_STATUS_CURRENT ||
-		tk.CurrentPriceChangeStatus != tick.PRICE_CHANGE_UP || tk.OpeningPrice != 98.0 || tk.TradingValue != 100000.0 ||
+		tk.CurrentPriceChangeStatus != tick.PRICE_CHANGE_UP || tk.OpeningPrice != 98.0 || tk.PreviousClose != 97.5 ||
+		tk.TradingValue != 100000.0 ||
 		tk.MarketOrderSellQty != 100 || tk.MarketOrderBuyQty != 200 || tk.OverSellQty != 500 || tk.UnderBuyQty != 600 {
 		t.Errorf("NewTick initialized incorrect fields: %+v", tk)
 	}

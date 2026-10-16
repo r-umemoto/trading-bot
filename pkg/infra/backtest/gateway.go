@@ -603,3 +603,11 @@ func (g *SyncBacktestGateway) LoadPreviousCloses(csvPath string) error {
 	slog.Info("CSVから前日終値データを正常に読み込みました", slog.Int("count", len(loadedCloses)))
 	return nil
 }
+
+// GetPreviousClose は銘柄の前日終値を取得します（存在しない場合は0を返します）
+func (g *SyncBacktestGateway) GetPreviousClose(symbol string) float64 {
+	if g.previousCloses == nil {
+		return 0
+	}
+	return g.previousCloses[symbol]
+}

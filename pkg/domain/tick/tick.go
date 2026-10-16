@@ -38,6 +38,7 @@ type Tick struct {
 
 	// 四本値・集計
 	OpeningPrice       float64 // 始値
+	PreviousClose      float64 // 前日終値
 	TradingValue       float64 // 売買代金
 	MarketOrderSellQty float64 // 売成行数量
 	MarketOrderBuyQty  float64 // 買成行数量
@@ -76,6 +77,7 @@ func NewTick(
 	currentPriceStatus PriceStatus,
 	currentPriceChangeStatus PriceChangeStatus,
 	openingPrice float64,
+	previousClose float64,
 	tradingValue float64,
 	marketOrderSellQty float64,
 	marketOrderBuyQty float64,
@@ -95,6 +97,7 @@ func NewTick(
 		CurrentPriceStatus:       currentPriceStatus,
 		CurrentPriceChangeStatus: currentPriceChangeStatus,
 		OpeningPrice:             openingPrice,
+		PreviousClose:            previousClose,
 		TradingValue:             tradingValue,
 		MarketOrderSellQty:       marketOrderSellQty,
 		MarketOrderBuyQty:        marketOrderBuyQty,

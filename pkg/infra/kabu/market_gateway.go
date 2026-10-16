@@ -830,6 +830,7 @@ func (s *MarketGateway) toTick(msg api.BoardResponse) tick.Tick {
 		s.toPriceStatus(msg.CurrentPriceStatus),
 		s.toPriceChangeStatus(msg.CurrentPriceChangeStatus),
 		msg.OpeningPrice,
+		msg.PreviousClose,
 		msg.TradingValue,
 		msg.MarketOrderSellQty,
 		msg.MarketOrderBuyQty,
