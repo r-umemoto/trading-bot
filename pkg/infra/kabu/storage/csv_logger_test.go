@@ -36,6 +36,7 @@ func TestCSVLogger(t *testing.T) {
 		CurrentPriceStatus: tick.PRICE_STATUS_CURRENT,
 		CurrentPriceChangeStatus: tick.PRICE_CHANGE_UP,
 		OpeningPrice:      2480.0,
+		PreviousClose:     2470.0,
 		TradingValue:      250000000.0,
 		MarketOrderSellQty: 1000,
 		MarketOrderBuyQty:  1200,

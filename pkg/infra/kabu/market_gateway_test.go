@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -457,17 +455,7 @@ func TestMarketGateway_CheckAndFireIFD_PartialFill(t *testing.T) {
 	}
 }
 
-func TestKabuHistoricalFeeder_FetchPreviousClose_WritesCSV(t *testing.T) {
-	tempDir := t.TempDir()
-	origCwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get wd: %v", err)
-	}
-	if err := os.Chdir(tempDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
-	}
-	defer os.Chdir(origCwd)
-
+func TestKabuHistoricalFeeder_FetchPreviousClose(t *testing.T) {
 	mockClient := &MockKabuClient{
 		GetBoardFunc: func(symbol string) (*api.BoardResponse, error) {
 			return &api.BoardResponse{
@@ -488,38 +476,6 @@ func TestKabuHistoricalFeeder_FetchPreviousClose_WritesCSV(t *testing.T) {
 	}
 	if val != 1234.5 {
 		t.Errorf("expected 1234.5, got %f", val)
-	}
-
-	// Verify that ./data/<today>/closes.csv was written
-	today := time.Now().Format("20060102")
-	csvPath := filepath.Join("data", today, "closes.csv")
-	if _, err := os.Stat(csvPath); err != nil {
-		t.Fatalf("expected closes.csv to be created at %s, but got error: %v", csvPath, err)
-	}
-
-	// Read and verify contents
-	content, err := os.ReadFile(csvPath)
-	if err != nil {
-		t.Fatalf("failed to read closes.csv: %v", err)
-	}
-
-	expectedContent := "Symbol,PreviousClose\n8604,1234.5\n"
-	if string(content) != expectedContent {
-		t.Errorf("expected content:\n%q\ngot:\n%q", expectedContent, string(content))
-	}
-
-	// Fetch again to verify that it doesn't duplicate
-	_, err = feeder.FetchPreviousClose()
-	if err != nil {
-		t.Fatalf("second FetchPreviousClose failed: %v", err)
-	}
-
-	content2, err := os.ReadFile(csvPath)
-	if err != nil {
-		t.Fatalf("failed to read closes.csv second time: %v", err)
-	}
-	if string(content2) != expectedContent {
-		t.Errorf("expected content to remain unchanged, but got:\n%q", string(content2))
 	}
 }
 

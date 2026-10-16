@@ -51,7 +51,7 @@ func NewCSVLogger(symbol string, date string, outputDir string) (*CSVLogger, err
 		}
 		header = append(header,
 			"CurrentPriceStatus", "CurrentPriceChangeStatus",
-			"OpeningPrice", "TradingValue",
+			"OpeningPrice", "PreviousClose", "TradingValue",
 			"MarketOrderSellQty", "MarketOrderBuyQty",
 			"OverSellQty", "UnderBuyQty",
 		)
@@ -110,6 +110,7 @@ func (l *CSVLogger) startWriting() {
 			strconv.Itoa(int(tick.CurrentPriceStatus)),
 			string(tick.CurrentPriceChangeStatus),
 			strconv.FormatFloat(tick.OpeningPrice, 'f', -1, 64),
+			strconv.FormatFloat(tick.PreviousClose, 'f', -1, 64),
 			strconv.FormatFloat(tick.TradingValue, 'f', -1, 64),
 			strconv.FormatFloat(tick.MarketOrderSellQty, 'f', -1, 64),
 			strconv.FormatFloat(tick.MarketOrderBuyQty, 'f', -1, 64),
