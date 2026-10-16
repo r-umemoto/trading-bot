@@ -78,9 +78,6 @@ func RunBacktest() error {
 
 	// 3. バックテスト用インフラ（Mock Gateway）の準備
 	gateway := backtest.NewSyncBacktestGateway(execModel, latency)
-	if err := gateway.LoadPreviousCloses(csvPath); err != nil {
-		slog.Error("前日終値CSVのロードに失敗しました (デフォルト値を使用します)", slog.Any("error", err))
-	}
 	dataPool := gateway.DataPool()
 	if _, err := gateway.Listen(context.Background()); err != nil {
 		return fmt.Errorf("バックテスト用ゲートウェイのListen開始に失敗: %w", err)
@@ -418,113 +415,7 @@ func (p *backtestPerformanceProvider) GetUnrealizedPnL(sniperID string, currentP
 	return 0
 }
 
-func loadPreviousClosesMap(csvPath string) map[string]float64 {
-	baseName := filepath.Base(csvPath)
-	var dateStr string
-	for i := 0; i <= len(baseName)-8; i++ {
-		sub := baseName[i : i+8]
-		if _, err := strconv.Atoi(sub); err == nil {
-			if _, err := time.Parse("20060102", sub); err == nil {
-				dateStr = sub
-				break
-			}
-		}
-	}
-
-	dirs := []string{
-		filepath.Dir(csvPath),
-	}
-	if dateStr != "" {
-		dirs = append([]string{filepath.Join(filepath.Dir(csvPath), dateStr)}, dirs...)
-	}
-
-	candidates := []string{
-		"closes.csv",
-		"previous_close.csv",
-		"previous_closes.csv",
-		fmt.Sprintf("closes_%s.csv", dateStr),
-		fmt.Sprintf("previous_close_%s.csv", dateStr),
-	}
-
-	var foundPath string
-	for _, dir := range dirs {
-		for _, cand := range candidates {
-			p := filepath.Join(dir, cand)
-			if _, err := os.Stat(p); err == nil {
-				foundPath = p
-				break
-			}
-		}
-		if foundPath != "" {
-			break
-		}
-	}
-
-	res := make(map[string]float64)
-	if foundPath == "" {
-		return res
-	}
-
-	file, err := os.Open(foundPath)
-	if err != nil {
-		return res
-	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil || len(records) == 0 {
-		return res
-	}
-
-	symbolIdx := -1
-	priceIdx := -1
-	header := records[0]
-	isHeader := false
-	for i, col := range header {
-		colClean := strings.ToLower(strings.TrimSpace(col))
-		if colClean == "symbol" || colClean == "code" || colClean == "銘柄" || colClean == "銘柄コード" {
-			symbolIdx = i
-			isHeader = true
-		}
-		if colClean == "previous_close" || colClean == "previousclose" || colClean == "close" || colClean == "終値" || colClean == "前日終値" || colClean == "price" {
-			priceIdx = i
-			isHeader = true
-		}
-	}
-
-	startRow := 0
-	if isHeader {
-		startRow = 1
-	}
-	if symbolIdx == -1 || priceIdx == -1 || symbolIdx == priceIdx {
-		symbolIdx = 0
-		priceIdx = 1
-	}
-
-	for i := startRow; i < len(records); i++ {
-		row := records[i]
-		if len(row) <= symbolIdx || len(row) <= priceIdx {
-			continue
-		}
-		sym := strings.TrimSpace(row[symbolIdx])
-		priceStr := strings.TrimSpace(row[priceIdx])
-		if sym == "" || priceStr == "" {
-			continue
-		}
-		price, err := strconv.ParseFloat(priceStr, 64)
-		if err != nil {
-			continue
-		}
-		res[sym] = price
-	}
-
-	return res
-}
-
 func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
-	prevCloses := loadPreviousClosesMap(csvPath)
-
 	// 🌟 CSVファイル名から日付 (YYYYMMDD) を抽出。デフォルトは実行当日の日付
 	baseDate := time.Now()
 	baseName := filepath.Base(csvPath)
@@ -546,8 +437,18 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 
 	reader := csv.NewReader(file)
 
-	if _, err := reader.Read(); err != nil {
+	header, err := reader.Read()
+	if err != nil {
 		return err
+	}
+
+	prevCloseIdx := -1
+	for i, col := range header {
+		colClean := strings.ToLower(strings.TrimSpace(col))
+		if colClean == "previousclose" || colClean == "previous_close" || colClean == "前日終値" {
+			prevCloseIdx = i
+			break
+		}
 	}
 
 	for {
@@ -606,10 +507,15 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 			}
 		}
 
+		prevClose := 0.0
+		if prevCloseIdx != -1 && len(record) > prevCloseIdx {
+			prevClose, _ = strconv.ParseFloat(record[prevCloseIdx], 64)
+		}
+
 		tick := tick.Tick{
 			Symbol:        record[1],
 			Price:         price,
-			PreviousClose: prevCloses[record[1]],
+			PreviousClose: prevClose,
 			TradingVolume: volume,
 			VWAP:          vwap,
 			BestAsk: tick.FirstQuote{
