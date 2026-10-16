@@ -2,6 +2,7 @@ package sniper
 
 import (
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
@@ -194,6 +195,40 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 							allTrackedIDs[ext.ID] = true
 							break
 						}
+					}
+				}
+			}
+		}
+
+		// 0. Resolve local IDs in active orders that have matching API orders
+		for _, o := range orders {
+			if strings.HasPrefix(o.ID, order.LOCAL_ID_PREFIX) {
+				for i, ext := range untrackedAPIOrders {
+					if ext != nil &&
+						o.Symbol == ext.Symbol &&
+						o.Action == ext.Action &&
+						o.OrderQty == ext.OrderQty &&
+						(o.OrderPrice == ext.OrderPrice || (o.Type == order.ORDER_TYPE_MARKET && ext.Type == order.ORDER_TYPE_MARKET)) {
+
+						timeDiff := now.Sub(ext.CreatedAt)
+						if timeDiff < 0 {
+							timeDiff = -timeDiff
+						}
+						if timeDiff > 60*time.Second {
+							continue
+						}
+
+						if ot.logger != nil {
+							ot.logger.Info("🎯 [LOCAL_ID_RESOLVED] アクティブ注文のローカルIDをAPI注文IDに自動解決しました",
+								slog.String("sniper", sniperID),
+								slog.String("localID", o.ID),
+								slog.String("serverID", ext.ID),
+							)
+						}
+						o.ID = ext.ID
+						untrackedAPIOrders[i] = nil
+						allTrackedIDs[ext.ID] = true
+						break
 					}
 				}
 			}
