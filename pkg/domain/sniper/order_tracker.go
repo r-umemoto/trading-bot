@@ -221,37 +221,37 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 			}
 		}
 
-			// 1. Identify which tombstone orders should be resurrected (those that actually exist in the API report)
-			var resurrected []*order.Order
-			resurrectedMap := make(map[string]bool)
+		// 1. Identify which tombstone orders should be resurrected (those that actually exist in the API report)
+		var resurrected []*order.Order
+		resurrectedMap := make(map[string]bool)
 
-			for _, t := range ot.tombstones[sniperID] {
-				// A. If the server ID already exists in the report, it is resurrected
-				if reportContainsID(report, t.ord.ID) {
-					resurrected = append(resurrected, t.ord)
-					resurrectedMap[t.ord.ID] = true
-					continue
-				}
+		for _, t := range ot.tombstones[sniperID] {
+			// A. If the server ID already exists in the report, it is resurrected
+			if reportContainsID(report, t.ord.ID) {
+				resurrected = append(resurrected, t.ord)
+				resurrectedMap[t.ord.ID] = true
+				continue
+			}
 
-				// B. If it is a local ID, try to match it with untracked API orders
-				for i, ext := range untrackedAPIOrders {
-					if matchesAPIOrder(t.ord, ext, now) {
-						if ot.logger != nil {
-							ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
-								slog.String("sniper", sniperID),
-								slog.String("localID", t.ord.ID),
-								slog.String("serverID", ext.ID),
-							)
-						}
-						t.ord.ID = ext.ID
-						untrackedAPIOrders[i] = nil
-						allTrackedIDs[ext.ID] = true
-
-						resurrected = append(resurrected, t.ord)
-						resurrectedMap[ext.ID] = true
-						break
+			// B. If it is a local ID, try to match it with untracked API orders
+			for i, ext := range untrackedAPIOrders {
+				if matchesAPIOrder(t.ord, ext, now) {
+					if ot.logger != nil {
+						ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
+							slog.String("sniper", sniperID),
+							slog.String("localID", t.ord.ID),
+							slog.String("serverID", ext.ID),
+						)
 					}
+					t.ord.ID = ext.ID
+					untrackedAPIOrders[i] = nil
+					allTrackedIDs[ext.ID] = true
+
+					resurrected = append(resurrected, t.ord)
+					resurrectedMap[ext.ID] = true
+					break
 				}
+			}
 		}
 
 		// 2. Only merge verified active orders and resurrected orders to pass to ReconcileOrders
