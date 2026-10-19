@@ -204,37 +204,22 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 		for _, o := range orders {
 			if strings.HasPrefix(o.ID, order.LOCAL_ID_PREFIX) {
 				for i, ext := range untrackedAPIOrders {
-						isMarketMatch := (o.Type == order.ORDER_TYPE_MARKET && (ext.Type == order.ORDER_TYPE_MARKET || ext.OrderPrice == 0 || o.OrderPrice == ext.OrderPrice))
-						isPriceMatch := (o.OrderPrice == ext.OrderPrice) || isMarketMatch
-						if ext != nil &&
-							o.Symbol == ext.Symbol &&
-							o.Action == ext.Action &&
-							o.OrderQty == ext.OrderQty &&
-							isPriceMatch {
-
-							timeDiff := now.Sub(ext.CreatedAt)
-							if timeDiff < 0 {
-								timeDiff = -timeDiff
-							}
-							if timeDiff > 60*time.Second {
-								continue
-							}
-
-							if ot.logger != nil {
-								ot.logger.Info("🎯 [LOCAL_ID_RESOLVED] アクティブ注文のローカルIDをAPI注文IDに自動解決しました",
-									slog.String("sniper", sniperID),
-									slog.String("localID", o.ID),
-									slog.String("serverID", ext.ID),
-								)
-							}
-							o.ID = ext.ID
-							untrackedAPIOrders[i] = nil
-							allTrackedIDs[ext.ID] = true
-							break
+					if matchesAPIOrder(o, ext, now) {
+						if ot.logger != nil {
+							ot.logger.Info("🎯 [LOCAL_ID_RESOLVED] アクティブ注文のローカルIDをAPI注文IDに自動解決しました",
+								slog.String("sniper", sniperID),
+								slog.String("localID", o.ID),
+								slog.String("serverID", ext.ID),
+							)
 						}
+						o.ID = ext.ID
+						untrackedAPIOrders[i] = nil
+						allTrackedIDs[ext.ID] = true
+						break
 					}
 				}
 			}
+		}
 
 			// 1. Identify which tombstone orders should be resurrected (those that actually exist in the API report)
 			var resurrected []*order.Order
@@ -250,39 +235,23 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 
 				// B. If it is a local ID, try to match it with untracked API orders
 				for i, ext := range untrackedAPIOrders {
-					isMarketMatch := (t.ord.Type == order.ORDER_TYPE_MARKET && (ext.Type == order.ORDER_TYPE_MARKET || ext.OrderPrice == 0 || t.ord.OrderPrice == ext.OrderPrice))
-					isPriceMatch := (t.ord.OrderPrice == ext.OrderPrice) || isMarketMatch
-					if ext != nil &&
-						t.ord.Symbol == ext.Symbol &&
-						t.ord.Action == ext.Action &&
-						t.ord.OrderQty == ext.OrderQty &&
-						isPriceMatch {
+					if matchesAPIOrder(t.ord, ext, now) {
+						if ot.logger != nil {
+							ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
+								slog.String("sniper", sniperID),
+								slog.String("localID", t.ord.ID),
+								slog.String("serverID", ext.ID),
+							)
+						}
+						t.ord.ID = ext.ID
+						untrackedAPIOrders[i] = nil
+						allTrackedIDs[ext.ID] = true
 
-					// API注文の作成時刻が現在（ポーリング時刻）から60秒以内のもののみマッチングを許可（前日等の古い注文の誤マッチングを防ぐ）
-					timeDiff := now.Sub(ext.CreatedAt)
-					if timeDiff < 0 {
-						timeDiff = -timeDiff
+						resurrected = append(resurrected, t.ord)
+						resurrectedMap[ext.ID] = true
+						break
 					}
-					if timeDiff > 60*time.Second {
-						continue
-					}
-
-					if ot.logger != nil {
-						ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
-							slog.String("sniper", sniperID),
-							slog.String("localID", t.ord.ID),
-							slog.String("serverID", ext.ID),
-						)
-					}
-					t.ord.ID = ext.ID
-					untrackedAPIOrders[i] = nil
-					allTrackedIDs[ext.ID] = true
-
-					resurrected = append(resurrected, t.ord)
-					resurrectedMap[ext.ID] = true
-					break
 				}
-			}
 		}
 
 		// 2. Only merge verified active orders and resurrected orders to pass to ReconcileOrders
@@ -505,4 +474,31 @@ func makeCloseOrderCopy(orig *order.Order, holdID string, qty float64) *order.Or
 		orderCopy.Request = &reqCopy
 	}
 	return &orderCopy
+}
+
+// matchesAPIOrder determines whether a local order matches an untracked API order.
+func matchesAPIOrder(local *order.Order, ext *order.Order, now time.Time) bool {
+	if local == nil || ext == nil {
+		return false
+	}
+	if local.Symbol != ext.Symbol || local.Action != ext.Action || local.OrderQty != ext.OrderQty {
+		return false
+	}
+
+	isMarketMatch := local.Type == order.ORDER_TYPE_MARKET && (ext.Type == order.ORDER_TYPE_MARKET || ext.OrderPrice == 0 || local.OrderPrice == ext.OrderPrice)
+	isPriceMatch := (local.OrderPrice == ext.OrderPrice) || isMarketMatch
+	if !isPriceMatch {
+		return false
+	}
+
+	// API注文の作成時刻が現在（ポーリング時刻）から60秒以内のもののみマッチングを許可（前日等の古い注文の誤マッチングを防ぐ）
+	timeDiff := now.Sub(ext.CreatedAt)
+	if timeDiff < 0 {
+		timeDiff = -timeDiff
+	}
+	if timeDiff > 60*time.Second {
+		return false
+	}
+
+	return true
 }
