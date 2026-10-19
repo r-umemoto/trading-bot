@@ -485,7 +485,7 @@ func matchesAPIOrder(local *order.Order, ext *order.Order, now time.Time) bool {
 		return false
 	}
 
-	isMarketMatch := local.Type == order.ORDER_TYPE_MARKET && (ext.Type == order.ORDER_TYPE_MARKET || ext.OrderPrice == 0 || local.OrderPrice == ext.OrderPrice)
+	isMarketMatch := local.IsMarket() && ext.IsMarket()
 	isPriceMatch := (local.OrderPrice == ext.OrderPrice) || isMarketMatch
 	if !isPriceMatch {
 		return false

@@ -45,6 +45,11 @@ const (
 	ORDER_TYPE_LIMIT  OrderType = 20
 )
 
+// IsMarket は注文種別が成行注文かどうかを判定します
+func (t OrderType) IsMarket() bool {
+	return t == ORDER_TYPE_MARKET
+}
+
 type AccountType uint32
 
 const (

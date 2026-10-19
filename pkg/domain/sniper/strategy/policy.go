@@ -235,8 +235,8 @@ func isOrderDesiredDefault(ord *order.Order, sig brain.Signal, symbol symbol.Sym
 		}
 	}
 
-	// 成行同士なら一致 (OrderType による判定、またはフォールバックとして Price=0 同士)
-	if (sig.OrderType == order.ORDER_TYPE_MARKET || sig.Price == 0) && (ord.Type == order.ORDER_TYPE_MARKET || ord.OrderPrice == 0) {
+	// 成行同士なら一致
+	if sig.OrderType.IsMarket() && ord.IsMarket() {
 		return true
 	}
 	return false

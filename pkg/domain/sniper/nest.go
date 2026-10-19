@@ -649,7 +649,7 @@ func (n *SniperNest) ReconcileTarget(
 		if o == nil {
 			continue
 		}
-		if o.Type == order.ORDER_TYPE_MARKET {
+		if o.IsMarket() {
 			return nil
 		}
 		if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && cashMargin == order.CASH_MARGIN_MARGIN_EXIT {

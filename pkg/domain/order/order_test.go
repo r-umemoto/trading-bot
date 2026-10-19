@@ -60,6 +60,29 @@ func TestOrder_Options(t *testing.T) {
 	}
 }
 
+func TestOrder_IsMarket(t *testing.T) {
+	marketOrder := order.NewOrder("1", "7203", order.ACTION_BUY, 0, 100, order.WithType(order.ORDER_TYPE_MARKET))
+	if !marketOrder.IsMarket() {
+		t.Errorf("expected marketOrder.IsMarket() == true")
+	}
+	if !marketOrder.Type.IsMarket() {
+		t.Errorf("expected marketOrder.Type.IsMarket() == true")
+	}
+
+	limitOrder := order.NewOrder("2", "7203", order.ACTION_BUY, 2500, 100, order.WithType(order.ORDER_TYPE_LIMIT))
+	if limitOrder.IsMarket() {
+		t.Errorf("expected limitOrder.IsMarket() == false")
+	}
+	if limitOrder.Type.IsMarket() {
+		t.Errorf("expected limitOrder.Type.IsMarket() == false")
+	}
+
+	var nilOrder *order.Order
+	if nilOrder.IsMarket() {
+		t.Errorf("expected nilOrder.IsMarket() == false")
+	}
+}
+
 func TestOrder_IsPending(t *testing.T) {
 	tests := []struct {
 		state    order.InternalState
