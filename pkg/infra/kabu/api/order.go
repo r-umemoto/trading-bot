@@ -67,8 +67,9 @@ type Order struct {
 	OrderQty   float64       `json:"OrderQty"`   // 発注数量
 	CumQty     float64       `json:"CumQty"`     // 約定数量
 	CashMargin int           `json:"CashMargin"` // 信用区分 (1: 現物, 2: 信用新規, 3: 信用返済)
-	Price      float64       `json:"Price"`      // 値段
-	Details    []OrderDetail `json:"Details"`    // 注文詳細（約定履歴やキャンセル等）
+	Price          float64       `json:"Price"`          // 値段
+	FrontOrderType int32         `json:"FrontOrderType"` // 執行条件 (10: 成行, 20: 指値 など)
+	Details        []OrderDetail `json:"Details"`        // 注文詳細（約定履歴やキャンセル等）
 }
 
 type OrderDetail struct {
