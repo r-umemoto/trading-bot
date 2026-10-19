@@ -384,7 +384,14 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 			}
 		}
 
-		o := order.NewOrder(ord.ID, ord.Symbol, action, ord.Price, ord.OrderQty)
+		ordType := order.ORDER_TYPE_LIMIT
+		orderPrice := ord.Price
+		if ord.FrontOrderType == 10 || ord.Price == 0 {
+			ordType = order.ORDER_TYPE_MARKET
+			orderPrice = 0 // 成行注文は価格0に正規化（買い成行時にカブコムが返す制限値幅上限価格を0にする）
+		}
+
+		o := order.NewOrder(ord.ID, ord.Symbol, action, orderPrice, ord.OrderQty, order.WithType(ordType))
 		internalState := order.STATE_ACTIVE
 		if status == order.ORDER_STATUS_FILLED || status == order.ORDER_STATUS_CANCELED || status == order.ORDER_STATUS_EXPIRED {
 			internalState = order.STATE_CLOSED

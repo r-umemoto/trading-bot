@@ -204,20 +204,7 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 		for _, o := range orders {
 			if strings.HasPrefix(o.ID, order.LOCAL_ID_PREFIX) {
 				for i, ext := range untrackedAPIOrders {
-					if ext != nil &&
-						o.Symbol == ext.Symbol &&
-						o.Action == ext.Action &&
-						o.OrderQty == ext.OrderQty &&
-						(o.OrderPrice == ext.OrderPrice || (o.Type == order.ORDER_TYPE_MARKET && ext.Type == order.ORDER_TYPE_MARKET)) {
-
-						timeDiff := now.Sub(ext.CreatedAt)
-						if timeDiff < 0 {
-							timeDiff = -timeDiff
-						}
-						if timeDiff > 60*time.Second {
-							continue
-						}
-
+					if matchesAPIOrder(o, ext, now) {
 						if ot.logger != nil {
 							ot.logger.Info("🎯 [LOCAL_ID_RESOLVED] アクティブ注文のローカルIDをAPI注文IDに自動解決しました",
 								slog.String("sniper", sniperID),
@@ -248,21 +235,7 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 
 			// B. If it is a local ID, try to match it with untracked API orders
 			for i, ext := range untrackedAPIOrders {
-				if ext != nil &&
-					t.ord.Symbol == ext.Symbol &&
-					t.ord.Action == ext.Action &&
-					t.ord.OrderQty == ext.OrderQty &&
-					t.ord.OrderPrice == ext.OrderPrice {
-
-					// API注文の作成時刻が現在（ポーリング時刻）から60秒以内のもののみマッチングを許可（前日等の古い注文の誤マッチングを防ぐ）
-					timeDiff := now.Sub(ext.CreatedAt)
-					if timeDiff < 0 {
-						timeDiff = -timeDiff
-					}
-					if timeDiff > 60*time.Second {
-						continue
-					}
-
+				if matchesAPIOrder(t.ord, ext, now) {
 					if ot.logger != nil {
 						ot.logger.Info("🎯 [ID_RESOLVED] 送信エラーだった墓標注文が一致しました",
 							slog.String("sniper", sniperID),
@@ -501,4 +474,31 @@ func makeCloseOrderCopy(orig *order.Order, holdID string, qty float64) *order.Or
 		orderCopy.Request = &reqCopy
 	}
 	return &orderCopy
+}
+
+// matchesAPIOrder determines whether a local order matches an untracked API order.
+func matchesAPIOrder(local *order.Order, ext *order.Order, now time.Time) bool {
+	if local == nil || ext == nil {
+		return false
+	}
+	if local.Symbol != ext.Symbol || local.Action != ext.Action || local.OrderQty != ext.OrderQty {
+		return false
+	}
+
+	isMarketMatch := local.IsMarket() && ext.IsMarket()
+	isPriceMatch := (local.OrderPrice == ext.OrderPrice) || isMarketMatch
+	if !isPriceMatch {
+		return false
+	}
+
+	// API注文の作成時刻が現在（ポーリング時刻）から60秒以内のもののみマッチングを許可（前日等の古い注文の誤マッチングを防ぐ）
+	timeDiff := now.Sub(ext.CreatedAt)
+	if timeDiff < 0 {
+		timeDiff = -timeDiff
+	}
+	if timeDiff > 60*time.Second {
+		return false
+	}
+
+	return true
 }

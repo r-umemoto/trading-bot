@@ -115,6 +115,18 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 			},
 			expected: order.ORDER_STATUS_EXPIRED,
 		},
+		{
+			name: "State 5 with Market Order FrontOrderType 10",
+			apiOrder: api.Order{
+				ID:             "order-5",
+				State:          api.STATE_FINISHED,
+				OrderQty:       200,
+				CumQty:         200,
+				Price:          1618.5, // 買い成行でカブコムから返るストップ高拘束価格
+				FrontOrderType: 10,     // 成行
+			},
+			expected: order.ORDER_STATUS_FILLED,
+		},
 	}
 
 	for _, tt := range tests {
@@ -131,6 +143,15 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 
 			if ords.Orders[0].Status() != tt.expected {
 				t.Errorf("expected status %d, got %d", tt.expected, ords.Orders[0].Status())
+			}
+
+			if tt.apiOrder.FrontOrderType == 10 {
+				if ords.Orders[0].Type != order.ORDER_TYPE_MARKET {
+					t.Errorf("expected Type ORDER_TYPE_MARKET, got %v", ords.Orders[0].Type)
+				}
+				if ords.Orders[0].OrderPrice != 0 {
+					t.Errorf("expected normalized OrderPrice 0, got %v", ords.Orders[0].OrderPrice)
+				}
 			}
 		})
 	}

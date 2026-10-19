@@ -556,3 +556,52 @@ func TestOrderTracker_LocalIDAutoResolution(t *testing.T) {
 	}
 }
 
+func TestOrderTracker_Update_ResolveLocalID_MarketBuyNonZeroPrice(t *testing.T) {
+	ot := sniper.NewOrderTracker(nil, nil)
+	sniperID := "test-sniper"
+	symbolDetail := symbol.Symbol{Code: "4751"}
+
+	// 1. Local order (Buy Market, Price=0)
+	localID := order.GenerateLocalID()
+	localOrd := order.NewOrder(localID, "4751", order.ACTION_BUY, 0, 200,
+		order.WithType(order.ORDER_TYPE_MARKET),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY),
+	)
+	ot.Add(sniperID, localOrd)
+
+	// 2. Incoming report from KabuStation: Price contains upper price limit (e.g. 1618.5)
+	// and ext.Type is ORDER_TYPE_MARKET (mapped from FrontOrderType: 10)
+	serverID := "20261019A02N80999333"
+	apiOrder := order.Order{
+		ID:         serverID,
+		Symbol:     "4751",
+		Action:     order.ACTION_BUY,
+		OrderQty:   200,
+		OrderPrice: 0, // normalized or matched via Type
+		Type:       order.ORDER_TYPE_MARKET,
+		CreatedAt:  time.Now(),
+		Executions: []order.Execution{
+			{
+				ID:            "20261019E02N80999335",
+				ExecutionTime: time.Now(),
+				Price:         1325.5,
+				Qty:           200,
+			},
+		},
+	}
+	report := order.Orders{Orders: []order.Order{apiOrder}}
+
+	var executedID string
+	ot.Update(report, symbolDetail, time.Now(), func(sid string, exec order.Execution, act order.Action, oca time.Time, po *order.Order) {
+		executedID = exec.ID
+	})
+
+	if executedID != "20261019E02N80999335" {
+		t.Errorf("expected execution 20261019E02N80999335 to be processed, got '%s'", executedID)
+	}
+	if localOrd.ID != serverID {
+		t.Errorf("expected local order ID to be updated to '%s', got '%s'", serverID, localOrd.ID)
+	}
+}
+
+

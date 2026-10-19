@@ -23,6 +23,14 @@ func (o *Order) IsPending() bool {
 	return o.internalState == STATE_PREPARING || o.internalState == STATE_PENDING
 }
 
+// IsMarket は注文が成行注文かどうかを判定します
+func (o *Order) IsMarket() bool {
+	if o == nil {
+		return false
+	}
+	return o.Type == ORDER_TYPE_MARKET
+}
+
 type OrderStatus uint32
 
 const (
