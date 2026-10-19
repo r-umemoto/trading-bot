@@ -28,7 +28,7 @@ func (o *Order) IsMarket() bool {
 	if o == nil {
 		return false
 	}
-	return o.Type.IsMarket()
+	return o.Type == ORDER_TYPE_MARKET
 }
 
 type OrderStatus uint32

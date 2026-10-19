@@ -236,7 +236,7 @@ func isOrderDesiredDefault(ord *order.Order, sig brain.Signal, symbol symbol.Sym
 	}
 
 	// 成行同士なら一致
-	if sig.OrderType.IsMarket() && ord.IsMarket() {
+	if sig.OrderType == order.ORDER_TYPE_MARKET && ord.IsMarket() {
 		return true
 	}
 	return false

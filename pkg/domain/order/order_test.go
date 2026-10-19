@@ -65,16 +65,10 @@ func TestOrder_IsMarket(t *testing.T) {
 	if !marketOrder.IsMarket() {
 		t.Errorf("expected marketOrder.IsMarket() == true")
 	}
-	if !marketOrder.Type.IsMarket() {
-		t.Errorf("expected marketOrder.Type.IsMarket() == true")
-	}
 
 	limitOrder := order.NewOrder("2", "7203", order.ACTION_BUY, 2500, 100, order.WithType(order.ORDER_TYPE_LIMIT))
 	if limitOrder.IsMarket() {
 		t.Errorf("expected limitOrder.IsMarket() == false")
-	}
-	if limitOrder.Type.IsMarket() {
-		t.Errorf("expected limitOrder.Type.IsMarket() == false")
 	}
 
 	var nilOrder *order.Order
