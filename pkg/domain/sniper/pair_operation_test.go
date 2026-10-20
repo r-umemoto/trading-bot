@@ -136,10 +136,10 @@ func TestPairTradingOperation_HandleTick_TimeFilter(t *testing.T) {
 	nestB.orders.activeOrders["sniper-b"] = nil
 
 	// ポジションをセット (Hold Qty = 100)
-	nestA.positions.positions["sniper-a"] = []position.Position{
+	nestA.positions.positions = []position.Position{
 		{ExecutionID: "exec-a", Symbol: "7203", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_BUY},
 	}
-	nestB.positions.positions["sniper-b"] = []position.Position{
+	nestB.positions.positions = []position.Position{
 		{ExecutionID: "exec-b", Symbol: "7267", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_SELL},
 	}
 
@@ -215,10 +215,10 @@ func TestPairTradingOperation_HandleTick_NegativeSpreadAndShortExit(t *testing.T
 	nestB.orders.activeOrders["sniper-b"] = nil
 
 	// Set Short A (-100 Qty) and Long B (100 Qty) positions
-	nestA.positions.positions["sniper-a"] = []position.Position{
+	nestA.positions.positions = []position.Position{
 		{ExecutionID: "exec-a", Symbol: "7203", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_SELL},
 	}
-	nestB.positions.positions["sniper-b"] = []position.Position{
+	nestB.positions.positions = []position.Position{
 		{ExecutionID: "exec-b", Symbol: "7267", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_BUY},
 	}
 

@@ -303,3 +303,64 @@ func TestOrderDispatcher_DispatchWorker(t *testing.T) {
 		t.Errorf("expected 1 sent order, got %d", sentLen)
 	}
 }
+
+func TestOrderDispatcher_InFlightDeduplication(t *testing.T) {
+	sender := &MockSender{
+		SendLatency: 150 * time.Millisecond, // 送信に時間がかかるシミュレーション
+	}
+	dispatcher := NewOrderDispatcher(sender)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dispatcher.Start(ctx)
+
+	jobKey := "exit_hold_E2026102001PU8"
+
+	ord1 := order.NewOrder("local-1", "6326", order.ACTION_BUY, 0, 100, order.WithType(order.ORDER_TYPE_MARKET), order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT))
+	ord1.Request = &order.OrderRequest{
+		ClosePositions: []order.ClosePosition{{HoldID: "E2026102001PU8", Qty: 100}},
+	}
+
+	ord2 := order.NewOrder("local-2", "6326", order.ACTION_BUY, 0, 100, order.WithType(order.ORDER_TYPE_MARKET), order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT))
+	ord2.Request = &order.OrderRequest{
+		ClosePositions: []order.ClosePosition{{HoldID: "E2026102001PU8", Qty: 100}},
+	}
+
+	// 1回目の Submit
+	ch1 := dispatcher.Submit(jobKey, ord1.Symbol, ord1, "", 20)
+
+	// Dispatcher がジョブを取り出して executeJob に入るのを待機（約120ms）
+	time.Sleep(120 * time.Millisecond)
+
+	// 2回目の同一 Key での Submit（API通信中）
+	ch2 := dispatcher.Submit(jobKey, ord2.Symbol, ord2, "", 20)
+
+	// ch2 は即座に ErrOrderSkipped で返るはず！
+	select {
+	case res2 := <-ch2:
+		if !errors.Is(res2.Error, order.ErrOrderSkipped) {
+			t.Fatalf("expected ErrOrderSkipped for in-flight job, got: %v", res2.Error)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("expected immediate rejection for in-flight job")
+	}
+
+	// 1回目の完了を確認
+	select {
+	case res1 := <-ch1:
+		if res1.Error != nil {
+			t.Fatalf("expected job 1 to succeed, got: %v", res1.Error)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for job 1")
+	}
+
+	// 送信されたのは 1 回のみであること
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.SentOrders) != 1 {
+		t.Fatalf("expected exactly 1 order sent to API, got %d", len(sender.SentOrders))
+	}
+}
+

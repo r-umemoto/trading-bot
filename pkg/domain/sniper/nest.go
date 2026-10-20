@@ -224,7 +224,7 @@ func (n *SniperNest) GetPerformance(sniperID string) Performance {
 func (n *SniperNest) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.positions.GetUnrealizedPnL(sniperID, currentPrice)
+	return n.positions.GetUnrealizedPnL(currentPrice)
 }
 
 // GetExchanges はこのネスト内のスナイパーが動作する一意な取引所のリストを返します。
@@ -292,7 +292,7 @@ func (n *SniperNest) HandleOrderRejection(sniperID string, ord *order.Order, err
 	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && ord.Request != nil && len(ord.Request.ClosePositions) > 0 {
 		if errors.As(err, &rejectErr) && rejectErr.IsPositionMissing() {
 			for _, cp := range ord.Request.ClosePositions {
-				n.positions.RemovePosition(sniperID, cp.HoldID)
+				n.positions.RemovePosition(cp.HoldID)
 			}
 		}
 	}
@@ -318,7 +318,7 @@ func (n *SniperNest) AddOrder(sniperID string, ord *order.Order) {
 	defer n.mu.Unlock()
 	n.orders.Add(sniperID, ord)
 	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && ord.Request != nil {
-		_ = n.positions.LockPositions(sniperID, ord.ID, ord.Request.ClosePositions)
+		_ = n.positions.LockPositions(ord.ID, ord.Request.ClosePositions)
 	}
 }
 
@@ -333,7 +333,7 @@ func (n *SniperNest) GetSniperActiveOrders(sniperID string) []*order.Order {
 func (n *SniperNest) HoldQty(sniperID string) float64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.positions.HoldQty(sniperID)
+	return n.positions.HoldQty()
 }
 
 func reportContainsID(report order.Orders, id string) bool {
@@ -374,7 +374,7 @@ func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick) Observatio
 	n.lastTickTime = t.CurrentPriceTime // 🌟 最新 of simulation time
 
 	activeOrders := n.orders.PrepareActiveOrders(sniperID)
-	posCopy := n.positions.GetCopy(sniperID)
+	posCopy := n.positions.GetCopy()
 
 	return Observation{
 		Tick:         t,
@@ -385,7 +385,7 @@ func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick) Observatio
 
 // GetCommittedPosition は物理確定建玉とアクティブ注文から、市場に既にコミットしている執行中・約定済みポジションを計算して返します
 func (n *SniperNest) GetCommittedPosition(sniperID string) CommittedPosition {
-	physicalQty := n.positions.HoldQty(sniperID)
+	physicalQty := n.positions.HoldQty()
 	orderQty := n.orders.SignedQty(sniperID)
 
 	return CommittedPosition{
@@ -426,7 +426,7 @@ func (n *SniperNest) ReconcileTarget(
 	}
 
 	// 物理確定建玉と市場コミット中ポジション（CommittedPosition）の取得
-	physicalHoldQty := n.positions.HoldQty(sniperID)
+	physicalHoldQty := n.positions.HoldQty()
 	committedPos := n.GetCommittedPosition(sniperID)
 
 	// ポジション反転の安全弁:
@@ -661,6 +661,9 @@ func (n *SniperNest) ReconcileTarget(
 	}
 
 	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType)
+	if entry == nil {
+		return nil
+	}
 	if exit != nil {
 		entry.IfDone = exit
 	}
@@ -684,7 +687,12 @@ func (n *SniperNest) buildOrderPairFromTarget(
 
 	var closePositions []order.ClosePosition
 	if isExit {
-		closePositions, _ = n.positions.MatchPositionsToClose(sniperID, action, qty)
+		closePositions, _ = n.positions.MatchPositionsToClose(action, qty)
+		if len(closePositions) == 0 {
+			// 🌟 信用返済時、ロック可能な建玉が1つもない（すべて決済中または残存ゼロ）場合は、
+			// 誤って重複返済や空返済を行わないよう発注を中止する。
+			return nil, nil
+		}
 	}
 
 	entryReq := &order.OrderRequest{
@@ -695,9 +703,6 @@ func (n *SniperNest) buildOrderPairFromTarget(
 	}
 	if isExit {
 		entryReq.ClosePositions = closePositions
-		if len(closePositions) == 0 {
-			entryReq.ClosePositionOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
-		}
 	}
 
 	entry := order.NewOrder(

@@ -101,7 +101,7 @@ func TestSniper_Tick_Lifecycle(t *testing.T) {
 			{LeavesQty: 10, Price: 2000, Action: order.ACTION_BUY},
 		},
 	}
-	nest.positions.positions[s.ID] = obsWithPos.Positions
+	nest.positions.positions = obsWithPos.Positions
 	bullet = testTick(s, nest, obsWithPos)
 	if bullet == nil {
 		t.Fatal("expected order bullet for force exit")
@@ -121,7 +121,7 @@ func TestSniper_Tick_Lifecycle(t *testing.T) {
 			{LeavesQty: 5, Price: 2000, Action: order.ACTION_SELL},
 		},
 	}
-	nest.positions.positions[s.ID] = obsWithNegPos.Positions
+	nest.positions.positions = obsWithNegPos.Positions
 	bullet = testTick(s, nest, obsWithNegPos)
 	if bullet == nil {
 		t.Fatal("expected order bullet for force exit")
@@ -180,7 +180,7 @@ func TestSniper_Tick_CancellationAndCooldown(t *testing.T) {
 			{LeavesQty: 10, Price: 2000, Action: order.ACTION_BUY},
 		},
 	}
-	nest.positions.positions[s.ID] = obsWithPos.Positions
+	nest.positions.positions = obsWithPos.Positions
 	bullet = testTick(s, nest, obsWithPos)
 	if bullet != nil {
 		t.Errorf("expected cooldown block, but got bullet: %v", bullet)
@@ -310,10 +310,10 @@ func TestSniper_MatchPositionsToClose(t *testing.T) {
 		{ExecutionID: "exec-1", Symbol: "9434", LeavesQty: 60, Price: 2000, Action: order.ACTION_BUY},
 		{ExecutionID: "exec-2", Symbol: "9434", LeavesQty: 50, Price: 2010, Action: order.ACTION_BUY},
 	}
-	nest.positions.positions["test-sniper"] = positions
+	nest.positions.positions = positions
 
 	// 1. Closes Long positions (exit Sell order matches Buy positions)
-	closePositions, _ := nest.positions.MatchPositionsToClose("test-sniper", order.ACTION_SELL, 80)
+	closePositions, _ := nest.positions.MatchPositionsToClose(order.ACTION_SELL, 80)
 	if len(closePositions) != 2 {
 		t.Fatalf("expected 2 close positions, got %d", len(closePositions))
 	}
@@ -327,10 +327,10 @@ func TestSniper_MatchPositionsToClose(t *testing.T) {
 	}
 
 	// 2. Closes Long positions skipping locked execution-1
-	if err := nest.positions.LockPositions("test-sniper", "dummy-order", []order.ClosePosition{{HoldID: "exec-1", Qty: 60}}); err != nil {
+	if err := nest.positions.LockPositions("dummy-order", []order.ClosePosition{{HoldID: "exec-1", Qty: 60}}); err != nil {
 		t.Fatalf("failed to lock: %v", err)
 	}
-	closePositions, _ = nest.positions.MatchPositionsToClose("test-sniper", order.ACTION_SELL, 80)
+	closePositions, _ = nest.positions.MatchPositionsToClose(order.ACTION_SELL, 80)
 	if len(closePositions) != 1 {
 		t.Fatalf("expected 1 close position, got %d", len(closePositions))
 	}

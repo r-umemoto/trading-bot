@@ -84,7 +84,7 @@ func (ot *OrderTracker) FailOrder(sniperID string, ord *order.Order) bool {
 				deletedAt: time.Now(),
 			})
 			if ot.positions != nil {
-				ot.positions.UnlockPositions(sniperID, o.ID)
+				ot.positions.UnlockPositions(o.ID)
 			}
 			return true
 		}
@@ -100,7 +100,7 @@ func (ot *OrderTracker) DestroyOrder(sniperID string, ord *order.Order) bool {
 		if o == ord {
 			ot.activeOrders[sniperID] = append(orders[:i], orders[i+1:]...)
 			if ot.positions != nil {
-				ot.positions.UnlockPositions(sniperID, o.ID)
+				ot.positions.UnlockPositions(o.ID)
 			}
 			return true
 		}
@@ -272,7 +272,7 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 			}
 			if !found {
 				if ot.positions != nil {
-					ot.positions.UnlockPositions(sniperID, old.ID)
+					ot.positions.UnlockPositions(old.ID)
 				}
 			}
 		}
