@@ -1036,3 +1036,4 @@ func TestSniperNest_InflightExitOrder_NoDuplicateExit(t *testing.T) {
 		t.Fatalf("expected nil bullet (no duplicate exit while previous exit order is inflight), got %+v", bullet)
 	}
 }
+

@@ -127,7 +127,12 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 		priority = 20 // Exit
 		if input.Order.Request != nil && len(input.Order.Request.ClosePositions) > 0 {
 			jobID = "exit_hold_" + input.Order.Request.ClosePositions[0].HoldID
+		} else {
+			jobID = fmt.Sprintf("exit_%s_%s", input.Order.Symbol, input.Order.Action)
 		}
+	} else if input.Order.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+		// 🌟 新規エントリー注文の重複排除キー（同一銘柄・同一方向の連続エントリーを物理的に遮断）
+		jobID = fmt.Sprintf("entry_%s_%s", input.Order.Symbol, input.Order.Action)
 	}
 	resCh := m.dispatcher.Submit(jobID, input.Order.Symbol, input.Order, "", priority)
 	select {

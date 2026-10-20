@@ -661,6 +661,9 @@ func (n *SniperNest) ReconcileTarget(
 	}
 
 	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType)
+	if entry == nil {
+		return nil
+	}
 	if exit != nil {
 		entry.IfDone = exit
 	}
@@ -685,6 +688,11 @@ func (n *SniperNest) buildOrderPairFromTarget(
 	var closePositions []order.ClosePosition
 	if isExit {
 		closePositions, _ = n.positions.MatchPositionsToClose(sniperID, action, qty)
+		if len(closePositions) == 0 {
+			// 🌟 信用返済時、ロック可能な建玉が1つもない（すべて決済中または残存ゼロ）場合は、
+			// 誤って重複返済や空返済を行わないよう発注を中止する。
+			return nil, nil
+		}
 	}
 
 	entryReq := &order.OrderRequest{
@@ -695,9 +703,6 @@ func (n *SniperNest) buildOrderPairFromTarget(
 	}
 	if isExit {
 		entryReq.ClosePositions = closePositions
-		if len(closePositions) == 0 {
-			entryReq.ClosePositionOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
-		}
 	}
 
 	entry := order.NewOrder(
