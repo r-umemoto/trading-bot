@@ -93,7 +93,7 @@ func (pt *PositionTracker) reducePositions(
 	recordPnL func(float64),
 ) {
 	// Domain Logic Delegation (FIFO matching and reduction)
-	totalTradePnL, earliestEntryTime := pt.positions.Reduce(sellQty, sellPrice, closePositions, recordPnL)
+	totalTradePnL, earliestEntryTime, avgEntryPrice := pt.positions.Reduce(sellQty, sellPrice, closePositions, recordPnL)
 
 	holdTimeSec := 0.0
 	if !earliestEntryTime.IsZero() && !sellTime.IsZero() {
@@ -104,6 +104,8 @@ func (pt *PositionTracker) reducePositions(
 			slog.String("sniper", sniperID),
 			slog.String("symbol", symbolCode),
 			slog.Float64("pnl", totalTradePnL),
+			slog.Float64("entry_price", avgEntryPrice),
+			slog.Float64("exit_price", sellPrice),
 			slog.Float64("hold_time_sec", holdTimeSec),
 			slog.String("exit_reason", closeReason),
 			slog.Time("entry_time", earliestEntryTime),

@@ -84,16 +84,18 @@ func (ps Positions) TotalHoldQty() float64 {
 	return total
 }
 
-// Reduce は約定を適用し、残った新しい Positions スライスと、発生した実現損益 (PnL) および最古の建玉のエントリー時刻を返します
+// Reduce は約定を適用し、残った新しい Positions スライスと、発生した実現損益 (PnL)、最古の建玉のエントリー時刻、および加重平均エントリー価格を返します
 func (ps *Positions) Reduce(
 	sellQty float64,
 	sellPrice float64,
 	closePositions []order.ClosePosition,
 	recordPnL func(float64),
-) (float64, time.Time) {
+) (float64, time.Time, float64) {
 	remainingToSell := sellQty
 	var totalTradePnL float64
 	var earliestEntryTime time.Time
+	var weightedEntrySum float64
+	var totalClosedQty float64
 
 	current := *ps
 
@@ -126,6 +128,9 @@ func (ps *Positions) Reduce(
 				tradePnL := (sellPrice - p.Price) * closeQty * pnlFactor
 				totalTradePnL += tradePnL
 				recordPnL(tradePnL)
+
+				weightedEntrySum += p.Price * closeQty
+				totalClosedQty += closeQty
 
 				p.LeavesQty -= closeQty
 				closeMap[p.ExecutionID] -= closeQty
@@ -167,6 +172,9 @@ func (ps *Positions) Reduce(
 			totalTradePnL += tradePnL
 			recordPnL(tradePnL)
 
+			weightedEntrySum += p.Price * closeQty
+			totalClosedQty += closeQty
+
 			if p.LeavesQty <= remainingToSell {
 				remainingToSell -= p.LeavesQty
 			} else {
@@ -178,6 +186,11 @@ func (ps *Positions) Reduce(
 		current = newPositions
 	}
 
+	avgEntryPrice := 0.0
+	if totalClosedQty > 0 {
+		avgEntryPrice = weightedEntrySum / totalClosedQty
+	}
+
 	*ps = current
-	return totalTradePnL, earliestEntryTime
+	return totalTradePnL, earliestEntryTime, avgEntryPrice
 }
