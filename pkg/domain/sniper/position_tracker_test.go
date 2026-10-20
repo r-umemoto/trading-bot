@@ -22,7 +22,7 @@ func TestPositionTracker_ApplyExecution_Entry(t *testing.T) {
 	}
 	pt.ApplyExecution(sniperID, "7203", exec1, order.ACTION_BUY, nil, func(pnl float64) {})
 
-	positions := pt.GetCopy(sniperID)
+	positions := pt.GetCopy()
 	if len(positions) != 1 {
 		t.Fatalf("expected 1 position, got %d", len(positions))
 	}
@@ -48,7 +48,7 @@ func TestPositionTracker_ApplyExecution_Entry(t *testing.T) {
 
 	pt.ApplyExecution(sniperID, "7203", exec2, order.ACTION_SELL, parent, func(pnl float64) {})
 
-	positions = pt.GetCopy(sniperID)
+	positions = pt.GetCopy()
 	if len(positions) != 2 {
 		t.Fatalf("expected 2 positions, got %d", len(positions))
 	}
@@ -82,7 +82,7 @@ func TestPositionTracker_ApplyExecution_Exit_FIFO(t *testing.T) {
 		pnlCalls = append(pnlCalls, pnl)
 	})
 
-	positions := pt.GetCopy(sniperID)
+	positions := pt.GetCopy()
 	if len(positions) != 2 {
 		t.Fatalf("expected 2 remaining positions, got %d", len(positions))
 	}
@@ -147,7 +147,7 @@ func TestPositionTracker_ApplyExecution_Exit_ClosePositions(t *testing.T) {
 	// Expected Remaining:
 	// - exec-1: 100 qty (untouched)
 	// - exec-3: 85 qty
-	positions := pt.GetCopy(sniperID)
+	positions := pt.GetCopy()
 	if len(positions) != 2 {
 		t.Fatalf("expected 2 remaining positions, got %d", len(positions))
 	}
@@ -205,8 +205,8 @@ func TestPositionTracker_HoldQty(t *testing.T) {
 	pt := sniper.NewPositionTracker(nil)
 	sniperID := "test-sniper"
 
-	if pt.HoldQty(sniperID) != 0.0 {
-		t.Errorf("expected 0 holding qty, got %f", pt.HoldQty(sniperID))
+	if pt.HoldQty() != 0.0 {
+		t.Errorf("expected 0 holding qty, got %f", pt.HoldQty())
 	}
 
 	// Buy position (Long +100)
@@ -214,8 +214,8 @@ func TestPositionTracker_HoldQty(t *testing.T) {
 	// Sell position (Short -50)
 	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-2", Qty: 50, Price: 2010}, order.ACTION_SELL, nil, func(pnl float64) {})
 
-	if pt.HoldQty(sniperID) != 50.0 {
-		t.Errorf("expected 50 holding qty, got %f", pt.HoldQty(sniperID))
+	if pt.HoldQty() != 50.0 {
+		t.Errorf("expected 50 holding qty, got %f", pt.HoldQty())
 	}
 }
 
@@ -231,7 +231,7 @@ func TestPositionTracker_GetUnrealizedPnL(t *testing.T) {
 	// Long PnL: (2020 - 2000) * 100 = 2000
 	// Short PnL: (2020 - 2050) * 50 * (-1) = 1500
 	// Total Unrealized: 3500
-	unrealized := pt.GetUnrealizedPnL(sniperID, 2020)
+	unrealized := pt.GetUnrealizedPnL(2020)
 	if unrealized != 3500 {
 		t.Errorf("expected unrealized PnL to be 3500, got %f", unrealized)
 	}
@@ -248,14 +248,14 @@ func TestPositionTracker_MatchPositionsToClose(t *testing.T) {
 	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-3", Qty: 80, Price: 2015}, order.ACTION_BUY, nil, func(pnl float64) {})
 
 	// Lock buy-1 using order ID "dummy-order"
-	if err := pt.LockPositions(sniperID, "dummy-order", []order.ClosePosition{{HoldID: "buy-1", Qty: 100}}); err != nil {
+	if err := pt.LockPositions("dummy-order", []order.ClosePosition{{HoldID: "buy-1", Qty: 100}}); err != nil {
 		t.Fatalf("failed to lock: %v", err)
 	}
 
 	// We want to sell 50 shares. This means we must close existing Buy positions.
 	// buy-1 is locked, buy-2 has 80, so buy-2 will fulfill the 50 shares completely.
 	// This will cause remainingQty to become <= 0 and trigger the break condition when checking buy-3.
-	closePos, orderType := pt.MatchPositionsToClose(sniperID, order.ACTION_SELL, 50)
+	closePos, orderType := pt.MatchPositionsToClose(order.ACTION_SELL, 50)
 	if orderType != order.CLOSE_POSITION_ORDER_NONE {
 		t.Errorf("unexpected close position order type: %v", orderType)
 	}
@@ -275,10 +275,10 @@ func TestPositionTracker_GetCopy(t *testing.T) {
 
 	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-1", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(pnl float64) {})
 
-	copy1 := pt.GetCopy(sniperID)
+	copy1 := pt.GetCopy()
 	copy1[0].LeavesQty = 0 // mutate copy
 
-	copy2 := pt.GetCopy(sniperID)
+	copy2 := pt.GetCopy()
 	if copy2[0].LeavesQty != 100 {
 		t.Error("mutating copy affected internal state of PositionTracker")
 	}
@@ -317,7 +317,7 @@ func TestPositionTracker_ReducePositions_SkipFIFOSignaled(t *testing.T) {
 	)
 
 	// 3. 安全ガードにより、無関係な建玉A（buy-A）が誤って消し込まれず、100株残っていることを検証する
-	pos := pt.GetCopy(sniperID)
+	pos := pt.GetCopy()
 	if len(pos) != 1 {
 		t.Fatalf("expected 1 position to remain, got %d", len(pos))
 	}

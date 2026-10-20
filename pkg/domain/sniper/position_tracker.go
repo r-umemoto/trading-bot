@@ -115,19 +115,19 @@ func (pt *PositionTracker) reducePositions(
 }
 
 // HoldQty returns the total physical holding quantity of this symbol pool (positive for long, negative for short).
-func (pt *PositionTracker) HoldQty(_ ...string) float64 {
+func (pt *PositionTracker) HoldQty() float64 {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 	return pt.positions.TotalHoldQty()
 }
 
-func (pt *PositionTracker) GetUnrealizedPnL(_ string, currentPrice float64) float64 {
+func (pt *PositionTracker) GetUnrealizedPnL(currentPrice float64) float64 {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 	return pt.positions.CalculateUnrealizedPnL(currentPrice)
 }
 
-func (pt *PositionTracker) LockPositions(_ string, orderID string, closePositions []order.ClosePosition) error {
+func (pt *PositionTracker) LockPositions(orderID string, closePositions []order.ClosePosition) error {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
@@ -146,19 +146,19 @@ func (pt *PositionTracker) LockPositions(_ string, orderID string, closePosition
 	return nil
 }
 
-func (pt *PositionTracker) UnlockPositions(_ string, orderID string) {
+func (pt *PositionTracker) UnlockPositions(orderID string) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 	pt.positions.Unlock(orderID)
 }
 
-func (pt *PositionTracker) MatchPositionsToClose(_ string, action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
+func (pt *PositionTracker) MatchPositionsToClose(action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 	return pt.positions.MatchToClose(action, qty)
 }
 
-func (pt *PositionTracker) GetCopy(_ ...string) []position.Position {
+func (pt *PositionTracker) GetCopy() []position.Position {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 	posCopy := make([]position.Position, len(pt.positions))
@@ -167,7 +167,7 @@ func (pt *PositionTracker) GetCopy(_ ...string) []position.Position {
 }
 
 // RemovePosition removes a specific position by holdID from the symbol pool (used for reconciliation on definitive reject).
-func (pt *PositionTracker) RemovePosition(_ string, holdID string) {
+func (pt *PositionTracker) RemovePosition(holdID string) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
