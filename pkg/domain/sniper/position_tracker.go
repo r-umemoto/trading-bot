@@ -9,17 +9,17 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 )
 
-// PositionTracker tracks physical positions, close matching, and PnL.
-// It acts as a thread-safe repository and domain service delegating core logic to position.Positions.
+// PositionTracker tracks physical positions, close matching, and PnL for a symbol.
+// It acts as a thread-safe repository and domain service managing a unified position pool for the nest.
 type PositionTracker struct {
 	mu        sync.RWMutex
-	positions map[string]position.Positions
+	positions position.Positions
 	logger    *slog.Logger
 }
 
 func NewPositionTracker(logger *slog.Logger) *PositionTracker {
 	return &PositionTracker{
-		positions: make(map[string]position.Positions),
+		positions: make(position.Positions, 0),
 		logger:    logger,
 	}
 }
@@ -43,7 +43,7 @@ func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, ex
 	}
 
 	if !isExit {
-		pt.positions[sniperID] = append(pt.positions[sniperID], position.Position{
+		pt.positions = append(pt.positions, position.Position{
 			ExecutionID: exec.ID,
 			Symbol:      symbolCode,
 			Exchange:    exchange,
@@ -92,11 +92,8 @@ func (pt *PositionTracker) reducePositions(
 	closeReason string,
 	recordPnL func(float64),
 ) {
-	ps := pt.positions[sniperID]
-
-	// Domain Logic Delegation
-	totalTradePnL, earliestEntryTime := ps.Reduce(sellQty, sellPrice, closePositions, recordPnL)
-	pt.positions[sniperID] = ps
+	// Domain Logic Delegation (FIFO matching and reduction)
+	totalTradePnL, earliestEntryTime := pt.positions.Reduce(sellQty, sellPrice, closePositions, recordPnL)
 
 	holdTimeSec := 0.0
 	if !earliestEntryTime.IsZero() && !sellTime.IsZero() {
@@ -115,28 +112,27 @@ func (pt *PositionTracker) reducePositions(
 	}
 }
 
-func (pt *PositionTracker) HoldQty(sniperID string) float64 {
+// HoldQty returns the total physical holding quantity of this symbol pool (positive for long, negative for short).
+func (pt *PositionTracker) HoldQty(_ ...string) float64 {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
-	return pt.positions[sniperID].TotalHoldQty()
+	return pt.positions.TotalHoldQty()
 }
 
-func (pt *PositionTracker) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
+func (pt *PositionTracker) GetUnrealizedPnL(_ string, currentPrice float64) float64 {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
-	return pt.positions[sniperID].CalculateUnrealizedPnL(currentPrice)
+	return pt.positions.CalculateUnrealizedPnL(currentPrice)
 }
 
-func (pt *PositionTracker) LockPositions(sniperID string, orderID string, closePositions []order.ClosePosition) error {
+func (pt *PositionTracker) LockPositions(_ string, orderID string, closePositions []order.ClosePosition) error {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
-	ps := pt.positions[sniperID]
 	for _, cp := range closePositions {
-		if err := ps.Lock(orderID, cp.HoldID, cp.Qty); err != nil {
+		if err := pt.positions.Lock(orderID, cp.HoldID, cp.Qty); err != nil {
 			if pt.logger != nil {
 				pt.logger.Warn("⚠️ [PositionTracker] ロック対象の建玉のロックに失敗しました",
-					slog.String("sniper", sniperID),
 					slog.String("orderID", orderID),
 					slog.String("holdID", cp.HoldID),
 					slog.String("error", err.Error()),
@@ -145,43 +141,39 @@ func (pt *PositionTracker) LockPositions(sniperID string, orderID string, closeP
 			return err
 		}
 	}
-	pt.positions[sniperID] = ps
 	return nil
 }
 
-func (pt *PositionTracker) UnlockPositions(sniperID string, orderID string) {
+func (pt *PositionTracker) UnlockPositions(_ string, orderID string) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
-	pt.positions[sniperID].Unlock(orderID)
+	pt.positions.Unlock(orderID)
 }
 
-func (pt *PositionTracker) MatchPositionsToClose(sniperID string, action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
+func (pt *PositionTracker) MatchPositionsToClose(_ string, action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
-	return pt.positions[sniperID].MatchToClose(action, qty)
+	return pt.positions.MatchToClose(action, qty)
 }
 
-func (pt *PositionTracker) GetCopy(sniperID string) []position.Position {
+func (pt *PositionTracker) GetCopy(_ ...string) []position.Position {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
-	pos := pt.positions[sniperID]
-	posCopy := make([]position.Position, len(pos))
-	copy(posCopy, pos)
+	posCopy := make([]position.Position, len(pt.positions))
+	copy(posCopy, pt.positions)
 	return posCopy
 }
 
-// RemovePosition は特定の建玉を PositionTracker から強制削除します（不整合発生時の自己復旧用）
-func (pt *PositionTracker) RemovePosition(sniperID string, holdID string) {
+// RemovePosition removes a specific position by holdID from the symbol pool (used for reconciliation on definitive reject).
+func (pt *PositionTracker) RemovePosition(_ string, holdID string) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
-	positions := pt.positions[sniperID]
 	var newPositions []position.Position
-	for _, p := range positions {
+	for _, p := range pt.positions {
 		if p.ExecutionID == holdID {
 			if pt.logger != nil {
 				pt.logger.Warn("❌ [PositionTracker] 取引所拒絶によりメモリ上の建玉を強制抹消しました",
-					slog.String("sniper", sniperID),
 					slog.String("holdID", holdID),
 					slog.Float64("qty", p.LeavesQty),
 				)
@@ -190,5 +182,5 @@ func (pt *PositionTracker) RemovePosition(sniperID string, holdID string) {
 		}
 		newPositions = append(newPositions, p)
 	}
-	pt.positions[sniperID] = newPositions
+	pt.positions = newPositions
 }

@@ -165,7 +165,7 @@ func TestSniperNest_PnLAndPerformance(t *testing.T) {
 	sniperID := "sniper-1"
 
 	// Add positions
-	nest.positions.positions[sniperID] = []position.Position{
+	nest.positions.positions = []position.Position{
 		{LeavesQty: 10, Price: 2000, Action: order.ACTION_BUY},
 		{LeavesQty: 5, Price: 2010, Action: order.ACTION_SELL},
 	}
@@ -245,14 +245,14 @@ func TestSniperNest_ApplyExecution_DuplicateAndRequestFallbacks(t *testing.T) {
 
 	// 1. First execution (no parentOrder)
 	nest.applyExecution(sniperID, exec, order.ACTION_BUY, nil)
-	if len(nest.positions.positions[sniperID]) != 1 {
-		t.Fatalf("expected 1 position, got %d", len(nest.positions.positions[sniperID]))
+	if len(nest.positions.positions) != 1 {
+		t.Fatalf("expected 1 position, got %d", len(nest.positions.positions))
 	}
 
 	// 2. Duplicate execution (should be ignored)
 	nest.applyExecution(sniperID, exec, order.ACTION_BUY, nil)
-	if len(nest.positions.positions[sniperID]) != 1 {
-		t.Errorf("expected duplicate execution to be ignored, got positions: %d", len(nest.positions.positions[sniperID]))
+	if len(nest.positions.positions) != 1 {
+		t.Errorf("expected duplicate execution to be ignored, got positions: %d", len(nest.positions.positions))
 	}
 }
 
@@ -262,7 +262,7 @@ func TestSniperNest_ReducePositions_SpecifiedClose(t *testing.T) {
 	sniperID := "sniper-1"
 
 	// Setup positions
-	nest.positions.positions[sniperID] = []position.Position{
+	nest.positions.positions = []position.Position{
 		{ExecutionID: "exec-1", Symbol: "7203", Price: 2000, LeavesQty: 100, Action: order.ACTION_BUY, Meta: position.PositionMeta{EntryTime: time.Now().Add(-1 * time.Hour)}},
 		{ExecutionID: "exec-2", Symbol: "7203", Price: 2010, LeavesQty: 50, Action: order.ACTION_BUY, Meta: position.PositionMeta{EntryTime: time.Now()}},
 	}
@@ -289,7 +289,7 @@ func TestSniperNest_ReducePositions_SpecifiedClose(t *testing.T) {
 	})
 
 	// exec-2 fully closed (deleted), exec-1 has 30 remaining
-	remaining := nest.positions.positions[sniperID]
+	remaining := nest.positions.positions
 	if len(remaining) != 1 || remaining[0].ExecutionID != "exec-1" || remaining[0].LeavesQty != 30 {
 		t.Errorf("unexpected remaining positions: %+v", remaining)
 	}
@@ -310,7 +310,7 @@ func TestSniperNest_ReducePositions_FIFOAndLossPerformance(t *testing.T) {
 	sniperID := "sniper-1"
 
 	// Setup positions (exec-1 is older, exec-2 is newer)
-	nest.positions.positions[sniperID] = []position.Position{
+	nest.positions.positions = []position.Position{
 		{ExecutionID: "exec-1", Symbol: "7203", Price: 2000, LeavesQty: 100, Action: order.ACTION_BUY, Meta: position.PositionMeta{EntryTime: time.Now().Add(-1 * time.Hour)}},
 		{ExecutionID: "exec-2", Symbol: "7203", Price: 2010, LeavesQty: 50, Action: order.ACTION_BUY, Meta: position.PositionMeta{EntryTime: time.Now()}},
 	}
@@ -331,7 +331,7 @@ func TestSniperNest_ReducePositions_FIFOAndLossPerformance(t *testing.T) {
 	})
 
 	// Remaining: exec-2 with 30 qty
-	remaining := nest.positions.positions[sniperID]
+	remaining := nest.positions.positions
 	if len(remaining) != 1 || remaining[0].ExecutionID != "exec-2" || remaining[0].LeavesQty != 30 {
 		t.Errorf("unexpected remaining positions: %+v", remaining)
 	}
@@ -351,7 +351,7 @@ func TestSniperNest_ReducePositions_FlatPnL(t *testing.T) {
 	nest := NewSniperNest("7203", sym, nil, nil)
 	sniperID := "sniper-1"
 
-	nest.positions.positions[sniperID] = []position.Position{
+	nest.positions.positions = []position.Position{
 		{ExecutionID: "exec-1", Symbol: "7203", Price: 2000, LeavesQty: 100, Action: order.ACTION_BUY},
 	}
 
@@ -683,7 +683,7 @@ func TestSniperNest_ReconcileTarget_MoreBranches(t *testing.T) {
 
 	// 2. Virtual Qty is negative (-100), Target is 0 -> should BUY exit
 	nest2 := NewSniperNest("7203", sym, nil, nil)
-	nest2.positions.positions[sniperID] = []position.Position{
+	nest2.positions.positions = []position.Position{
 		{LeavesQty: 100, Price: 2000, Action: order.ACTION_SELL},
 	}
 	targetZero := strategy.TargetPosition{Qty: 0, Price: 0, OrderType: order.ORDER_TYPE_MARKET}
@@ -719,7 +719,7 @@ func TestSniperNest_ReconcileTarget_CancelCheck(t *testing.T) {
 	nest := NewSniperNest("7203", sym, []*Sniper{s1}, nil)
 
 	// Setup position and active order
-	nest.positions.positions["sniper-1"] = []position.Position{
+	nest.positions.positions = []position.Position{
 		{LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
 	}
 	ord := order.NewOrder("order-1", "7203", order.ACTION_BUY, 2000, 100)
@@ -741,7 +741,7 @@ func TestSniperNest_ReconcileTarget_ExitCooldown(t *testing.T) {
 	sniperID := "sniper-1"
 
 	// Position exists
-	nest.positions.positions[sniperID] = []position.Position{
+	nest.positions.positions = []position.Position{
 		{LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
 	}
 
@@ -763,7 +763,7 @@ func TestSniperNest_ReconcileTarget_PosInversion(t *testing.T) {
 	sniperID := "sniper-1"
 
 	// Virtual Qty is positive (+100)
-	nest.positions.positions[sniperID] = []position.Position{
+	nest.positions.positions = []position.Position{
 		{LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
 	}
 
@@ -782,7 +782,7 @@ func TestSniperNest_ReconcileTarget_PosInversion(t *testing.T) {
 
 	// Opposite case: Virtual Qty is negative (-100), Target is positive (+50)
 	nest2 := NewSniperNest("7203", sym, nil, nil)
-	nest2.positions.positions[sniperID] = []position.Position{
+	nest2.positions.positions = []position.Position{
 		{LeavesQty: 100, Price: 2000, Action: order.ACTION_SELL},
 	}
 	bullet2 := nest2.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, strategy.TargetPosition{Qty: 50, Price: 2000, OrderType: order.ORDER_TYPE_LIMIT}, order.EXCHANGE_TOSHO, order.TRADE_TYPE_SYSTEM, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
@@ -919,7 +919,7 @@ func TestSniperNest_CrossTradeRegulation(t *testing.T) {
 	}
 	
 	// sniper-2 の現在の仮想ポジションを設定（ロング建玉を100持っていると仮定して、それを返済する状況）
-	nest.positions.positions["sniper-2"] = []position.Position{
+	nest.positions.positions = []position.Position{
 		{ExecutionID: "hold-2", LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
 	}
 
