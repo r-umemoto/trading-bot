@@ -360,19 +360,20 @@ func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
 
 		// api.Order.State を order.OrderStatus にマッピング
 		// カブコム仕様: 1:待機, 2:処理中, 3:処理済, 4:訂正取消送信中, 5:終了
+		// 🌟 約定数量（CumQty）が注文数量（OrderQty）に達している場合は、
+		// カブコムAPIの State が 3 (処理済) であっても確実に ORDER_STATUS_FILLED に遷移させる。
 		status := order.ORDER_STATUS_WAITING
-		switch ord.State {
-		case api.STATE_WAITING, api.STATE_PROCESSING:
-			status = order.ORDER_STATUS_WAITING
-		case api.STATE_PROCESSED:
-			status = order.ORDER_STATUS_IN_PROGRESS
-		case api.STATE_CANCELING:
-			status = order.ORDER_STATUS_CANCEL_SENT // 訂正取消送信中
-		case api.STATE_FINISHED:
-			// State:5 は最終状態。CumQty を見て全約定か一部約定・取消かを判断する
-			if ord.CumQty >= ord.OrderQty && ord.OrderQty > 0 {
-				status = order.ORDER_STATUS_FILLED
-			} else {
+		if ord.CumQty >= ord.OrderQty && ord.OrderQty > 0 {
+			status = order.ORDER_STATUS_FILLED
+		} else {
+			switch ord.State {
+			case api.STATE_WAITING, api.STATE_PROCESSING:
+				status = order.ORDER_STATUS_WAITING
+			case api.STATE_PROCESSED:
+				status = order.ORDER_STATUS_IN_PROGRESS
+			case api.STATE_CANCELING:
+				status = order.ORDER_STATUS_CANCEL_SENT // 訂正取消送信中
+			case api.STATE_FINISHED:
 				// 取消・失効・期限切れのいずれか
 				// デフォルトを CANCELED とし、明細から詳細を判断
 				status = order.ORDER_STATUS_CANCELED
