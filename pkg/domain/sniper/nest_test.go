@@ -1037,3 +1037,49 @@ func TestSniperNest_InflightExitOrder_NoDuplicateExit(t *testing.T) {
 	}
 }
 
+func TestSniperNest_InflightExitOrder_NotBlockedByEntryOrder(t *testing.T) {
+	sym := symbol.Symbol{Code: "7201"}
+	nest := NewSniperNest("7201", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// 1. Setup position
+	nest.positions.ApplyExecution(sniperID, "7201", order.Execution{
+		ID:    "hold-1",
+		Price: 278,
+		Qty:   1200,
+	}, order.ACTION_SELL, nil, func(pnl float64) {})
+
+	// 2. An entry order is somehow still tracked in ActiveOrders (e.g. state transition lag)
+	mktEntryOrd := order.NewOrder(order.GenerateLocalID(), "7201", order.ACTION_SELL, 0, 1200,
+		order.WithType(order.ORDER_TYPE_MARKET),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY),
+	)
+	mktEntryOrd.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	nest.AddOrder(sniperID, mktEntryOrd)
+
+	// 3. Next tick arrives with Force Exit target 0
+	target := strategy.TargetPosition{
+		Qty:       0,
+		Price:     0,
+		OrderType: order.ORDER_TYPE_MARKET,
+		Reason:    "LUNCH_BREAK_FORCE_EXIT",
+	}
+
+	bullet := nest.ReconcileTarget(sniperID, tick.Tick{Price: 278}, target, order.EXCHANGE_TOSHO, order.TRADE_TYPE_GENERAL_DAY, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+
+	if bullet == nil {
+		t.Fatalf("expected exit bullet even if entry order is in active orders, but got nil")
+	}
+
+	ordBullet, ok := bullet.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %T", bullet)
+	}
+	if ordBullet.Order.CashMargin != order.CASH_MARGIN_MARGIN_EXIT {
+		t.Fatalf("expected CashMargin CASH_MARGIN_MARGIN_EXIT, got %v", ordBullet.Order.CashMargin)
+	}
+	if ordBullet.Order.OrderQty != 1200 {
+		t.Fatalf("expected OrderQty 1200, got %f", ordBullet.Order.OrderQty)
+	}
+}
+

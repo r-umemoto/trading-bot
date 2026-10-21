@@ -643,24 +643,44 @@ func (n *SniperNest) ReconcileTarget(
 	}
 
 	// 🌟 新規発注・重複返済の安全弁（Inflight Guard）:
-	// 送信中（PREPARING/PENDING）の注文、未約定の成行注文、または未約定の返済注文が存在する場合は、
-	// 取引所での受付・約定および建玉同期が完了するまで新規発注・重複返済を厳格に保留（多重発注防止）
+	// 取引所での受付・約定および建玉同期が完了するまで、多重発注や重複返済を厳格に保留・防止する。
+	isExitOrder := (cashMargin == order.CASH_MARGIN_MARGIN_EXIT)
+
 	for _, o := range stats.ActiveOrders {
-		if o == nil {
+		if o == nil || o.IsCompleted() {
 			continue
 		}
-		if o.IsMarket() {
-			return nil
-		}
-		if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && cashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-			return nil
-		}
-		if o.InternalState() == order.STATE_PREPARING || o.InternalState() == order.STATE_PENDING {
-			return nil
+
+		if isExitOrder {
+			// 【返済注文の発注時】
+			// 既に未完了の返済注文が存在する場合のみ、二重返済防止のため保留する。
+			// （新規注文のスタックや未約定によって手仕舞い返済が阻害されるのを防ぐ）
+			if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+				return nil
+			}
+		} else {
+			// 【新規エントリー注文の発注時】
+			// 1. 送信中（PREPARING/PENDING）の注文がある場合は完了まで新規発注を保留
+			if o.InternalState() == order.STATE_PREPARING || o.InternalState() == order.STATE_PENDING {
+				return nil
+			}
+			// 2. 約定待ちの成行新規注文がある場合は多重エントリーを防止するため保留
+			if o.IsMarket() && o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY && o.CumQty < o.OrderQty {
+				return nil
+			}
+			// 3. 決済中のポジションがある場合は新規エントリーを保留（両建て・混乱防止）
+			if o.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+				return nil
+			}
 		}
 	}
 
-	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, absGap, cashMargin, exchange, marginType, accountType)
+	orderQty := absGap
+	if isExitOrder && desiredQty > 0 && desiredQty < orderQty {
+		orderQty = desiredQty
+	}
+
+	entry, exit := n.buildOrderPairFromTarget(sniperID, target, action, orderQty, cashMargin, exchange, marginType, accountType)
 	if entry == nil {
 		return nil
 	}
