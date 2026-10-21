@@ -186,3 +186,59 @@ func (pt *PositionTracker) RemovePosition(holdID string) {
 	}
 	pt.positions = newPositions
 }
+
+// Reconcile は取引所に実在する建玉リストとメモリ上の建玉リストを突き合わせ、
+// 未追跡の野良建玉があれば自動登録し、取引所ですでに消失したゴースト建玉があれば消去します。
+func (pt *PositionTracker) Reconcile(symbolCode string, actualPositions []position.Position) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	// 該当銘柄の実建玉マップを作成
+	actualMap := make(map[string]position.Position)
+	for _, p := range actualPositions {
+		if p.Symbol == symbolCode {
+			actualMap[p.ExecutionID] = p
+		}
+	}
+
+	// 1. メモリ上に存在するが、取引所にもう存在しないゴースト建玉を消去
+	var activePositions []position.Position
+	for _, p := range pt.positions {
+		if actual, exists := actualMap[p.ExecutionID]; exists {
+			// 残存数量の同期（部分決済などに対応）
+			p.LeavesQty = actual.LeavesQty
+			activePositions = append(activePositions, p)
+		} else {
+			if pt.logger != nil {
+				pt.logger.Info("🧹 [GHOST_POSITION_CLEARED] 取引所ですでに決済済みの建玉をメモリから消去しました",
+					slog.String("symbol", symbolCode),
+					slog.String("holdID", p.ExecutionID),
+					slog.Float64("qty", p.LeavesQty),
+				)
+			}
+		}
+	}
+
+	// 2. 取引所に実在するが、Botのメモリに登録されていない野良建玉（未追跡建玉）を復旧・登録
+	memMap := make(map[string]bool)
+	for _, p := range activePositions {
+		memMap[p.ExecutionID] = true
+	}
+
+	for holdID, act := range actualMap {
+		if !memMap[holdID] {
+			activePositions = append(activePositions, act)
+			if pt.logger != nil {
+				pt.logger.Warn("🚨 [ORPHAN_POSITION_ADOPTED] 取引所に実在する未追跡建玉を検知し、Botの管理下に自動復旧しました",
+					slog.String("symbol", symbolCode),
+					slog.String("holdID", holdID),
+					slog.String("action", string(act.Action)),
+					slog.Float64("qty", act.LeavesQty),
+					slog.Float64("price", act.Price),
+				)
+			}
+		}
+	}
+
+	pt.positions = activePositions
+}

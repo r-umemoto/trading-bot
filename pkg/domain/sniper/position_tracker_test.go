@@ -325,3 +325,86 @@ func TestPositionTracker_ReducePositions_SkipFIFOSignaled(t *testing.T) {
 		t.Errorf("expected buy-A to remain with 100 qty, got %+v", pos[0])
 	}
 }
+
+func TestPositionTracker_Reconcile(t *testing.T) {
+	pt := sniper.NewPositionTracker(nil)
+
+	// 初期状態: メモリ上に buy-1 (100株) と ghost-1 (50株) が存在
+	pt.ApplyExecution("test-sniper", "7201", order.Execution{
+		ID:            "buy-1",
+		Qty:           100,
+		Price:         278,
+		ExecutionTime: time.Now(),
+	}, order.ACTION_BUY, nil, func(pnl float64) {})
+
+	pt.ApplyExecution("test-sniper", "7201", order.Execution{
+		ID:            "ghost-1",
+		Qty:           50,
+		Price:         280,
+		ExecutionTime: time.Now(),
+	}, order.ACTION_BUY, nil, func(pnl float64) {})
+
+	// 取引所（カブコム）の最新実建玉:
+	// - buy-1 は一部返済されて 80株 に減少
+	// - ghost-1 は取引所に存在しない（手動決済済み）
+	// - orphan-1 (未追跡の野良建玉、1200株) が新たに存在
+	actualFromExchange := []position.Position{
+		{
+			ExecutionID: "buy-1",
+			Symbol:      "7201",
+			Action:      order.ACTION_BUY,
+			LeavesQty:   80,
+			Price:       278,
+		},
+		{
+			ExecutionID: "orphan-1",
+			Symbol:      "7201",
+			Action:      order.ACTION_SELL,
+			LeavesQty:   1200,
+			Price:       277.9,
+		},
+		{
+			ExecutionID: "other-sym-1",
+			Symbol:      "6762",
+			Action:      order.ACTION_BUY,
+			LeavesQty:   100,
+			Price:       2920,
+		},
+	}
+
+	// 7201 の突合を実行
+	pt.Reconcile("7201", actualFromExchange)
+
+	positions := pt.GetCopy()
+	if len(positions) != 2 {
+		t.Fatalf("expected 2 positions after reconcile, got %d", len(positions))
+	}
+
+	posMap := make(map[string]position.Position)
+	for _, p := range positions {
+		posMap[p.ExecutionID] = p
+	}
+
+	// 1. buy-1 は 80株 に更新されていること
+	buy1, exists := posMap["buy-1"]
+	if !exists {
+		t.Errorf("expected buy-1 to exist")
+	} else if buy1.LeavesQty != 80 {
+		t.Errorf("expected buy-1 LeavesQty 80, got %f", buy1.LeavesQty)
+	}
+
+	// 2. ghost-1 は消去されていること
+	if _, exists := posMap["ghost-1"]; exists {
+		t.Errorf("expected ghost-1 to be cleared, but it still exists")
+	}
+
+	// 3. orphan-1 は自動登録（復旧）されていること
+	orphan, exists := posMap["orphan-1"]
+	if !exists {
+		t.Errorf("expected orphan-1 to be adopted")
+	} else {
+		if orphan.Action != order.ACTION_SELL || orphan.LeavesQty != 1200 {
+			t.Errorf("expected orphan-1 to be SELL 1200, got %+v", orphan)
+		}
+	}
+}

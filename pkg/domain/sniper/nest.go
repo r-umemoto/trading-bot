@@ -213,6 +213,13 @@ func (n *SniperNest) UpdateOrders(report order.Orders) {
 	n.Update(report, time.Now())
 }
 
+// ReconcilePositions は取引所から直接取得した実建玉一覧をもとに、メモリ上の建玉状態を自己修復・同期します。
+func (n *SniperNest) ReconcilePositions(actualPositions []position.Position) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.positions.Reconcile(n.SymbolCode, actualPositions)
+}
+
 // GetPerformance は指定したスナイパーの成績を取得します。
 func (n *SniperNest) GetPerformance(sniperID string) Performance {
 	n.mu.Lock()

@@ -98,6 +98,9 @@ func (u *TradeUseCase) Start(ctx context.Context, chs *market.MarketChannels) {
 			}
 		}
 	}
+
+	// 🌟 取引所建玉の定期自動照合・自己復旧ループを起動
+	go u.startPositionReconciliationLoop(ctx)
 }
 
 // runOperationEventLoop は特定の作戦のイベントループを非同期に監視します
@@ -155,16 +158,46 @@ func (u *TradeUseCase) checkZombieOrders(ctx context.Context, op sniper.Operatio
 	}
 }
 
-// reconcileZombieOrder は最新の注文一覧を能動照会し、自己復旧を試みます
+// reconcileZombieOrder は最新の注文・建玉一覧を能動照会し、自己復旧を試みます
 func (u *TradeUseCase) reconcileZombieOrder(ctx context.Context, op sniper.Operation) {
-	slog.Info("🔍 [ZOMBIE_RECONCILIATION] 最新の注文状態を取引所APIに能動照会し、自己復旧を試みます...", slog.String("opID", op.GetID()))
+	slog.Info("🔍 [ZOMBIE_RECONCILIATION] 最新の注文・建玉状態を取引所APIに能動照会し、自己復旧を試みます...", slog.String("opID", op.GetID()))
 	ords, err := u.gateway.GetOrders(ctx)
 	if err != nil {
 		slog.Error("❌ [ZOMBIE_RECONCILIATION] 注文状態の取得に失敗しました", slog.String("opID", op.GetID()), slog.Any("error", err))
 		return
 	}
 	op.UpdateOrders(ords)
+
+	positions, err := u.gateway.GetPositions(ctx, order.PRODUCT_MARGIN)
+	if err == nil {
+		op.ReconcilePositions(positions)
+	}
+
 	slog.Info("✅ [ZOMBIE_RECONCILIATION] 自己復旧用の同期照会が完了しました", slog.String("opID", op.GetID()))
+}
+
+// startPositionReconciliationLoop は取引所の建玉一覧を定期的に照会し、
+// Botのメモリ上の建玉と突合して野良建玉の自動復旧やゴースト建玉の消去を行います。
+func (u *TradeUseCase) startPositionReconciliationLoop(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			positions, err := u.gateway.GetPositions(ctx, order.PRODUCT_MARGIN)
+			if err != nil {
+				slog.Warn("⚠️ [POSITION_RECONCILIATION] 取引所建玉の定期照会に失敗しました（次回再試行）", slog.Any("error", err))
+				continue
+			}
+
+			for _, op := range u.operations {
+				op.ReconcilePositions(positions)
+			}
+		}
+	}
 }
 
 // fire は実際の発注・キャンセル処理を API ゲートウェイに対して非同期に実行します
