@@ -127,6 +127,17 @@ func TestMarketGateway_GetOrders(t *testing.T) {
 			},
 			expected: order.ORDER_STATUS_FILLED,
 		},
+		{
+			name: "State PROCESSED (3) with CumQty == OrderQty is mapped to FILLED",
+			apiOrder: api.Order{
+				ID:             "order-6",
+				State:          api.STATE_PROCESSED,
+				OrderQty:       1200,
+				CumQty:         1200,
+				FrontOrderType: 10,
+			},
+			expected: order.ORDER_STATUS_FILLED,
+		},
 	}
 
 	for _, tt := range tests {
