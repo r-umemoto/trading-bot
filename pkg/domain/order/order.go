@@ -184,9 +184,12 @@ func (o *Order) IsCompleted() bool {
 }
 
 // CanCancel はこの注文が現在（ローカルまたは取引所API経由で）キャンセル可能な状態にあるかを判定します。
-// APIへの発注送信中 (STATE_PENDING) の場合は、結果が確定するまでキャンセルできません。
+// 成行注文や、APIへの発注送信中 (STATE_PENDING) の場合は、キャンセルできません。
 func (o *Order) CanCancel() bool {
 	if o.IsCompleted() {
+		return false
+	}
+	if o.IsMarket() {
 		return false
 	}
 	if o.IsCancelSent() {
