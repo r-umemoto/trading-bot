@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/sniper/strategy"
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
@@ -235,6 +236,11 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 func (o *PairTradingOperation) UpdateOrders(report order.Orders) {
 	o.nestA.UpdateOrders(report)
 	o.nestB.UpdateOrders(report)
+}
+
+func (o *PairTradingOperation) ReconcilePositions(actualPositions []position.Position) {
+	o.nestA.ReconcilePositions(actualPositions)
+	o.nestB.ReconcilePositions(actualPositions)
 }
 
 func (o *PairTradingOperation) ForceExit() {

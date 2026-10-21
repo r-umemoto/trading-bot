@@ -2,6 +2,7 @@ package sniper
 
 import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
@@ -14,6 +15,7 @@ type Operation interface {
 
 	HandleTick(t tick.Tick) []FireAction
 	UpdateOrders(report order.Orders)
+	ReconcilePositions(actualPositions []position.Position)
 	ForceExit()
 	GetActiveOrders() []*order.Order
 	GetReportableTargets() []ReportableTarget
