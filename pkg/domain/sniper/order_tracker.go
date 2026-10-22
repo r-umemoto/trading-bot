@@ -358,7 +358,11 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 								if pEntry.execution.Qty <= 0 {
 									break
 								}
-								if cp.HoldID != pe.Execution.ID && ot.processedExecutions[cp.HoldID] {
+								hasOtherPos := false
+								if ot.positions != nil {
+									hasOtherPos = ot.positions.HasPosition(cp.HoldID)
+								}
+								if cp.HoldID != pe.Execution.ID && (hasOtherPos || ot.processedExecutions[cp.HoldID]) {
 									otherCloseQty := cp.Qty
 									if otherCloseQty > pEntry.execution.Qty {
 										otherCloseQty = pEntry.execution.Qty
@@ -413,7 +417,11 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 				var missingHoldIDs []string
 				if pe.ParentOrder != nil && pe.ParentOrder.Request != nil {
 					for _, cp := range pe.ParentOrder.Request.ClosePositions {
-						if !ot.processedExecutions[cp.HoldID] {
+						hasPos := false
+						if ot.positions != nil {
+							hasPos = ot.positions.HasPosition(cp.HoldID)
+						}
+						if !hasPos && !ot.processedExecutions[cp.HoldID] {
 							missingHoldIDs = append(missingHoldIDs, cp.HoldID)
 						}
 					}
