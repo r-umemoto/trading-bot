@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -81,7 +82,8 @@ func (c *KabuClient) GetSymbol(symbol string, exchange ExchageType) (*SymbolSucc
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("銘柄情報取得APIエラー: status=%d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("銘柄情報取得APIエラー: status=%d, body=%s", resp.StatusCode, string(body))
 	}
 
 	var symbolResp SymbolSuccess
