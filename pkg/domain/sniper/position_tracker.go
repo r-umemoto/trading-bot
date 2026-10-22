@@ -152,6 +152,23 @@ func (pt *PositionTracker) UnlockPositions(orderID string) {
 	pt.positions.Unlock(orderID)
 }
 
+func (pt *PositionTracker) UpdateLockOrderID(oldID, newID string) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	pt.positions.UpdateLockOrderID(oldID, newID)
+}
+
+func (pt *PositionTracker) HasPosition(holdID string) bool {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
+	for _, p := range pt.positions {
+		if p.ExecutionID == holdID {
+			return true
+		}
+	}
+	return false
+}
+
 func (pt *PositionTracker) MatchPositionsToClose(action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()

@@ -604,4 +604,69 @@ func TestOrderTracker_Update_ResolveLocalID_MarketBuyNonZeroPrice(t *testing.T) 
 	}
 }
 
+func TestOrderTracker_Update_ExitExecutionWithKnownHoldID(t *testing.T) {
+	pt := sniper.NewPositionTracker(nil)
+	sniperID := "test-sniper"
+	symbolDetail := symbol.Symbol{Code: "9501"}
+
+	// 1. 事前に建玉 E2026102201V7U (HoldID) を PositionTracker に登録
+	pt.ApplyExecution(sniperID, "9501", order.Execution{
+		ID:            "E2026102201V7U",
+		Price:         505.8,
+		Qty:           600,
+		ExecutionTime: time.Now(),
+	}, order.ACTION_SELL, nil, func(pnl float64) {})
+
+	ot := sniper.NewOrderTracker(pt, nil)
+
+	// 2. この建玉を指定した返済注文
+	exitOrd := order.NewOrder(
+		"local-exit-1",
+		"9501",
+		order.ACTION_BUY,
+		0,
+		600,
+		order.WithType(order.ORDER_TYPE_MARKET),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+		order.WithRequest(&order.OrderRequest{
+			ClosePositions: []order.ClosePosition{
+				{HoldID: "E2026102201V7U", Qty: 600},
+			},
+		}),
+	)
+	ot.Add(sniperID, exitOrd)
+
+	// 3. 取引所から届いた約定レポート (ExecutionID はカブコム約定番号で、HoldID とは異なる体系)
+	report := order.Orders{
+		Orders: []order.Order{
+			{
+				ID:         "local-exit-1",
+				Symbol:     "9501",
+				Action:     order.ACTION_BUY,
+				OrderQty:   600,
+				CashMargin: order.CASH_MARGIN_MARGIN_EXIT,
+				Type:       order.ORDER_TYPE_MARKET,
+				Executions: []order.Execution{
+					{
+						ID:            "20261022E02N87546499",
+						Price:         507.1,
+						Qty:           600,
+						ExecutionTime: time.Now(),
+					},
+				},
+			},
+		},
+	}
+
+	var executedID string
+	ot.Update(report, symbolDetail, time.Now(), func(sid string, exec order.Execution, act order.Action, oca time.Time, po *order.Order) {
+		executedID = exec.ID
+	})
+
+	// 4. HoldID と ExecutionID が異なっていても、PositionTracker に建玉が存在するため保留されず直ちに適用されること
+	if executedID != "20261022E02N87546499" {
+		t.Fatalf("expected exit execution to be processed immediately, but got '%s'", executedID)
+	}
+}
+
 

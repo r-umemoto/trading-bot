@@ -27,6 +27,18 @@ func (ps Positions) Unlock(orderID string) {
 	}
 }
 
+// UpdateLockOrderID はロックに記録されている注文IDを新しいID（サーバー注文番号等）に付け替えます
+func (ps Positions) UpdateLockOrderID(oldID, newID string) {
+	for i := range ps {
+		if ps[i].Locks != nil {
+			if qty, exists := ps[i].Locks[oldID]; exists {
+				delete(ps[i].Locks, oldID)
+				ps[i].Locks[newID] += qty
+			}
+		}
+	}
+}
+
 // MatchToClose は指定した方向と数量に一致する返済候補の建玉を探します
 func (ps Positions) MatchToClose(action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
 	var closePositions []order.ClosePosition
