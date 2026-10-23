@@ -970,7 +970,10 @@ func (n *SniperNest) ReconcileTarget(
 		}
 	}
 
-	orderQty := absGap
+	orderQty := desiredQty
+	if absGap < orderQty {
+		orderQty = absGap
+	}
 	if isExitOrder && desiredQty > 0 && desiredQty < orderQty {
 		orderQty = desiredQty
 	}
