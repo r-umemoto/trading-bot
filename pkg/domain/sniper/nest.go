@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -237,6 +238,10 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 	var evals []sniperEval
 	totalTargetQty := 0.0
 
+	var longSniper, shortSniper *Sniper
+	var longTarget, shortTarget strategy.TargetPosition
+	var longObs, shortObs Observation
+
 	for _, s := range n.snipers {
 		if s.GetLifecycle() == LifecycleStopped {
 			continue
@@ -288,56 +293,116 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 			obs:    obs,
 		})
 		totalTargetQty += target.Qty
+
+		if target.IsLong() || strings.Contains(s.ID, "long") {
+			longSniper = s
+			longTarget = target
+			longObs = obs
+		}
+		if target.IsShort() || strings.Contains(s.ID, "short") {
+			shortSniper = s
+			shortTarget = target
+			shortObs = obs
+		}
 	}
 
 	// 物理確定建玉
 	physicalHoldQty := n.positions.HoldQty()
 
-	var actions []FireAction
-	for _, ev := range evals {
-		s := ev.sniper
-		origTarget := ev.target
-		effectiveTarget := origTarget
-
-		// 🌟 相殺・ドテンの自動調停ロジック:
-		// 1. 物理建玉がショート (< 0) で、ネット合計目標がフラット (== 0) またはロング (> 0) の場合:
-		//    ショートスナイパーは即座に決済（Target: 0）させ、ロングスナイパーはショート建玉解消まで待機（スキップ）
-		if physicalHoldQty < 0 && totalTargetQty >= 0 {
-			if origTarget.IsShort() {
-				effectiveTarget = strategy.TargetPosition{
-					Qty:       0,
-					Price:     0,
-					OrderType: order.ORDER_TYPE_MARKET,
-					Reason:    "NET_OFFSET_EXIT_SHORT",
-				}
-			} else {
-				// ロング側スナイパーはショート建玉が市場から解消されるまで待機
-				continue
-			}
-		} else if physicalHoldQty > 0 && totalTargetQty <= 0 {
-			// 2. 物理建玉がロング (> 0) で、ネット合計目標がフラット (== 0) またはショート (< 0) の場合:
-			if origTarget.IsLong() {
-				effectiveTarget = strategy.TargetPosition{
-					Qty:       0,
-					Price:     0,
-					OrderType: order.ORDER_TYPE_MARKET,
-					Reason:    "NET_OFFSET_EXIT_LONG",
-				}
-			} else {
-				// ショート側スナイパーはロング建玉が市場から解消されるまで待機
-				continue
-			}
-		}
-
-		bullet := n.ReconcileTarget(s.ID, ev.obs.Tick, effectiveTarget, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+	// --- 内部ヘルパー関数群（可読性と保守性の向上） ---
+	fireTarget := func(s *Sniper, obs Observation, target strategy.TargetPosition) []FireAction {
+		var acts []FireAction
+		bullet := n.ReconcileTarget(s.ID, obs.Tick, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 		if bullet != nil {
-			actions = append(actions, FireAction{
-				SniperID: s.ID,
-				Bullet:   bullet,
-			})
+			acts = append(acts, FireAction{SniperID: s.ID, Bullet: bullet})
 			if ordBullet, ok := bullet.(OrderBullet); ok {
 				n.AddOrder(s.ID, ordBullet.Order)
 			}
+		}
+		return acts
+	}
+
+	cancelActiveEntries := func(sniperID string) []FireAction {
+		var acts []FireAction
+		stats := n.orders.GetInflightStats(sniperID)
+		for _, o := range stats.ActiveOrders {
+			if o != nil && o.CanCancel() && o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+				o.ToCancelSent()
+				o.CancelSentAt = t.CurrentPriceTime
+				acts = append(acts, FireAction{
+					SniperID: sniperID,
+					Bullet:   CancelBullet{OrderID: o.ID},
+				})
+			}
+		}
+		return acts
+	}
+
+	var actions []FireAction
+
+	// 🌟 全スナイパーの集約目標 (totalTargetQty) に基づく調停
+	switch {
+	case totalTargetQty > 0:
+		// 【ロング優勢】ショート建玉があればまずドテン相殺決済（建玉解消までロング発注は待機）
+		if physicalHoldQty < 0 && shortSniper != nil {
+			return fireTarget(shortSniper, shortObs, strategy.TargetPosition{
+				Qty:       0,
+				Price:     0,
+				OrderType: order.ORDER_TYPE_MARKET,
+				Reason:    "NET_OFFSET_EXIT_SHORT",
+			})
+		}
+		// ショート側の未約定新規売り注文をキャンセル
+		if shortSniper != nil {
+			actions = append(actions, cancelActiveEntries(shortSniper.ID)...)
+		}
+		// ロング側スナイパーに集約目標を発注・維持
+		if longSniper != nil {
+			target := longTarget
+			target.Qty = totalTargetQty
+			actions = append(actions, fireTarget(longSniper, longObs, target)...)
+		}
+
+	case totalTargetQty < 0:
+		// 【ショート優勢】ロング建玉があればまずドテン相殺決済（建玉解消までショート発注は待機）
+		if physicalHoldQty > 0 && longSniper != nil {
+			return fireTarget(longSniper, longObs, strategy.TargetPosition{
+				Qty:       0,
+				Price:     0,
+				OrderType: order.ORDER_TYPE_MARKET,
+				Reason:    "NET_OFFSET_EXIT_LONG",
+			})
+		}
+		// ロング側の未約定新規買い注文をキャンセル
+		if longSniper != nil {
+			actions = append(actions, cancelActiveEntries(longSniper.ID)...)
+		}
+		// ショート側スナイパーに集約目標を発注・維持
+		if shortSniper != nil {
+			target := shortTarget
+			target.Qty = totalTargetQty
+			actions = append(actions, fireTarget(shortSniper, shortObs, target)...)
+		}
+
+	default:
+		// 【中立・手仕舞い（Target = 0）】建玉があれば全決済、未約定エントリーは全キャンセル
+		if physicalHoldQty > 0 && longSniper != nil {
+			actions = append(actions, fireTarget(longSniper, longObs, strategy.TargetPosition{
+				Qty:       0,
+				Price:     0,
+				OrderType: order.ORDER_TYPE_MARKET,
+				Reason:    "NET_OFFSET_FLAT_LONG",
+			})...)
+		} else if physicalHoldQty < 0 && shortSniper != nil {
+			actions = append(actions, fireTarget(shortSniper, shortObs, strategy.TargetPosition{
+				Qty:       0,
+				Price:     0,
+				OrderType: order.ORDER_TYPE_MARKET,
+				Reason:    "NET_OFFSET_FLAT_SHORT",
+			})...)
+		}
+		for _, ev := range evals {
+			actions = append(actions, cancelActiveEntries(ev.sniper.ID)...)
 		}
 	}
 
@@ -556,6 +621,16 @@ func (n *SniperNest) GetCommittedPosition(sniperID string) CommittedPosition {
 	}
 }
 
+// GetTotalCommittedPosition は物理確定建玉とネスト全体の全アクティブ注文からコミット中ポジションを計算して返します
+func (n *SniperNest) GetTotalCommittedPosition() CommittedPosition {
+	physicalQty := n.positions.HoldQty()
+	orderQty := n.orders.TotalSignedQty()
+
+	return CommittedPosition{
+		TotalQty: physicalQty + orderQty,
+	}
+}
+
 func (n *SniperNest) ReconcileTarget(
 	sniperID string,
 	t tick.Tick,
@@ -591,6 +666,9 @@ func (n *SniperNest) ReconcileTarget(
 	// 物理確定建玉と市場コミット中ポジション（CommittedPosition）の取得
 	physicalHoldQty := n.positions.HoldQty()
 	committedPos := n.GetCommittedPosition(sniperID)
+	if n.reconciliationMode == ReconciliationModeAggregate {
+		committedPos = n.GetTotalCommittedPosition()
+	}
 
 	// ポジション反転の安全弁:
 	// 反対ポジションを持つ場合は、両建てを防ぐため一旦全決済（Target=0）を優先する（エンティティの執行ポリシー）
@@ -838,7 +916,10 @@ func (n *SniperNest) ReconcileTarget(
 		}
 	}
 
-	orderQty := absGap
+	orderQty := desiredQty
+	if absGap < orderQty {
+		orderQty = absGap
+	}
 	if isExitOrder && desiredQty > 0 && desiredQty < orderQty {
 		orderQty = desiredQty
 	}
