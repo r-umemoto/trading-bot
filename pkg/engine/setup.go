@@ -49,6 +49,20 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	// 4. 作戦（Operation）の構築
 	operations := buildOperationsFromConfigs(gateway.DataPool(), snipers, opTargets)
 
+	// 作戦で使用されている銘柄のセットを作成
+	activeOpSymbols := make(map[string]bool)
+	for _, op := range opTargets {
+		if sym, ok := op.Params["symbol"].(string); ok {
+			activeOpSymbols[sym] = true
+		}
+		if symA, ok := op.Params["symbol_a"].(string); ok {
+			activeOpSymbols[symA] = true
+		}
+		if symB, ok := op.Params["symbol_b"].(string); ok {
+			activeOpSymbols[symB] = true
+		}
+	}
+
 	var allWatchTargets []symbol.WatchTarget
 	for _, t := range targets {
 		if !t.Enabled {
@@ -56,7 +70,11 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 		}
 		detail, err := gateway.GetSymbol(ctx, t.Symbol, t.Exchange)
 		if err != nil {
-			return nil, fmt.Errorf("銘柄情報取得に失敗 (%s): %w", t.Symbol, err)
+			if activeOpSymbols[t.Symbol] {
+				return nil, fmt.Errorf("作戦対象銘柄の情報取得に失敗 (%s): %w", t.Symbol, err)
+			}
+			slog.Warn("⚠️ 観測用ベンチ銘柄の情報取得に失敗したためスキップします", slog.String("symbol", t.Symbol), slog.Any("error", err))
+			continue
 		}
 		allWatchTargets = append(allWatchTargets, symbol.WatchTarget{
 			Detail:   detail,
