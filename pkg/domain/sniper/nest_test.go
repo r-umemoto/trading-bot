@@ -1215,5 +1215,44 @@ func TestSniperNest_AggregatedReconciliation_OffsetExit_LongToShort(t *testing.T
 	}
 }
 
+// TestSniperNest_AggregatedReconciliation_NoFriendlyFire は、
+// ロング戦略が +100株 要求し、ショート戦略が 0株 要求のとき、
+// ショート戦略がロング建玉を誤って返済決済（味方殺し）しないことを保証するテストです。
+func TestSniperNest_AggregatedReconciliation_NoFriendlyFire(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	stratLong := &controllableStrategy{target: strategy.TargetPosition{Qty: 100}}
+	stratShort := &controllableStrategy{target: strategy.TargetPosition{Qty: 0}}
 
+	sniperLong := NewSniper("sniper-long", sym, stratLong, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sniperShort := NewSniper("sniper-short", sym, stratShort, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 
+	nest := NewSniperNest("7203", sym, []*Sniper{sniperLong, sniperShort}, nil)
+	nest.SetReconciliationMode(ReconciliationModeAggregate)
+
+	// 1. 物理ロング建玉 100株 が既に存在している状態
+	nest.positions.ApplyExecution("sniper-long", "7203", order.Execution{
+		ID:    "exec-long-1",
+		Price: 2000,
+		Qty:   100,
+	}, order.ACTION_BUY, nil, func(pnl float64) {})
+
+	if nest.positions.HoldQty() != 100 {
+		t.Fatalf("expected initial holdQty 100, got %f", nest.positions.HoldQty())
+	}
+
+	// 2. Tick受信（ロングは+100維持、ショートは0表明）
+	actions := nest.HandleTick(tick.Tick{Price: 2005, CurrentPriceTime: time.Now()})
+
+	// 3. 検証:
+	//    ネット目標数量は +100株。
+	//    既に建玉 +100株 があるため、新規発注も返済決済もゼロ（actions = 0）であるべき！
+	//    （以前のバグではショートのTarget=0が誤返済売りを発注していた）
+	for _, act := range actions {
+		if ordBullet, ok := act.Bullet.(OrderBullet); ok {
+			ord := ordBullet.Order
+			if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+				t.Fatalf("🚨 味方殺し検知: ショートのTarget=0がロング建玉を返済売り決済しようとしました: %+v", ord)
+			}
+		}
+	}
+}
