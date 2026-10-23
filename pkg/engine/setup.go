@@ -237,6 +237,9 @@ func buildOperationsFromConfigs(
 			symSnipers, ok := snipersBySymbol[symbolCode]
 			if ok && len(symSnipers) > 0 {
 				nest := buildNestHelper(symbolCode, symSnipers)
+				if modeStr, ok := op.Params["reconciliation_mode"].(string); ok && modeStr == "aggregated" {
+					nest.SetReconciliationMode(sniper.ReconciliationModeAggregate)
+				}
 				operations = append(operations, sniper.NewDefaultOperation(op.ID, nest))
 				delete(snipersBySymbol, symbolCode)
 			}

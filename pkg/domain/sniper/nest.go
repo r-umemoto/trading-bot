@@ -37,19 +37,47 @@ type FireAction struct {
 	Bullet   Bullet
 }
 
+// ReconciliationMode はネスト配下の戦略群の目標ポジション調停モードを表します
+type ReconciliationMode string
+
+const (
+	// ReconciliationModeLegacy は従来仕様（個別評価・クロス取引抑止ガード）です
+	ReconciliationModeLegacy ReconciliationMode = "legacy"
+	// ReconciliationModeAggregate は真のターゲットポジション集約（相殺・ドテン自動執行）です
+	ReconciliationModeAggregate ReconciliationMode = "aggregated"
+)
+
 // SniperNest は特定の銘柄（Symbol）におけるスナイパーたちを束ねるドメイン集約（Aggregate Root）です。
 // 子コンポーネント（OrderTracker, PositionTracker, PerformanceTracker, CooldownTracker）をオーケストレートし、銘柄ごとの取引状態を保護します。
 type SniperNest struct {
-	SymbolCode   string
-	Detail       symbol.Symbol // 銘柄情報
-	snipers      []*Sniper
-	orders       *OrderTracker
-	positions    *PositionTracker
-	performance  *PerformanceTracker
-	cooldowns    *CooldownTracker
-	Logger       *slog.Logger
-	mu           sync.Mutex
-	lastTickTime time.Time // 🌟 最新のシミュレーション時刻を保存（エラー発生時の時間軸統一用）
+	SymbolCode         string
+	Detail             symbol.Symbol // 銘柄情報
+	snipers            []*Sniper
+	orders             *OrderTracker
+	positions          *PositionTracker
+	performance        *PerformanceTracker
+	cooldowns          *CooldownTracker
+	Logger             *slog.Logger
+	mu                 sync.Mutex
+	lastTickTime       time.Time          // 🌟 最新のシミュレーション時刻を保存（エラー発生時の時間軸統一用）
+	reconciliationMode ReconciliationMode // 🌟 調停モード（デフォルト: legacy）
+}
+
+// SetReconciliationMode は調停モードを設定します
+func (n *SniperNest) SetReconciliationMode(mode ReconciliationMode) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.reconciliationMode = mode
+}
+
+// GetReconciliationMode は現在の調停モードを返します
+func (n *SniperNest) GetReconciliationMode() ReconciliationMode {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.reconciliationMode == "" {
+		return ReconciliationModeLegacy
+	}
+	return n.reconciliationMode
 }
 
 func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger *slog.Logger) *SniperNest {
@@ -63,9 +91,10 @@ func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger 
 		snipers:     snipers,
 		orders:      NewOrderTracker(positions, logger),
 		positions:   positions,
-		performance: NewPerformanceTracker(),
-		cooldowns:   NewCooldownTracker(),
-		Logger:      logger,
+		performance:        NewPerformanceTracker(),
+		cooldowns:          NewCooldownTracker(),
+		Logger:             logger,
+		reconciliationMode: ReconciliationModeLegacy,
 	}
 }
 
@@ -74,9 +103,17 @@ func (n *SniperNest) GetSymbolCodes() []string {
 	return []string{n.SymbolCode}
 }
 
-// HandleTick は時価（Tick）の更新を受け取り、配下の各スナイパーに Observation を配分して意思決定を促します。
-// アクション（発注・キャンセル）が必要な場合は FireAction を生成して返します。
+// HandleTick は時価（Tick）の更新を受け取り、設定された調停モード（Legacy / Aggregated）に応じて
+// 配下の各スナイパーの意思決定とアクション生成を行います。
 func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
+	if n.GetReconciliationMode() == ReconciliationModeAggregate {
+		return n.handleTickAggregated(t)
+	}
+	return n.handleTickLegacy(t)
+}
+
+// handleTickLegacy は従来の個別評価・クロス取引抑止ガードによる発注処理です。
+func (n *SniperNest) handleTickLegacy(t tick.Tick) []FireAction {
 	var actions []FireAction
 	for _, s := range n.snipers {
 		if s.GetLifecycle() == LifecycleStopped {
@@ -186,6 +223,124 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 			}
 		}
 	}
+	return actions
+}
+
+// handleTickAggregated は真のターゲットポジション集約（相殺・ドテン自動執行）ロジックです。
+// 全スナイパーの希望数量を集約し、反対建玉が存在する場合は即座に相殺決済を行います。
+func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
+	type sniperEval struct {
+		sniper *Sniper
+		target strategy.TargetPosition
+		obs    Observation
+	}
+	var evals []sniperEval
+	totalTargetQty := 0.0
+
+	for _, s := range n.snipers {
+		if s.GetLifecycle() == LifecycleStopped {
+			continue
+		}
+
+		policy := s.ExecutionPolicy
+		if policy != nil {
+			activeOrders := n.orders.GetActive(s.ID)
+			for _, curr := range activeOrders {
+				if !curr.IsEligibleForSyntheticFill() {
+					continue
+				}
+
+				policy.UpdateState(curr, t)
+
+				if policy.ShouldReset(curr, t) {
+					curr.ResetSynthetic()
+					fmt.Printf("🔄 [%s] 価格が離れたため疑似約定ステータスをリセットしました: %s\n", curr.Symbol, curr.ID)
+					continue
+				}
+
+				if curr.IsFillExpected() {
+					if policy.ShouldTimeout(curr, t) {
+						curr.MarkAsTimedOut()
+						fmt.Printf("💔 [%s] 疑似約定がタイムアウトしました: %s\n", curr.Symbol, curr.ID)
+					}
+					continue
+				}
+
+				if policy.ShouldFill(curr, t) {
+					curr.MarkAsFillExpected(t.CurrentPriceTime)
+					fmt.Printf("⚡ [%s] 疑似約定を検知しました: %s (Price: %f, Tick: %f)\n", curr.Symbol, curr.ID, curr.OrderPrice, t.Price)
+				}
+			}
+		}
+
+		obs := n.PrepareObservation(s.ID, t)
+		virtualPos := s.CalculateVirtualPosition(obs.Positions, obs.ActiveOrders)
+
+		input := strategy.StrategyInput{
+			Position:   virtualPos,
+			LatestTick: obs.Tick,
+		}
+
+		target := s.Evaluate(input)
+		evals = append(evals, sniperEval{
+			sniper: s,
+			target: target,
+			obs:    obs,
+		})
+		totalTargetQty += target.Qty
+	}
+
+	// 物理確定建玉
+	physicalHoldQty := n.positions.HoldQty()
+
+	var actions []FireAction
+	for _, ev := range evals {
+		s := ev.sniper
+		origTarget := ev.target
+		effectiveTarget := origTarget
+
+		// 🌟 相殺・ドテンの自動調停ロジック:
+		// 1. 物理建玉がショート (< 0) で、ネット合計目標がフラット (== 0) またはロング (> 0) の場合:
+		//    ショートスナイパーは即座に決済（Target: 0）させ、ロングスナイパーはショート建玉解消まで待機（スキップ）
+		if physicalHoldQty < 0 && totalTargetQty >= 0 {
+			if origTarget.IsShort() {
+				effectiveTarget = strategy.TargetPosition{
+					Qty:       0,
+					Price:     0,
+					OrderType: order.ORDER_TYPE_MARKET,
+					Reason:    "NET_OFFSET_EXIT_SHORT",
+				}
+			} else {
+				// ロング側スナイパーはショート建玉が市場から解消されるまで待機
+				continue
+			}
+		} else if physicalHoldQty > 0 && totalTargetQty <= 0 {
+			// 2. 物理建玉がロング (> 0) で、ネット合計目標がフラット (== 0) またはショート (< 0) の場合:
+			if origTarget.IsLong() {
+				effectiveTarget = strategy.TargetPosition{
+					Qty:       0,
+					Price:     0,
+					OrderType: order.ORDER_TYPE_MARKET,
+					Reason:    "NET_OFFSET_EXIT_LONG",
+				}
+			} else {
+				// ショート側スナイパーはロング建玉が市場から解消されるまで待機
+				continue
+			}
+		}
+
+		bullet := n.ReconcileTarget(s.ID, ev.obs.Tick, effectiveTarget, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
+		if bullet != nil {
+			actions = append(actions, FireAction{
+				SniperID: s.ID,
+				Bullet:   bullet,
+			})
+			if ordBullet, ok := bullet.(OrderBullet); ok {
+				n.AddOrder(s.ID, ordBullet.Order)
+			}
+		}
+	}
+
 	return actions
 }
 

@@ -1083,3 +1083,137 @@ func TestSniperNest_InflightExitOrder_NotBlockedByEntryOrder(t *testing.T) {
 	}
 }
 
+type controllableStrategy struct {
+	target strategy.TargetPosition
+}
+
+func (c *controllableStrategy) Name() string { return "controllable" }
+func (c *controllableStrategy) Evaluate(input strategy.StrategyInput) strategy.TargetPosition {
+	return c.target
+}
+func (c *controllableStrategy) AnalysisLogger() *slog.Logger { return slog.Default() }
+
+func TestSniperNest_AggregatedReconciliation_OffsetExit(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	stratLong := &controllableStrategy{target: strategy.TargetPosition{Qty: 0}}
+	stratShort := &controllableStrategy{target: strategy.TargetPosition{Qty: -100}}
+
+	sniperLong := NewSniper("sniper-long", sym, stratLong, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sniperShort := NewSniper("sniper-short", sym, stratShort, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	nest := NewSniperNest("7203", sym, []*Sniper{sniperLong, sniperShort}, nil)
+	nest.SetReconciliationMode(ReconciliationModeAggregate)
+
+	// 1. ショート建玉（100株）を保有している状態を作る
+	nest.positions.ApplyExecution("sniper-short", "7203", order.Execution{
+		ID:    "exec-short-1",
+		Price: 2000,
+		Qty:   100,
+	}, order.ACTION_SELL, nil, func(pnl float64) {})
+
+	if nest.positions.HoldQty() != -100 {
+		t.Fatalf("expected initial holdQty -100, got %f", nest.positions.HoldQty())
+	}
+
+	// 2. 次のTickでロングスナイパーが「上昇モメンタム検知で +100株 買いたい」と表明
+	//    ショートスナイパーは依然として「自分は -100株 を持ちたい」と表明
+	stratLong.target = strategy.TargetPosition{Qty: 100, Reason: "MOMENTUM_LONG_ENTRY"}
+	stratShort.target = strategy.TargetPosition{Qty: -100, Reason: "HOLD_SHORT"}
+
+	actions := nest.HandleTick(tick.Tick{Price: 2005, CurrentPriceTime: time.Now()})
+
+	// 3. 検証:
+	//    ネット目標数量 = (+100) + (-100) = 0株
+	//    物理建玉(-100)に対してネット目標が0なので、ショート建玉の「相殺決済（返済買い注文 100株）」が発注されること！
+	if len(actions) == 0 {
+		t.Fatalf("expected offset exit action, but got 0 actions")
+	}
+
+	var exitOrderFound bool
+	for _, act := range actions {
+		if ordBullet, ok := act.Bullet.(OrderBullet); ok {
+			ord := ordBullet.Order
+			if ord.Action == order.ACTION_BUY && ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+				exitOrderFound = true
+				if ord.OrderQty != 100 {
+					t.Errorf("expected exit qty 100, got %f", ord.OrderQty)
+				}
+				if act.SniperID != "sniper-short" {
+					t.Errorf("expected exit sniper 'sniper-short', got %s", act.SniperID)
+				}
+			}
+			// ロングの新規エントリーは両建て防止のため相殺決済中は発注されないこと
+			if ord.Action == order.ACTION_BUY && ord.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+				t.Errorf("unexpected new long entry order while offset exit is executing")
+			}
+		}
+	}
+
+	if !exitOrderFound {
+		t.Fatalf("expected offset buy-to-cover exit order, but not found in actions: %+v", actions)
+	}
+}
+
+func TestSniperNest_AggregatedReconciliation_OffsetExit_LongToShort(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	stratLong := &controllableStrategy{target: strategy.TargetPosition{Qty: 100}}
+	stratShort := &controllableStrategy{target: strategy.TargetPosition{Qty: 0}}
+
+	sniperLong := NewSniper("sniper-long", sym, stratLong, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sniperShort := NewSniper("sniper-short", sym, stratShort, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	nest := NewSniperNest("7203", sym, []*Sniper{sniperLong, sniperShort}, nil)
+	nest.SetReconciliationMode(ReconciliationModeAggregate)
+
+	// 1. ロング建玉（100株）を保有している状態を作る
+	nest.positions.ApplyExecution("sniper-long", "7203", order.Execution{
+		ID:    "exec-long-1",
+		Price: 2000,
+		Qty:   100,
+	}, order.ACTION_BUY, nil, func(pnl float64) {})
+
+	if nest.positions.HoldQty() != 100 {
+		t.Fatalf("expected initial holdQty 100, got %f", nest.positions.HoldQty())
+	}
+
+	// 2. 次のTickでショートスナイパーが「下落モメンタム検知で -100株 売りたい」と表明
+	//    ロングスナイパーは依然として「自分は +100株 を持ちたい」と表明
+	stratLong.target = strategy.TargetPosition{Qty: 100, Reason: "HOLD_LONG"}
+	stratShort.target = strategy.TargetPosition{Qty: -100, Reason: "MOMENTUM_SHORT_ENTRY"}
+
+	actions := nest.HandleTick(tick.Tick{Price: 1995, CurrentPriceTime: time.Now()})
+
+	// 3. 検証:
+	//    ネット目標数量 = (+100) + (-100) = 0株
+	//    物理建玉(+100)に対してネット目標が0なので、ロング建玉の「相殺決済（返済売り注文 100株）」が発注されること！
+	if len(actions) == 0 {
+		t.Fatalf("expected offset exit action, but got 0 actions")
+	}
+
+	var exitOrderFound bool
+	for _, act := range actions {
+		if ordBullet, ok := act.Bullet.(OrderBullet); ok {
+			ord := ordBullet.Order
+			if ord.Action == order.ACTION_SELL && ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+				exitOrderFound = true
+				if ord.OrderQty != 100 {
+					t.Errorf("expected exit qty 100, got %f", ord.OrderQty)
+				}
+				if act.SniperID != "sniper-long" {
+					t.Errorf("expected exit sniper 'sniper-long', got %s", act.SniperID)
+				}
+			}
+			// ショートの新規エントリーは両建て防止のため相殺決済中は発注されないこと
+			if ord.Action == order.ACTION_SELL && ord.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+				t.Errorf("unexpected new short entry order while offset exit is executing")
+			}
+		}
+	}
+
+	if !exitOrderFound {
+		t.Fatalf("expected offset sell exit order, but not found in actions: %+v", actions)
+	}
+}
+
+
+

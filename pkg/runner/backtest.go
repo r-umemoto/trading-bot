@@ -214,6 +214,9 @@ func RunBacktest() error {
 			symSnipers, ok := snipersBySymbol[symbolCode]
 			if ok && len(symSnipers) > 0 {
 				nest := sniper.NewSniperNest(symbolCode, symSnipers[0].Detail, symSnipers, symSnipers[0].Logger)
+				if modeStr, ok := op.Params["reconciliation_mode"].(string); ok && modeStr == "aggregated" {
+					nest.SetReconciliationMode(sniper.ReconciliationModeAggregate)
+				}
 				operations = append(operations, sniper.NewDefaultOperation(op.ID, nest))
 				delete(snipersBySymbol, symbolCode)
 			}
