@@ -294,12 +294,21 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 		})
 		totalTargetQty += target.Qty
 
-		if target.IsLong() || strings.Contains(s.ID, "long") {
+		if target.IsLong() {
+			longSniper = s
+			longTarget = target
+			longObs = obs
+		} else if longSniper == nil && strings.Contains(s.ID, "long") {
 			longSniper = s
 			longTarget = target
 			longObs = obs
 		}
-		if target.IsShort() || strings.Contains(s.ID, "short") {
+
+		if target.IsShort() {
+			shortSniper = s
+			shortTarget = target
+			shortObs = obs
+		} else if shortSniper == nil && strings.Contains(s.ID, "short") {
 			shortSniper = s
 			shortTarget = target
 			shortObs = obs
@@ -737,20 +746,38 @@ func (n *SniperNest) ReconcileTarget(
 	var desiredQty float64
 
 	if effectiveTarget.IsLong() {
-		action = order.ACTION_BUY
-		desiredQty = effectiveTarget.AbsQty()
-		if physicalHoldQty < 0 {
+		if physicalHoldQty > effectiveTarget.Qty {
+			// ロング建玉が目標を超過しているため、一部返済売り（ポジション縮小）
+			action = order.ACTION_SELL
 			cashMargin = order.CASH_MARGIN_MARGIN_EXIT
+			desiredQty = physicalHoldQty - effectiveTarget.Qty
+		} else if physicalHoldQty < 0 {
+			// ショート建玉が残っているため返済買い
+			action = order.ACTION_BUY
+			cashMargin = order.CASH_MARGIN_MARGIN_EXIT
+			desiredQty = math.Abs(physicalHoldQty)
 		} else {
+			// 新規買い（エントリーまたは買い増し）
+			action = order.ACTION_BUY
 			cashMargin = order.CASH_MARGIN_MARGIN_ENTRY
+			desiredQty = effectiveTarget.AbsQty()
 		}
 	} else if effectiveTarget.IsShort() {
-		action = order.ACTION_SELL
-		desiredQty = effectiveTarget.AbsQty()
-		if physicalHoldQty > 0 {
+		if physicalHoldQty < effectiveTarget.Qty {
+			// ショート建玉が目標を超過しているため、一部返済買い（ポジション縮小）
+			action = order.ACTION_BUY
 			cashMargin = order.CASH_MARGIN_MARGIN_EXIT
+			desiredQty = math.Abs(physicalHoldQty) - effectiveTarget.AbsQty()
+		} else if physicalHoldQty > 0 {
+			// ロング建玉が残っているため返済売り
+			action = order.ACTION_SELL
+			cashMargin = order.CASH_MARGIN_MARGIN_EXIT
+			desiredQty = physicalHoldQty
 		} else {
+			// 新規売り（エントリーまたは売り増し）
+			action = order.ACTION_SELL
 			cashMargin = order.CASH_MARGIN_MARGIN_ENTRY
+			desiredQty = effectiveTarget.AbsQty()
 		}
 	} else {
 		// 目標ノーポジ（手仕舞い決済）
