@@ -15,6 +15,7 @@ type PositionMeta struct {
 // Position は保有している建玉（または現物）の状態を表すエンティティです
 type Position struct {
 	ExecutionID string
+	SniperID    string // 🌟 新規建てを指示・約定したスナイパーID
 	Symbol      string // 銘柄
 	Exchange    order.ExchangeMarket
 	Action      order.Action

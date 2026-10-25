@@ -615,7 +615,7 @@ func TestOrderTracker_Update_ExitExecutionWithKnownHoldID(t *testing.T) {
 		Price:         505.8,
 		Qty:           600,
 		ExecutionTime: time.Now(),
-	}, order.ACTION_SELL, nil, func(pnl float64) {})
+	}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
 
 	ot := sniper.NewOrderTracker(pt, nil)
 

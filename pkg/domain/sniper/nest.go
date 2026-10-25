@@ -239,7 +239,6 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 	totalTargetQty := 0.0
 
 	var longSniper, shortSniper *Sniper
-	var longTarget, shortTarget strategy.TargetPosition
 	var longObs, shortObs Observation
 
 	for _, s := range n.snipers {
@@ -296,21 +295,17 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 
 		if target.IsLong() {
 			longSniper = s
-			longTarget = target
 			longObs = obs
 		} else if longSniper == nil && strings.Contains(s.ID, "long") {
 			longSniper = s
-			longTarget = target
 			longObs = obs
 		}
 
 		if target.IsShort() {
 			shortSniper = s
-			shortTarget = target
 			shortObs = obs
 		} else if shortSniper == nil && strings.Contains(s.ID, "short") {
 			shortSniper = s
-			shortTarget = target
 			shortObs = obs
 		}
 	}
@@ -353,64 +348,93 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 	switch {
 	case totalTargetQty > 0:
 		// 【ロング優勢】ショート建玉があればまずドテン相殺決済（建玉解消までロング発注は待機）
-		if physicalHoldQty < 0 && shortSniper != nil {
-			return fireTarget(shortSniper, shortObs, strategy.TargetPosition{
-				Qty:       0,
-				Price:     0,
-				OrderType: order.ORDER_TYPE_MARKET,
-				Reason:    "NET_OFFSET_EXIT_SHORT",
-			})
+		if physicalHoldQty < 0 {
+			for _, ev := range evals {
+				if n.HoldQty(ev.sniper.ID) < 0 {
+					return fireTarget(ev.sniper, ev.obs, strategy.TargetPosition{
+						Qty:       0,
+						Price:     0,
+						OrderType: order.ORDER_TYPE_MARKET,
+						Reason:    "NET_OFFSET_EXIT_SHORT",
+					})
+				}
+			}
+			if shortSniper != nil {
+				return fireTarget(shortSniper, shortObs, strategy.TargetPosition{
+					Qty:       0,
+					Price:     0,
+					OrderType: order.ORDER_TYPE_MARKET,
+					Reason:    "NET_OFFSET_EXIT_SHORT",
+				})
+			}
 		}
 		// ショート側の未約定新規売り注文をキャンセル
-		if shortSniper != nil {
-			actions = append(actions, cancelActiveEntries(shortSniper.ID)...)
+		for _, ev := range evals {
+			if strings.Contains(ev.sniper.ID, "short") || ev.target.IsShort() {
+				actions = append(actions, cancelActiveEntries(ev.sniper.ID)...)
+			}
 		}
-		// ロング側スナイパーに集約目標を発注・維持
-		if longSniper != nil {
-			target := longTarget
-			target.Qty = totalTargetQty
-			actions = append(actions, fireTarget(longSniper, longObs, target)...)
+		// 各ロングスナイパーが「自身の目標数量」を発注・維持
+		for _, ev := range evals {
+			if ev.target.IsLong() || n.HoldQty(ev.sniper.ID) > 0 {
+				actions = append(actions, fireTarget(ev.sniper, ev.obs, ev.target)...)
+			}
 		}
 
 	case totalTargetQty < 0:
 		// 【ショート優勢】ロング建玉があればまずドテン相殺決済（建玉解消までショート発注は待機）
-		if physicalHoldQty > 0 && longSniper != nil {
-			return fireTarget(longSniper, longObs, strategy.TargetPosition{
-				Qty:       0,
-				Price:     0,
-				OrderType: order.ORDER_TYPE_MARKET,
-				Reason:    "NET_OFFSET_EXIT_LONG",
-			})
+		if physicalHoldQty > 0 {
+			for _, ev := range evals {
+				if n.HoldQty(ev.sniper.ID) > 0 {
+					return fireTarget(ev.sniper, ev.obs, strategy.TargetPosition{
+						Qty:       0,
+						Price:     0,
+						OrderType: order.ORDER_TYPE_MARKET,
+						Reason:    "NET_OFFSET_EXIT_LONG",
+					})
+				}
+			}
+			if longSniper != nil {
+				return fireTarget(longSniper, longObs, strategy.TargetPosition{
+					Qty:       0,
+					Price:     0,
+					OrderType: order.ORDER_TYPE_MARKET,
+					Reason:    "NET_OFFSET_EXIT_LONG",
+				})
+			}
 		}
 		// ロング側の未約定新規買い注文をキャンセル
-		if longSniper != nil {
-			actions = append(actions, cancelActiveEntries(longSniper.ID)...)
+		for _, ev := range evals {
+			if strings.Contains(ev.sniper.ID, "long") || ev.target.IsLong() {
+				actions = append(actions, cancelActiveEntries(ev.sniper.ID)...)
+			}
 		}
-		// ショート側スナイパーに集約目標を発注・維持
-		if shortSniper != nil {
-			target := shortTarget
-			target.Qty = totalTargetQty
-			actions = append(actions, fireTarget(shortSniper, shortObs, target)...)
+		// 各ショートスナイパーが「自身の目標数量」を発注・維持
+		for _, ev := range evals {
+			if ev.target.IsShort() || n.HoldQty(ev.sniper.ID) < 0 {
+				actions = append(actions, fireTarget(ev.sniper, ev.obs, ev.target)...)
+			}
 		}
 
 	default:
-		// 【中立・手仕舞い（Target = 0）】建玉があれば全決済、未約定エントリーは全キャンセル
-		if physicalHoldQty > 0 && longSniper != nil {
-			actions = append(actions, fireTarget(longSniper, longObs, strategy.TargetPosition{
-				Qty:       0,
-				Price:     0,
-				OrderType: order.ORDER_TYPE_MARKET,
-				Reason:    "NET_OFFSET_FLAT_LONG",
-			})...)
-		} else if physicalHoldQty < 0 && shortSniper != nil {
-			actions = append(actions, fireTarget(shortSniper, shortObs, strategy.TargetPosition{
-				Qty:       0,
-				Price:     0,
-				OrderType: order.ORDER_TYPE_MARKET,
-				Reason:    "NET_OFFSET_FLAT_SHORT",
-			})...)
-		}
+		// 【中立・手仕舞い（Target = 0）】建玉があれば決済、未約定エントリーは全キャンセル
 		for _, ev := range evals {
+			hQty := n.HoldQty(ev.sniper.ID)
+			if hQty > 0 {
+				actions = append(actions, fireTarget(ev.sniper, ev.obs, strategy.TargetPosition{
+					Qty:       0,
+					Price:     0,
+					OrderType: order.ORDER_TYPE_MARKET,
+					Reason:    "NET_OFFSET_FLAT_LONG",
+				})...)
+			} else if hQty < 0 {
+				actions = append(actions, fireTarget(ev.sniper, ev.obs, strategy.TargetPosition{
+					Qty:       0,
+					Price:     0,
+					OrderType: order.ORDER_TYPE_MARKET,
+					Reason:    "NET_OFFSET_FLAT_SHORT",
+				})...)
+			}
 			actions = append(actions, cancelActiveEntries(ev.sniper.ID)...)
 		}
 	}
@@ -447,6 +471,27 @@ func (n *SniperNest) ReconcilePositions(actualPositions []position.Position) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.positions.Reconcile(n.SymbolCode, actualPositions)
+
+	// 🌟 野良建玉（取引所から直接復元された SniperID が空の建玉）に里親スナイパーを自動割り当て
+	defaultLongSniper := ""
+	defaultShortSniper := ""
+	for _, s := range n.snipers {
+		if strings.Contains(s.ID, "long") && defaultLongSniper == "" {
+			defaultLongSniper = s.ID
+		}
+		if strings.Contains(s.ID, "short") && defaultShortSniper == "" {
+			defaultShortSniper = s.ID
+		}
+	}
+	if len(n.snipers) > 0 {
+		if defaultLongSniper == "" {
+			defaultLongSniper = n.snipers[0].ID
+		}
+		if defaultShortSniper == "" {
+			defaultShortSniper = n.snipers[0].ID
+		}
+	}
+	n.positions.AdoptOrphanPositions(defaultLongSniper, defaultShortSniper)
 }
 
 // GetPerformance は指定したスナイパーの成績を取得します。
@@ -580,6 +625,9 @@ func (n *SniperNest) GetSniperActiveOrders(sniperID string) []*order.Order {
 func (n *SniperNest) HoldQty(sniperID string) float64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if sniperID != "" && n.reconciliationMode == ReconciliationModeAggregate {
+		return n.positions.HoldQtyForSniper(sniperID)
+	}
 	return n.positions.HoldQty()
 }
 
@@ -598,8 +646,8 @@ func (n *SniperNest) applyExecution(sniperID string, exec order.Execution, actio
 	}
 	n.orders.MarkExecutionProcessed(exec.ID)
 
-	n.positions.ApplyExecution(sniperID, n.Detail.Code, exec, action, parentOrder, func(pnl float64) {
-		n.performance.RecordPnL(sniperID, pnl)
+	n.positions.ApplyExecution(sniperID, n.Detail.Code, exec, action, parentOrder, func(targetSniperID string, pnl float64) {
+		n.performance.RecordPnL(targetSniperID, pnl)
 	})
 }
 
@@ -621,7 +669,17 @@ func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick) Observatio
 	n.lastTickTime = t.CurrentPriceTime // 🌟 最新 of simulation time
 
 	activeOrders := n.orders.PrepareActiveOrders(sniperID)
-	posCopy := n.positions.GetCopy()
+	allPos := n.positions.GetCopy()
+	var posCopy []position.Position
+	if n.reconciliationMode == ReconciliationModeAggregate {
+		for _, p := range allPos {
+			if p.SniperID == sniperID || p.SniperID == "" {
+				posCopy = append(posCopy, p)
+			}
+		}
+	} else {
+		posCopy = allPos
+	}
 
 	return Observation{
 		Tick:         t,

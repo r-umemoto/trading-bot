@@ -24,7 +24,7 @@ func NewPositionTracker(logger *slog.Logger) *PositionTracker {
 	}
 }
 
-func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, exec order.Execution, action order.Action, parentOrder *order.Order, recordPnL func(float64)) {
+func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, exec order.Execution, action order.Action, parentOrder *order.Order, recordPnL func(string, float64)) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
@@ -45,6 +45,7 @@ func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, ex
 	if !isExit {
 		pt.positions = append(pt.positions, position.Position{
 			ExecutionID: exec.ID,
+			SniperID:    sniperID, // 🌟 エントリー元のスナイパーIDを記録
 			Symbol:      symbolCode,
 			Exchange:    exchange,
 			Action:      action,
@@ -90,10 +91,18 @@ func (pt *PositionTracker) reducePositions(
 	sellTime time.Time,
 	closePositions []order.ClosePosition,
 	closeReason string,
-	recordPnL func(float64),
+	recordPnL func(string, float64),
 ) {
 	// Domain Logic Delegation (FIFO matching and reduction)
-	totalTradePnL, earliestEntryTime, avgEntryPrice := pt.positions.Reduce(sellQty, sellPrice, closePositions, recordPnL)
+	totalTradePnL, earliestEntryTime, avgEntryPrice := pt.positions.Reduce(sellQty, sellPrice, closePositions, func(entrySniperID string, pnl float64) {
+		targetSniper := entrySniperID
+		if targetSniper == "" {
+			targetSniper = sniperID
+		}
+		if recordPnL != nil {
+			recordPnL(targetSniper, pnl)
+		}
+	})
 
 	holdTimeSec := 0.0
 	if !earliestEntryTime.IsZero() && !sellTime.IsZero() {
@@ -119,6 +128,13 @@ func (pt *PositionTracker) HoldQty() float64 {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 	return pt.positions.TotalHoldQty()
+}
+
+// HoldQtyForSniper returns physical holding quantity for a specific sniper.
+func (pt *PositionTracker) HoldQtyForSniper(sniperID string) float64 {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
+	return pt.positions.TotalHoldQtyForSniper(sniperID)
 }
 
 func (pt *PositionTracker) GetUnrealizedPnL(currentPrice float64) float64 {
@@ -258,4 +274,27 @@ func (pt *PositionTracker) Reconcile(symbolCode string, actualPositions []positi
 	}
 
 	pt.positions = activePositions
+}
+
+// AdoptOrphanPositions は SniperID が空の野良建玉に、指定されたデフォルトスナイパーを割り当てます。
+func (pt *PositionTracker) AdoptOrphanPositions(defaultLongSniper, defaultShortSniper string) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	for i := range pt.positions {
+		if pt.positions[i].SniperID == "" {
+			if pt.positions[i].Action == order.ACTION_SELL {
+				pt.positions[i].SniperID = defaultShortSniper
+			} else {
+				pt.positions[i].SniperID = defaultLongSniper
+			}
+			if pt.logger != nil {
+				pt.logger.Info("🏠 [ORPHAN_ASSIGNED] 野良建玉に親スナイパーを紐付けました",
+					slog.String("holdID", pt.positions[i].ExecutionID),
+					slog.String("sniper", pt.positions[i].SniperID),
+					slog.Float64("qty", pt.positions[i].LeavesQty),
+				)
+			}
+		}
+	}
 }

@@ -96,12 +96,28 @@ func (ps Positions) TotalHoldQty() float64 {
 	return total
 }
 
+// TotalHoldQtyForSniper は特定のスナイパーの純保有数量を計算します
+func (ps Positions) TotalHoldQtyForSniper(sniperID string) float64 {
+	var total float64
+	for _, p := range ps {
+		if sniperID != "" && p.SniperID != sniperID {
+			continue
+		}
+		if p.Action == order.ACTION_SELL {
+			total -= p.LeavesQty
+		} else {
+			total += p.LeavesQty
+		}
+	}
+	return total
+}
+
 // Reduce は約定を適用し、残った新しい Positions スライスと、発生した実現損益 (PnL)、最古の建玉のエントリー時刻、および加重平均エントリー価格を返します
 func (ps *Positions) Reduce(
 	sellQty float64,
 	sellPrice float64,
 	closePositions []order.ClosePosition,
-	recordPnL func(float64),
+	recordPnL func(entrySniperID string, pnl float64),
 ) (float64, time.Time, float64) {
 	remainingToSell := sellQty
 	var totalTradePnL float64
@@ -139,7 +155,9 @@ func (ps *Positions) Reduce(
 				}
 				tradePnL := (sellPrice - p.Price) * closeQty * pnlFactor
 				totalTradePnL += tradePnL
-				recordPnL(tradePnL)
+				if recordPnL != nil {
+					recordPnL(p.SniperID, tradePnL)
+				}
 
 				weightedEntrySum += p.Price * closeQty
 				totalClosedQty += closeQty
@@ -182,7 +200,9 @@ func (ps *Positions) Reduce(
 			}
 			tradePnL := (sellPrice - p.Price) * closeQty * pnlFactor
 			totalTradePnL += tradePnL
-			recordPnL(tradePnL)
+			if recordPnL != nil {
+				recordPnL(p.SniperID, tradePnL)
+			}
 
 			weightedEntrySum += p.Price * closeQty
 			totalClosedQty += closeQty
