@@ -1256,3 +1256,74 @@ func TestSniperNest_AggregatedReconciliation_NoFriendlyFire(t *testing.T) {
 		}
 	}
 }
+
+func TestSniperNest_PositionScaleDown_ExitOrder(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// 1. Long Scale Down: Hold 300 shares Long, Target drops to 200 shares Long
+	nest.positions.ApplyExecution(sniperID, "7203", order.Execution{
+		ID:    "exec-1",
+		Price: 2000,
+		Qty:   300,
+	}, order.ACTION_BUY, nil, func(pnl float64) {})
+
+	targetLong200 := strategy.TargetPosition{
+		Qty:       200,
+		Price:     0,
+		OrderType: order.ORDER_TYPE_MARKET,
+		Reason:    "SCALE_DOWN_200",
+	}
+
+	bulletLong := nest.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, targetLong200, order.EXCHANGE_TOSHO, order.TRADE_TYPE_GENERAL_DAY, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	if bulletLong == nil {
+		t.Fatalf("expected exit bullet on scale down, got nil")
+	}
+	ordBulletLong, ok := bulletLong.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %T", bulletLong)
+	}
+	if ordBulletLong.Order.Action != order.ACTION_SELL {
+		t.Errorf("expected ACTION_SELL for long scale down, got %v", ordBulletLong.Order.Action)
+	}
+	if ordBulletLong.Order.CashMargin != order.CASH_MARGIN_MARGIN_EXIT {
+		t.Errorf("expected CASH_MARGIN_MARGIN_EXIT for long scale down, got %v", ordBulletLong.Order.CashMargin)
+	}
+	if ordBulletLong.Order.OrderQty != 100 {
+		t.Errorf("expected OrderQty 100 for long scale down, got %f", ordBulletLong.Order.OrderQty)
+	}
+
+	// 2. Short Scale Down: Reset to hold 300 shares Short, Target drops to 200 shares Short
+	nestShort := NewSniperNest("7203", sym, nil, nil)
+	nestShort.positions.ApplyExecution(sniperID, "7203", order.Execution{
+		ID:    "exec-2",
+		Price: 2000,
+		Qty:   300,
+	}, order.ACTION_SELL, nil, func(pnl float64) {})
+
+	targetShort200 := strategy.TargetPosition{
+		Qty:       -200,
+		Price:     0,
+		OrderType: order.ORDER_TYPE_MARKET,
+		Reason:    "SCALE_DOWN_SHORT_200",
+	}
+
+	bulletShort := nestShort.ReconcileTarget(sniperID, tick.Tick{Price: 2000}, targetShort200, order.EXCHANGE_TOSHO, order.TRADE_TYPE_GENERAL_DAY, order.ACCOUNT_SPECIAL, &strategy.NoopPolicy{})
+	if bulletShort == nil {
+		t.Fatalf("expected exit bullet on short scale down, got nil")
+	}
+	ordBulletShort, ok := bulletShort.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %T", bulletShort)
+	}
+	if ordBulletShort.Order.Action != order.ACTION_BUY {
+		t.Errorf("expected ACTION_BUY for short scale down, got %v", ordBulletShort.Order.Action)
+	}
+	if ordBulletShort.Order.CashMargin != order.CASH_MARGIN_MARGIN_EXIT {
+		t.Errorf("expected CASH_MARGIN_MARGIN_EXIT for short scale down, got %v", ordBulletShort.Order.CashMargin)
+	}
+	if ordBulletShort.Order.OrderQty != 100 {
+		t.Errorf("expected OrderQty 100 for short scale down, got %f", ordBulletShort.Order.OrderQty)
+	}
+}
