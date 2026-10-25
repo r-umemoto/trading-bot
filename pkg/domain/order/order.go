@@ -67,6 +67,7 @@ type OrderRequest struct {
 // Order は注文全体を管理する集約ルート（エンティティ）です
 type Order struct {
 	ID                 string
+	LocalID            string // 🌟 発注時に採番されたローカル注文ID（取引所IDへの付け替え後も保持）
 	Symbol             string
 	Action             Action
 	Type               OrderType // 🌟 注文種別 (指値・成行)
@@ -134,6 +135,7 @@ func WithReason(reason string) OrderOption {
 func NewOrder(id string, symbol string, action Action, price float64, qty float64, opts ...OrderOption) *Order {
 	ord := &Order{
 		ID:                 id,
+		LocalID:            id,
 		Symbol:             symbol,
 		Action:             action,
 		Type:               ORDER_TYPE_LIMIT, // デフォルトは指値

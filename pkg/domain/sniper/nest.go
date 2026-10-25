@@ -544,7 +544,11 @@ func (n *SniperNest) HandleOrderRejection(sniperID string, ord *order.Order, err
 func (n *SniperNest) UpdateOrderID(sniperID string, ord *order.Order, newID string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.positions.UpdateLockOrderID(ord.ID, newID)
+	oldID := ord.ID
+	if ord.LocalID != "" {
+		oldID = ord.LocalID
+	}
+	n.positions.UpdateLockOrderID(oldID, newID)
 	n.orders.UpdateOrderID(sniperID, ord, newID)
 }
 
