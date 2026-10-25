@@ -725,6 +725,8 @@ func (n *SniperNest) ReconcileTarget(
 		} else {
 			if o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
 				shouldCancel = true
+			} else if effectiveTarget.OrderType == order.ORDER_TYPE_MARKET && !o.IsMarket() {
+				shouldCancel = true
 			}
 		}
 
