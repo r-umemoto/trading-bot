@@ -82,6 +82,14 @@ func RunBacktest() error {
 	// 3. バックテスト用インフラ（Mock Gateway）の準備
 	gateway := backtest.NewSyncBacktestGateway(execModel, latency)
 	dataPool := gateway.DataPool()
+
+	// 監視銘柄の dataPool に latency インジケーターを登録（戦略からレイテンシを参照可能にする）
+	for _, t := range targets {
+		dataPool.GetOrCreateIndicator(t.Symbol, "latency", func() tick.Indicator {
+			return tick.NewStaticFloatIndicator("latency", float64(latencyMs))
+		})
+	}
+
 	if _, err := gateway.Listen(context.Background()); err != nil {
 		return fmt.Errorf("バックテスト用ゲートウェイのListen開始に失敗: %w", err)
 	}
