@@ -457,10 +457,16 @@ func (n *SniperNest) GetPerformance(sniperID string) Performance {
 }
 
 // GetUnrealizedPnL は指定したスナイパーの含み損益を計算します。
+// 集約モードでは同一ネスト内の建玉を共有しているため、複数スナイパーによる重複加算を防ぐため
+// ネスト全体の含み損益をスナイパー数で均等に按分して返します。
 func (n *SniperNest) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.positions.GetUnrealizedPnL(currentPrice)
+	total := n.positions.GetUnrealizedPnL(currentPrice)
+	if n.reconciliationMode == ReconciliationModeAggregate && len(n.snipers) > 1 {
+		return total / float64(len(n.snipers))
+	}
+	return total
 }
 
 // GetExchanges はこのネスト内のスナイパーが動作する一意な取引所のリストを返します。
@@ -538,7 +544,11 @@ func (n *SniperNest) HandleOrderRejection(sniperID string, ord *order.Order, err
 func (n *SniperNest) UpdateOrderID(sniperID string, ord *order.Order, newID string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.positions.UpdateLockOrderID(ord.ID, newID)
+	oldID := ord.ID
+	if ord.LocalID != "" {
+		oldID = ord.LocalID
+	}
+	n.positions.UpdateLockOrderID(oldID, newID)
 	n.orders.UpdateOrderID(sniperID, ord, newID)
 }
 
@@ -724,6 +734,8 @@ func (n *SniperNest) ReconcileTarget(
 			}
 		} else {
 			if o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+				shouldCancel = true
+			} else if effectiveTarget.OrderType == order.ORDER_TYPE_MARKET && !o.IsMarket() {
 				shouldCancel = true
 			}
 		}
