@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bufio"
 	"context"
 	"encoding/csv"
 	"flag"
@@ -36,6 +37,8 @@ func RunBacktest() error {
 	flag.StringVar(&execModelStr, "execution-model", "pessimistic", "約定モデル (touch, pessimistic, volume)")
 	var latencyMs int
 	flag.IntVar(&latencyMs, "latency", 0, "発注・キャンセル遅延時間 (ミリ秒)")
+	var detailedLog bool
+	flag.BoolVar(&detailedLog, "detailed-log", false, "詳細なJSONLログをファイル出力する（デフォルト: false）")
 	flag.Parse()
 
 	// csvPath がディレクトリの場合は、その中の tick データ (all_*.csv または all.csv) を探索して解決します
@@ -164,10 +167,19 @@ func RunBacktest() error {
 		}
 	}
 
-	// バックテストログディレクトリの準備
-	logDir := filepath.Join("backtest_logs", time.Now().Format("20060102_150405"))
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return fmt.Errorf("バックテストログディレクトリの作成に失敗: %w", err)
+	// バックテストログディレクトリおよびバッファライターの準備
+	var logDir string
+	var writersToFlush []*bufio.Writer
+	if detailedLog {
+		logDir = filepath.Join("backtest_logs", time.Now().Format("20060102_150405"))
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return fmt.Errorf("バックテストログディレクトリの作成に失敗: %w", err)
+		}
+		defer func() {
+			for _, w := range writersToFlush {
+				_ = w.Flush()
+			}
+		}()
 	}
 
 	// 4. スナイパーの配備
@@ -183,14 +195,21 @@ func RunBacktest() error {
 		st := factory.NewStrategy(sym.Detail, dataPool, sym.Params)
 		policy := factory.CreateExecutionPolicy(sym.Params)
 
-		// 銘柄別のロガーを生成
-		logPath := filepath.Join(logDir, fmt.Sprintf("%s_%s.jsonl", sym.Detail.Code, sym.StrategyName))
-		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		// 銘柄別のロガーを生成（デフォルトはio.DiscardでディスクI/Oを完全抑止、-detailed-log時のみバッファリング出力）
 		var analysisLogger *slog.Logger
-		if err == nil {
-			analysisLogger = slog.New(slog.NewJSONHandler(f, nil))
+		if detailedLog {
+			logPath := filepath.Join(logDir, fmt.Sprintf("%s_%s.jsonl", sym.Detail.Code, sym.StrategyName))
+			f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err == nil {
+				bw := bufio.NewWriterSize(f, 64*1024)
+				writersToFlush = append(writersToFlush, bw)
+				analysisLogger = slog.New(slog.NewJSONHandler(bw, nil))
+			} else {
+				slog.Error("バックテストログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
+				analysisLogger = slog.New(slog.NewJSONHandler(io.Discard, nil))
+			}
 		} else {
-			slog.Error("バックテストログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
+			analysisLogger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 		}
 
 		sniperID := fmt.Sprintf("%s_%s", sym.StrategyName, sym.Detail.Code)
