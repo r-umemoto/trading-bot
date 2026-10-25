@@ -349,41 +349,41 @@ func RunBacktest() error {
 		}
 	}
 
-	// 7. 取引終了後のクリーンアップ
-	ordersToMopUp, err := gateway.GetOrders(context.Background())
-	if err != nil {
-		return fmt.Errorf("クリーンアップ用注文情報の取得に失敗しました: %w", err)
-	}
-	fmt.Printf("クリーンアップ開始: 未約定の可能性がある注文数 %d件\n", len(ordersToMopUp.Orders))
-	for _, o := range ordersToMopUp.Orders {
-		if !o.IsCompleted() {
-			state := dataPool.GetState(o.Symbol)
-			if !state.LatestTick.CurrentPriceTime.IsZero() {
-				gateway.ProcessTick(state.LatestTick)
-				for len(orderReportCh) > 0 {
-					report := <-orderReportCh
-					for _, op := range operations {
-						op.UpdateOrders(report)
-					}
-				}
-				t := <-tickCh
-				for _, op := range operations {
-					hasSymbol := false
-					for _, code := range op.GetSymbolCodes() {
-						if code == t.Symbol {
-							hasSymbol = true
-							break
-						}
-					}
-					if hasSymbol {
-						_ = op.HandleTick(t)
-					}
-				}
-			}
+	// 7. 取引終了後の残存約定レポートの完全フラッシュと成行決済の引け成り確定
+	for len(orderReportCh) > 0 {
+		report := <-orderReportCh
+		for _, op := range operations {
+			op.UpdateOrders(report)
 		}
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	// 大引け時点で未約定の成行注文や未決済建玉がある場合、最終Tickで引け成り約定させる
+	for i := 0; i < 3; i++ {
+		ordersToMopUp, _ := gateway.GetOrders(context.Background())
+		hasPending := false
+		for _, o := range ordersToMopUp.Orders {
+			if !o.IsCompleted() && o.IsMarket() {
+				hasPending = true
+				state := dataPool.GetState(o.Symbol)
+				if !state.LatestTick.CurrentPriceTime.IsZero() {
+					gateway.ProcessTick(state.LatestTick)
+				}
+			}
+		}
+
+		for len(orderReportCh) > 0 {
+			report := <-orderReportCh
+			for _, op := range operations {
+				op.UpdateOrders(report)
+			}
+		}
+
+		if !hasPending {
+			break
+		}
+	}
+
+	time.Sleep(50 * time.Millisecond)
 
 	fmt.Printf("バックテスト完了: 総処理Tick数 %d件\n", tickCount)
 
