@@ -457,10 +457,16 @@ func (n *SniperNest) GetPerformance(sniperID string) Performance {
 }
 
 // GetUnrealizedPnL は指定したスナイパーの含み損益を計算します。
+// 集約モードでは同一ネスト内の建玉を共有しているため、複数スナイパーによる重複加算を防ぐため
+// ネスト全体の含み損益をスナイパー数で均等に按分して返します。
 func (n *SniperNest) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.positions.GetUnrealizedPnL(currentPrice)
+	total := n.positions.GetUnrealizedPnL(currentPrice)
+	if n.reconciliationMode == ReconciliationModeAggregate && len(n.snipers) > 1 {
+		return total / float64(len(n.snipers))
+	}
+	return total
 }
 
 // GetExchanges はこのネスト内のスナイパーが動作する一意な取引所のリストを返します。
