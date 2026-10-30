@@ -19,6 +19,7 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
+	"github.com/r-umemoto/trading-bot/pkg/infra/logger"
 	reportinfra "github.com/r-umemoto/trading-bot/pkg/infra/report"
 	"github.com/r-umemoto/trading-bot/pkg/portfolio"
 	"github.com/r-umemoto/trading-bot/pkg/usecase"
@@ -39,7 +40,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	}
 
 	// 3. ドメイン層（スナイパー）の配備（DataPoolはGatewayから直接もらう！）
-	snipers, err := deploySnipers(watchList, gateway.DataPool())
+	snipers, cleanups, err := deploySnipers(watchList, gateway.DataPool())
 	if err != nil {
 		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
 	}
@@ -87,7 +88,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
 	// 5. エンジンの完成
-	return NewEngine(handler), nil
+	return NewEngine(handler, cleanups...), nil
 }
 
 // buildReportRepository はローカルJSONの成績保存リポジトリを構築します。
@@ -285,38 +286,44 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 	return marketGateway, nil
 }
 
-func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*sniper.Sniper, error) {
+func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*sniper.Sniper, []func(), error) {
 	var snipers []*sniper.Sniper
+	var cleanups []func()
 
 	// ログディレクトリの準備
 	logDir := filepath.Join("logs", time.Now().Format("20060102"))
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil, fmt.Errorf("ログディレクトリの作成に失敗: %w", err)
+		return nil, nil, fmt.Errorf("ログディレクトリの作成に失敗: %w", err)
 	}
 
 	for _, t := range watchList {
 		factory, err := strategy.GetFactory(t.StrategyName)
 		if err != nil {
-			return nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
+			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
 		st := factory.NewStrategy(t.Detail, dataPool, t.Params)
 		policy := factory.CreateExecutionPolicy(t.Params)
 
-		// 銘柄別のロガーを生成
+		// 銘柄別の非同期ロガーを生成（メインループをディスクI/Oから分離）
 		logPath := filepath.Join(logDir, fmt.Sprintf("%s_%s.jsonl", t.Detail.Code, t.StrategyName))
 		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			return nil, fmt.Errorf("取引ログファイル (%s) の作成に失敗しました: %w", logPath, err)
+			return nil, nil, fmt.Errorf("取引ログファイル (%s) の作成に失敗しました: %w", logPath, err)
 		}
-		analysisLogger := slog.New(slog.NewJSONHandler(f, nil))
+
+		asyncWriter := logger.NewAsyncWriter(f, 8192)
+		cleanups = append(cleanups, func() {
+			_ = asyncWriter.Close()
+		})
+		analysisLogger := slog.New(slog.NewJSONHandler(asyncWriter, nil))
 
 		sniperID := fmt.Sprintf("%s_%s", t.StrategyName, t.Detail.Code)
 		s := sniper.NewSniper(sniperID, t.Detail, st, policy, t.Exchange, analysisLogger)
 		snipers = append(snipers, s)
 	}
 
-	return snipers, nil
+	return snipers, cleanups, nil
 }
 
 func buildNestHelper(symCode string, symSnipers []*sniper.Sniper) *sniper.SniperNest {
