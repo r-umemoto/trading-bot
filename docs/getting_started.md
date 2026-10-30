@@ -74,3 +74,53 @@ go run ./cmd/backtest -csv ./data/all_20260409.csv -portfolio ./configs/portfoli
 * `-detailed-log`: 戦略内部状態（指標・ポジション・注文判定）の時系列 `.jsonl` 詳細ログ出力の有効化フラグ (デフォルト: `false`)。
   * **デフォルト (`false`)**: ディスクI/Oを完全に抑制（`io.Discard`）し、数百銘柄・多重タイムスケールの長期バックテストを数十倍〜100倍高速に実行します。
   * **有効化時 (`-detailed-log`)**: `./backtest_logs/<timestamp>/` 配下に 64KB バッファリングされた戦略詳細ログを出力します。特定の銘柄・特定日時のミリ秒〜秒単位のインジケーター推移やエントリー/エグジット判定理由を深掘り・可視化解析したい場合に指定してください。
+
+---
+
+## 5. 日次レポートのアップロード (Reporter)
+
+Bot本体はトレード処理に集中するため、クラウドへの成績送信は行いません（ローカルの `./data/reports/daily_YYYY-MM-DD.json` に保存されます）。
+大引け後（15:30以降など）に専用の `cmd/reporter` を実行して、成績データを Cloud Firestore へアップロードします。
+
+**ビルド:**
+```bash
+go build -o bin/reporter ./cmd/reporter
+```
+
+**実行例:**
+```bash
+# 当日(JST)のレポートをアップロード
+./bin/reporter
+
+# 日付を指定してアップロード
+./bin/reporter -date 2026-10-30
+
+# 単一のレポートファイルを直接指定してアップロード
+./bin/reporter -file ./data/reports/daily_2026-10-30.json
+
+# ドライラン (Firestoreへ送信せず内容確認のみ)
+./bin/reporter -date 2026-10-30 -dry-run
+```
+
+### コマンドライン引数
+* `-date <YYYY-MM-DD>`: 対象日付 (未指定時は当日 JST)。
+* `-file <path>`: 対象レポートJSONファイルパス (指定時は `-date` より優先)。
+* `-dir <path>`: レポートJSON格納ディレクトリ (デフォルト: `./data/reports`)。
+* `-project <id>`: GCPプロジェクトID (未指定時は環境変数 `GCP_PROJECT_ID` またはデフォルト値)。
+* `-dry-run`: Firestoreへの書き込みを行わず読み込み確認のみ実施。
+* `-verbose`: 詳細ログを出力。
+
+---
+
+## 6. トレードログの解析 (Analyzer)
+
+Botが出力した `.jsonl` 形式のトレードログを解析し、勝率・損益・時間帯別成績・約定待ち時間などの詳細メトリクスを表示します。
+
+**実行例:**
+```bash
+# 単一のログファイルを解析
+go run ./cmd/analyzer -file ./data/logs/bot_20261030.jsonl
+
+# ディレクトリ配下の全ログを一括解析
+go run ./cmd/analyzer -dir ./data/logs
+```
