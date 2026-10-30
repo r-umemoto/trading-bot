@@ -284,7 +284,7 @@ func TestSniperNest_ReducePositions_SpecifiedClose(t *testing.T) {
 		},
 	}
 
-	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
+	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(_ string, pnl float64) {
 		nest.performance.RecordPnL(sniperID, pnl)
 	})
 
@@ -326,7 +326,7 @@ func TestSniperNest_ReducePositions_FIFOAndLossPerformance(t *testing.T) {
 	parentOrder := order.NewOrder("exit-order", "7203", order.ACTION_SELL, 1990, 120)
 	parentOrder.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
 
-	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
+	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(_ string, pnl float64) {
 		nest.performance.RecordPnL(sniperID, pnl)
 	})
 
@@ -364,7 +364,7 @@ func TestSniperNest_ReducePositions_FlatPnL(t *testing.T) {
 	parentOrder := order.NewOrder("exit-order", "7203", order.ACTION_SELL, 2000, 100)
 	parentOrder.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
 
-	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(pnl float64) {
+	nest.positions.ApplyExecution(sniperID, nest.Detail.Code, exec, order.ACTION_SELL, parentOrder, func(_ string, pnl float64) {
 		nest.performance.RecordPnL(sniperID, pnl)
 	})
 
@@ -1009,7 +1009,7 @@ func TestSniperNest_InflightExitOrder_NoDuplicateExit(t *testing.T) {
 		ID:    "hold-1",
 		Price: 1700,
 		Qty:   100,
-	}, order.ACTION_BUY, nil, func(pnl float64) {})
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	// 2. Inflight exit order exists
 	exitOrd := order.NewOrder(order.GenerateLocalID(), "7186", order.ACTION_SELL, 0, 100,
@@ -1047,7 +1047,7 @@ func TestSniperNest_InflightExitOrder_NotBlockedByEntryOrder(t *testing.T) {
 		ID:    "hold-1",
 		Price: 278,
 		Qty:   1200,
-	}, order.ACTION_SELL, nil, func(pnl float64) {})
+	}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
 
 	// 2. An entry order is somehow still tracked in ActiveOrders (e.g. state transition lag)
 	mktEntryOrd := order.NewOrder(order.GenerateLocalID(), "7201", order.ACTION_SELL, 0, 1200,
@@ -1109,7 +1109,7 @@ func TestSniperNest_AggregatedReconciliation_OffsetExit(t *testing.T) {
 		ID:    "exec-short-1",
 		Price: 2000,
 		Qty:   100,
-	}, order.ACTION_SELL, nil, func(pnl float64) {})
+	}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
 
 	if nest.positions.HoldQty() != -100 {
 		t.Fatalf("expected initial holdQty -100, got %f", nest.positions.HoldQty())
@@ -1170,7 +1170,7 @@ func TestSniperNest_AggregatedReconciliation_OffsetExit_LongToShort(t *testing.T
 		ID:    "exec-long-1",
 		Price: 2000,
 		Qty:   100,
-	}, order.ACTION_BUY, nil, func(pnl float64) {})
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	if nest.positions.HoldQty() != 100 {
 		t.Fatalf("expected initial holdQty 100, got %f", nest.positions.HoldQty())
@@ -1234,7 +1234,7 @@ func TestSniperNest_AggregatedReconciliation_NoFriendlyFire(t *testing.T) {
 		ID:    "exec-long-1",
 		Price: 2000,
 		Qty:   100,
-	}, order.ACTION_BUY, nil, func(pnl float64) {})
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	if nest.positions.HoldQty() != 100 {
 		t.Fatalf("expected initial holdQty 100, got %f", nest.positions.HoldQty())
@@ -1267,7 +1267,7 @@ func TestSniperNest_PositionScaleDown_ExitOrder(t *testing.T) {
 		ID:    "exec-1",
 		Price: 2000,
 		Qty:   300,
-	}, order.ACTION_BUY, nil, func(pnl float64) {})
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	targetLong200 := strategy.TargetPosition{
 		Qty:       200,
@@ -1300,7 +1300,7 @@ func TestSniperNest_PositionScaleDown_ExitOrder(t *testing.T) {
 		ID:    "exec-2",
 		Price: 2000,
 		Qty:   300,
-	}, order.ACTION_SELL, nil, func(pnl float64) {})
+	}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
 
 	targetShort200 := strategy.TargetPosition{
 		Qty:       -200,

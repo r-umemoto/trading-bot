@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"bufio"
 	"context"
 	"encoding/csv"
 	"flag"
@@ -21,6 +20,7 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/symbol"
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/backtest"
+	"github.com/r-umemoto/trading-bot/pkg/infra/logger"
 	"github.com/r-umemoto/trading-bot/pkg/portfolio"
 	"github.com/r-umemoto/trading-bot/pkg/usecase"
 )
@@ -82,6 +82,14 @@ func RunBacktest() error {
 	// 3. バックテスト用インフラ（Mock Gateway）の準備
 	gateway := backtest.NewSyncBacktestGateway(execModel, latency)
 	dataPool := gateway.DataPool()
+
+	// 監視銘柄の dataPool に latency インジケーターを登録（戦略からレイテンシを参照可能にする）
+	for _, t := range targets {
+		dataPool.GetOrCreateIndicator(t.Symbol, "latency", func() tick.Indicator {
+			return tick.NewStaticFloatIndicator("latency", float64(latencyMs))
+		})
+	}
+
 	if _, err := gateway.Listen(context.Background()); err != nil {
 		return fmt.Errorf("バックテスト用ゲートウェイのListen開始に失敗: %w", err)
 	}
@@ -167,17 +175,17 @@ func RunBacktest() error {
 		}
 	}
 
-	// バックテストログディレクトリおよびバッファライターの準備
+	// バックテストログディレクトリおよび非同期ライターの準備
 	var logDir string
-	var writersToFlush []*bufio.Writer
+	var asyncWriters []*logger.AsyncWriter
 	if detailedLog {
 		logDir = filepath.Join("backtest_logs", time.Now().Format("20060102_150405"))
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			return fmt.Errorf("バックテストログディレクトリの作成に失敗: %w", err)
 		}
 		defer func() {
-			for _, w := range writersToFlush {
-				_ = w.Flush()
+			for _, aw := range asyncWriters {
+				_ = aw.Close()
 			}
 		}()
 	}
@@ -195,15 +203,15 @@ func RunBacktest() error {
 		st := factory.NewStrategy(sym.Detail, dataPool, sym.Params)
 		policy := factory.CreateExecutionPolicy(sym.Params)
 
-		// 銘柄別のロガーを生成（デフォルトはio.DiscardでディスクI/Oを完全抑止、-detailed-log時のみバッファリング出力）
+		// 銘柄別のロガーを生成（デフォルトはio.DiscardでディスクI/Oを完全抑止、-detailed-log時のみ非同期バッファリング出力）
 		var analysisLogger *slog.Logger
 		if detailedLog {
 			logPath := filepath.Join(logDir, fmt.Sprintf("%s_%s.jsonl", sym.Detail.Code, sym.StrategyName))
 			f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err == nil {
-				bw := bufio.NewWriterSize(f, 64*1024)
-				writersToFlush = append(writersToFlush, bw)
-				analysisLogger = slog.New(slog.NewJSONHandler(bw, nil))
+				aw := logger.NewAsyncWriter(f, 16384)
+				asyncWriters = append(asyncWriters, aw)
+				analysisLogger = slog.New(slog.NewJSONHandler(aw, nil))
 			} else {
 				slog.Error("バックテストログファイルの作成に失敗", slog.String("path", logPath), slog.Any("error", err))
 				analysisLogger = slog.New(slog.NewJSONHandler(io.Discard, nil))

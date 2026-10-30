@@ -20,7 +20,7 @@ func TestPositionTracker_ApplyExecution_Entry(t *testing.T) {
 		Price:         2000,
 		ExecutionTime: time.Now(),
 	}
-	pt.ApplyExecution(sniperID, "7203", exec1, order.ACTION_BUY, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", exec1, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	positions := pt.GetCopy()
 	if len(positions) != 1 {
@@ -46,7 +46,7 @@ func TestPositionTracker_ApplyExecution_Entry(t *testing.T) {
 		AccountType:     order.ACCOUNT_GENERAL,
 	}
 
-	pt.ApplyExecution(sniperID, "7203", exec2, order.ACTION_SELL, parent, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", exec2, order.ACTION_SELL, parent, func(_ string, pnl float64) {})
 
 	positions = pt.GetCopy()
 	if len(positions) != 2 {
@@ -65,9 +65,9 @@ func TestPositionTracker_ApplyExecution_Exit_FIFO(t *testing.T) {
 	now := time.Now()
 
 	// Setup three Buy positions (Long)
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-1", Qty: 100, Price: 2000, ExecutionTime: now.Add(-10 * time.Minute)}, order.ACTION_BUY, nil, func(pnl float64) {})
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-2", Qty: 100, Price: 2010, ExecutionTime: now.Add(-5 * time.Minute)}, order.ACTION_BUY, nil, func(pnl float64) {})
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-3", Qty: 100, Price: 2020, ExecutionTime: now.Add(-1 * time.Minute)}, order.ACTION_BUY, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-1", Qty: 100, Price: 2000, ExecutionTime: now.Add(-10 * time.Minute)}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-2", Qty: 100, Price: 2010, ExecutionTime: now.Add(-5 * time.Minute)}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-3", Qty: 100, Price: 2020, ExecutionTime: now.Add(-1 * time.Minute)}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	// Exit (Sell) with FIFO reduction (leavesQty = 150)
 	// Closes full exec-1 (100 qty @ 2000 -> PnL: (2020-2000)*100 = 2000)
@@ -78,7 +78,7 @@ func TestPositionTracker_ApplyExecution_Exit_FIFO(t *testing.T) {
 	exitParent.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
 
 	var pnlCalls []float64
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exit-exec", Qty: 150, Price: 2020, ExecutionTime: now}, order.ACTION_SELL, exitParent, func(pnl float64) {
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exit-exec", Qty: 150, Price: 2020, ExecutionTime: now}, order.ACTION_SELL, exitParent, func(_ string, pnl float64) {
 		pnlCalls = append(pnlCalls, pnl)
 	})
 
@@ -103,14 +103,14 @@ func TestPositionTracker_ApplyExecution_Exit_FIFO(t *testing.T) {
 
 	// Short Position FIFO Exit (Setup Short Position)
 	shortPT := sniper.NewPositionTracker(nil)
-	shortPT.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-short-1", Qty: 100, Price: 2000, ExecutionTime: now.Add(-10 * time.Minute)}, order.ACTION_SELL, nil, func(pnl float64) {})
+	shortPT.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-short-1", Qty: 100, Price: 2000, ExecutionTime: now.Add(-10 * time.Minute)}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
 	
 	// Exit (Buy) with FIFO reduction (100 qty @ 1980 -> PnL: (1980-2000)*100*(-1) = 2000)
 	buyExitParent := order.NewOrder("order-exit-buy", "7203", order.ACTION_BUY, 1980, 100)
 	buyExitParent.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
 
 	var shortPnl float64
-	shortPT.ApplyExecution(sniperID, "7203", order.Execution{ID: "exit-exec-buy", Qty: 100, Price: 1980, ExecutionTime: now}, order.ACTION_BUY, buyExitParent, func(pnl float64) {
+	shortPT.ApplyExecution(sniperID, "7203", order.Execution{ID: "exit-exec-buy", Qty: 100, Price: 1980, ExecutionTime: now}, order.ACTION_BUY, buyExitParent, func(_ string, pnl float64) {
 		shortPnl += pnl
 	})
 
@@ -125,9 +125,9 @@ func TestPositionTracker_ApplyExecution_Exit_ClosePositions(t *testing.T) {
 	now := time.Now()
 
 	// Setup three Buy positions (Long)
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-1", Qty: 100, Price: 2000, ExecutionTime: now.Add(-10 * time.Minute)}, order.ACTION_BUY, nil, func(pnl float64) {})
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-2", Qty: 100, Price: 2010, ExecutionTime: now.Add(-5 * time.Minute)}, order.ACTION_BUY, nil, func(pnl float64) {})
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-3", Qty: 100, Price: 2020, ExecutionTime: now.Add(-1 * time.Minute)}, order.ACTION_BUY, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-1", Qty: 100, Price: 2000, ExecutionTime: now.Add(-10 * time.Minute)}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-2", Qty: 100, Price: 2010, ExecutionTime: now.Add(-5 * time.Minute)}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-3", Qty: 100, Price: 2020, ExecutionTime: now.Add(-1 * time.Minute)}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	// Specific Exit using ClosePositions: Specifying to close exec-2 (100 qty) and exec-3 (80 qty, but bounded by remainingToSell 15)
 	exitParent := order.NewOrder("order-exit-specific", "7203", order.ACTION_SELL, 2030, 115)
@@ -140,7 +140,7 @@ func TestPositionTracker_ApplyExecution_Exit_ClosePositions(t *testing.T) {
 	}
 
 	var totalPnL float64
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exit-exec-specific", Qty: 115, Price: 2030, ExecutionTime: now}, order.ACTION_SELL, exitParent, func(pnl float64) {
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exit-exec-specific", Qty: 115, Price: 2030, ExecutionTime: now}, order.ACTION_SELL, exitParent, func(_ string, pnl float64) {
 		totalPnL += pnl
 	})
 
@@ -178,7 +178,7 @@ func TestPositionTracker_ApplyExecution_Exit_ClosePositions(t *testing.T) {
 	// --- Specific Exit of Short positions ---
 	shortPT := sniper.NewPositionTracker(nil)
 	// Setup three Sell positions (Short)
-	shortPT.ApplyExecution(sniperID, "7203", order.Execution{ID: "short-exec-1", Qty: 100, Price: 2050, ExecutionTime: now.Add(-10 * time.Minute)}, order.ACTION_SELL, nil, func(pnl float64) {})
+	shortPT.ApplyExecution(sniperID, "7203", order.Execution{ID: "short-exec-1", Qty: 100, Price: 2050, ExecutionTime: now.Add(-10 * time.Minute)}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
 
 	// Specific Exit using ClosePositions specifying short-exec-1 (50 qty)
 	buyExitParent := order.NewOrder("order-exit-buy-specific", "7203", order.ACTION_BUY, 2030, 50)
@@ -190,7 +190,7 @@ func TestPositionTracker_ApplyExecution_Exit_ClosePositions(t *testing.T) {
 	}
 
 	var shortTotalPnL float64
-	shortPT.ApplyExecution(sniperID, "7203", order.Execution{ID: "exit-short-exec-specific", Qty: 50, Price: 2030, ExecutionTime: now}, order.ACTION_BUY, buyExitParent, func(pnl float64) {
+	shortPT.ApplyExecution(sniperID, "7203", order.Execution{ID: "exit-short-exec-specific", Qty: 50, Price: 2030, ExecutionTime: now}, order.ACTION_BUY, buyExitParent, func(_ string, pnl float64) {
 		shortTotalPnL += pnl
 	})
 
@@ -210,9 +210,9 @@ func TestPositionTracker_HoldQty(t *testing.T) {
 	}
 
 	// Buy position (Long +100)
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-1", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-1", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 	// Sell position (Short -50)
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-2", Qty: 50, Price: 2010}, order.ACTION_SELL, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "exec-2", Qty: 50, Price: 2010}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
 
 	if pt.HoldQty() != 50.0 {
 		t.Errorf("expected 50 holding qty, got %f", pt.HoldQty())
@@ -224,8 +224,8 @@ func TestPositionTracker_GetUnrealizedPnL(t *testing.T) {
 	sniperID := "test-sniper"
 
 	// Setup Long (qty 100 @ 2000) and Short (qty 50 @ 2050)
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "long", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(pnl float64) {})
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "short", Qty: 50, Price: 2050}, order.ACTION_SELL, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "long", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "short", Qty: 50, Price: 2050}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
 
 	// Market Price: 2020
 	// Long PnL: (2020 - 2000) * 100 = 2000
@@ -242,10 +242,10 @@ func TestPositionTracker_MatchPositionsToClose(t *testing.T) {
 	sniperID := "test-sniper"
 
 	// Setup positions
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-1", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(pnl float64) {})
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "sell-1", Qty: 50, Price: 2050}, order.ACTION_SELL, nil, func(pnl float64) {})
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-2", Qty: 80, Price: 2010}, order.ACTION_BUY, nil, func(pnl float64) {})
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-3", Qty: 80, Price: 2015}, order.ACTION_BUY, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-1", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "sell-1", Qty: 50, Price: 2050}, order.ACTION_SELL, nil, func(_ string, pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-2", Qty: 80, Price: 2010}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-3", Qty: 80, Price: 2015}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	// Lock buy-1 using order ID "dummy-order"
 	if err := pt.LockPositions("dummy-order", []order.ClosePosition{{HoldID: "buy-1", Qty: 100}}); err != nil {
@@ -273,7 +273,7 @@ func TestPositionTracker_GetCopy(t *testing.T) {
 	pt := sniper.NewPositionTracker(nil)
 	sniperID := "test-sniper"
 
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-1", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-1", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	copy1 := pt.GetCopy()
 	copy1[0].LeavesQty = 0 // mutate copy
@@ -289,7 +289,7 @@ func TestPositionTracker_ReducePositions_SkipFIFOSignaled(t *testing.T) {
 	sniperID := "test-sniper"
 
 	// 1. 古い建玉A（buy-A）を登録
-	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-A", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(pnl float64) {})
+	pt.ApplyExecution(sniperID, "7203", order.Execution{ID: "buy-A", Qty: 100, Price: 2000}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	// 2. 存在しない建玉Bを指定した返済約定（決済売り）を適用する
 	exitOrder := order.NewOrder(
@@ -313,7 +313,7 @@ func TestPositionTracker_ReducePositions_SkipFIFOSignaled(t *testing.T) {
 		order.Execution{ID: "exit-exec-1", Qty: 100, Price: 2100},
 		order.ACTION_SELL,
 		exitOrder,
-		func(pnl float64) {},
+		func(_ string, pnl float64) {},
 	)
 
 	// 3. 安全ガードにより、無関係な建玉A（buy-A）が誤って消し込まれず、100株残っていることを検証する
@@ -335,14 +335,14 @@ func TestPositionTracker_Reconcile(t *testing.T) {
 		Qty:           100,
 		Price:         278,
 		ExecutionTime: time.Now(),
-	}, order.ACTION_BUY, nil, func(pnl float64) {})
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	pt.ApplyExecution("test-sniper", "7201", order.Execution{
 		ID:            "ghost-1",
 		Qty:           50,
 		Price:         280,
 		ExecutionTime: time.Now(),
-	}, order.ACTION_BUY, nil, func(pnl float64) {})
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
 
 	// 取引所（カブコム）の最新実建玉:
 	// - buy-1 は一部返済されて 80株 に減少

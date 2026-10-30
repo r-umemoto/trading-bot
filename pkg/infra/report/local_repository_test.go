@@ -58,6 +58,27 @@ func TestLocalRepository_Save(t *testing.T) {
 	if savedReport.Total.Trades != testReport.Total.Trades {
 		t.Errorf("expected Trades %d, got %d", testReport.Total.Trades, savedReport.Total.Trades)
 	}
+
+	// Test Load
+	loadedReport, err := repo.Load(ctx, "2026-06-10")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loadedReport.Date != testReport.Date {
+		t.Errorf("expected loaded Date %s, got %s", testReport.Date, loadedReport.Date)
+	}
+	if loadedReport.Total.RealizedPnL != testReport.Total.RealizedPnL {
+		t.Errorf("expected loaded RealizedPnL %f, got %f", testReport.Total.RealizedPnL, loadedReport.Total.RealizedPnL)
+	}
+
+	// Test LoadFromFile
+	fromFileReport, err := reportinfra.LoadFromFile(expectedFile)
+	if err != nil {
+		t.Fatalf("LoadFromFile failed: %v", err)
+	}
+	if fromFileReport.Date != testReport.Date {
+		t.Errorf("expected fromFile Date %s, got %s", testReport.Date, fromFileReport.Date)
+	}
 }
 
 func TestLocalRepository_SaveError(t *testing.T) {

@@ -26,8 +26,30 @@
    フレームワークコアを変更することなく、独自戦略を簡単に追加できる仕組み。設定ファイル（`operations.json`）から任意の戦略を名前指定で動的ロード可能。
 4. **高精度な約定・遅延シミュレータ（ExecutionPolicy）**
    ヒストリカルTickデータ（CSV）をミリ秒単位で再生するバックテストエンジン。板情報をシミュレートする約定モデル（Touch/Pessimistic/Volume）に加え、ネットワーク/ブローカー遅延（ミリ秒）の再現機能をサポート。さらに、疑似約定の待機時間を制御する [TouchTTLPolicy](./pkg/domain/sniper/strategy/policy.go) などの各種 [ExecutionPolicy](./pkg/domain/sniper/strategy/policy.go) により、微細な価格変動による無駄なキャンセル・再発注（注文スパム）を抑制。
-5. **イベント駆動型のクラウド・ソーシャル連携 (GCP)**
-   Firestoreのドキュメント変更をトリガーにEventarcとCloud Functions（Python）を経由して外部SNS（X）へレポートを自動配信するモダンなインフラ構成（GCP連携は任意で、未設定時は自動的にローカルCSV/JSON保存にフォールバック）。
+5. **責務分離とイベント駆動型のクラウド・ソーシャル連携 (GCP)**
+   Bot本体をトレード処理に特化させ、クラウド依存（Firestore接続等）を完全に排除。Botが出力した日次レポートやログを独立したアップローダー（`reporter`）がFirestoreへ連携し、EventarcとCloud Functions（Python）を経由して外部SNS（X）へ配信する堅牢な分離構成。
+
+---
+
+## 📦 アプリケーション・実行ファイル構成 (Applications)
+
+本プロジェクトはマルチバイナリ構成を採用しており、用途に応じた独立した実行ファイルをビルドできます。
+
+| コマンド | ディレクトリ | 役割 |
+| :--- | :--- | :--- |
+| **Bot** | `cmd/bot` | **取引実行エンジン**。外部ネットワーク障害の影響を受けないよう、クラウド通信を排しローカル完結で高速にトレードとログ出力を実行します。 |
+| **Reporter** | `cmd/reporter` | **レポート集計 & Firestore アップローダー**。大引け後などに実行し、Botが出力した日次レポートを読み取って Cloud Firestore へ送信します。 |
+| **Analyzer** | `cmd/analyzer` | **ログ解析CLI**。Botが出力したトレードログ（`.jsonl`）を解析し、銘柄・戦略・時間帯別の勝率や約定待ち時間などをターミナルに可視化します。 |
+| **Backtest** | `cmd/backtest` | **高速バックテストツール**。ヒストリカルTickデータ（CSV）を用いて取引戦略の損益・約定シミュレーションを実行します。 |
+
+### ビルド例
+```bash
+# 全バイナリまたは必要なバイナリを個別にビルド
+go build -o bin/bot ./cmd/bot
+go build -o bin/reporter ./cmd/reporter
+go build -o bin/analyzer ./cmd/analyzer
+go build -o bin/backtest ./cmd/backtest
+```
 
 ---
 

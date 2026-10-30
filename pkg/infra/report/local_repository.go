@@ -30,3 +30,23 @@ func (l *LocalRepository) Save(ctx context.Context, r *report.DailyReport) error
 
 	return os.WriteFile(filePath, data, 0644)
 }
+
+func (l *LocalRepository) Load(ctx context.Context, date string) (*report.DailyReport, error) {
+	filePath := filepath.Join(l.outputDir, "daily_"+date+".json")
+	return LoadFromFile(filePath)
+}
+
+// LoadFromFile は指定されたファイルパスからDailyReportを読み込みます。
+func LoadFromFile(filePath string) (*report.DailyReport, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var r report.DailyReport
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, err
+	}
+
+	return &r, nil
+}

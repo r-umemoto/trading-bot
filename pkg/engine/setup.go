@@ -19,11 +19,10 @@ import (
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu"
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
+	"github.com/r-umemoto/trading-bot/pkg/infra/logger"
 	reportinfra "github.com/r-umemoto/trading-bot/pkg/infra/report"
 	"github.com/r-umemoto/trading-bot/pkg/portfolio"
 	"github.com/r-umemoto/trading-bot/pkg/usecase"
-
-	"cloud.google.com/go/firestore"
 )
 
 // BuildEngine は、システム全体を俯瞰する「目次」です
@@ -41,7 +40,7 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	}
 
 	// 3. ドメイン層（スナイパー）の配備（DataPoolはGatewayから直接もらう！）
-	snipers, err := deploySnipers(watchList, gateway.DataPool())
+	snipers, cleanups, err := deploySnipers(watchList, gateway.DataPool())
 	if err != nil {
 		return nil, fmt.Errorf("スナイパーの配備に失敗: %w", err)
 	}
@@ -89,33 +88,14 @@ func BuildEngine(ctx context.Context, cfg *config.AppConfig, targets []portfolio
 	handler := usecase.NewUseCaseHandler(systemUC, tradeUC)
 
 	// 5. エンジンの完成
-	return NewEngine(handler), nil
+	return NewEngine(handler, cleanups...), nil
 }
 
-// buildReportRepository は環境変数に応じてFirestoreまたはローカルJSONの成績保存リポジトリを構築します。
+// buildReportRepository はローカルJSONの成績保存リポジトリを構築します。
+// （※Firestore等へのアップロードは別実行ファイル cmd/reporter が担当します）
 func buildReportRepository(ctx context.Context) report.Repository {
-	var reportRepo report.Repository
-	creds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
-	projectID := os.Getenv("GCP_PROJECT_ID")
-	if projectID == "" {
-		projectID = "trading-bot-project" // デフォルト値
-	}
-
-	if creds != "" {
-		fsClient, err := firestore.NewClient(ctx, projectID)
-		if err == nil {
-			reportRepo = reportinfra.NewFirestoreRepository(fsClient)
-			slog.Info("💾 [SETUP] Firestore成績保存リポジトリを初期化しました", slog.String("projectID", projectID))
-		} else {
-			slog.Error("❌ [SETUP] Firestoreクライアント初期化エラー。ローカル保存にフォールバックします", slog.Any("error", err))
-		}
-	}
-
-	if reportRepo == nil {
-		reportRepo = reportinfra.NewLocalRepository("./data/reports")
-		slog.Info("💾 [SETUP] ローカルJSON成績保存リポジトリを初期化しました (./data/reports)")
-	}
-
+	reportRepo := reportinfra.NewLocalRepository("./data/reports")
+	slog.Info("💾 [SETUP] ローカルJSON成績保存リポジトリを初期化しました (./data/reports)")
 	return reportRepo
 }
 
@@ -306,38 +286,44 @@ func buildInfrastructure(cfg *config.AppConfig) (market.MarketGateway, error) {
 	return marketGateway, nil
 }
 
-func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*sniper.Sniper, error) {
+func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*sniper.Sniper, []func(), error) {
 	var snipers []*sniper.Sniper
+	var cleanups []func()
 
 	// ログディレクトリの準備
 	logDir := filepath.Join("logs", time.Now().Format("20060102"))
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil, fmt.Errorf("ログディレクトリの作成に失敗: %w", err)
+		return nil, nil, fmt.Errorf("ログディレクトリの作成に失敗: %w", err)
 	}
 
 	for _, t := range watchList {
 		factory, err := strategy.GetFactory(t.StrategyName)
 		if err != nil {
-			return nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
+			return nil, nil, fmt.Errorf("戦略 '%s' が見つかりません: %w", t.StrategyName, err)
 		}
 
 		st := factory.NewStrategy(t.Detail, dataPool, t.Params)
 		policy := factory.CreateExecutionPolicy(t.Params)
 
-		// 銘柄別のロガーを生成
+		// 銘柄別の非同期ロガーを生成（メインループをディスクI/Oから分離）
 		logPath := filepath.Join(logDir, fmt.Sprintf("%s_%s.jsonl", t.Detail.Code, t.StrategyName))
 		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			return nil, fmt.Errorf("取引ログファイル (%s) の作成に失敗しました: %w", logPath, err)
+			return nil, nil, fmt.Errorf("取引ログファイル (%s) の作成に失敗しました: %w", logPath, err)
 		}
-		analysisLogger := slog.New(slog.NewJSONHandler(f, nil))
+
+		asyncWriter := logger.NewAsyncWriter(f, 8192)
+		cleanups = append(cleanups, func() {
+			_ = asyncWriter.Close()
+		})
+		analysisLogger := slog.New(slog.NewJSONHandler(asyncWriter, nil))
 
 		sniperID := fmt.Sprintf("%s_%s", t.StrategyName, t.Detail.Code)
 		s := sniper.NewSniper(sniperID, t.Detail, st, policy, t.Exchange, analysisLogger)
 		snipers = append(snipers, s)
 	}
 
-	return snipers, nil
+	return snipers, cleanups, nil
 }
 
 func buildNestHelper(symCode string, symSnipers []*sniper.Sniper) *sniper.SniperNest {

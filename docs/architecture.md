@@ -209,10 +209,14 @@ graph LR
         ENV_File[".env ファイル"] -->|設定ロード| GO_Bot
         Config_JSON["configs/portfolio.json<br/>configs/operations.json"] -->|マスタ読み込み| GO_Bot
         
-        GO_Bot["🤖 Go Trading Bot<br/>(pkg/engine)"]
+        GO_Bot["🤖 Trading Bot<br/>(cmd/bot)"]
+        Reporter["📤 Report Uploader<br/>(cmd/reporter)"]
+        Report_File["data/reports/daily_YYYY-MM-DD.json"]
         
         GO_Bot -->|CSV出力| CSV_File["data/reports/*.csv"]
         GO_Bot -->|ロギング| Log_File["logs/YYYYMMDD/*.jsonl"]
+        GO_Bot -->|日次成績保存| Report_File
+        Reporter -->|成績読み込み| Report_File
     end
 
     subgraph Kabu_Station ["🏢 証券会社インフラ"]
@@ -231,17 +235,18 @@ graph LR
 
     %% 接続関係の定義
     GO_Bot <-->|REST API & WebSocket| Kabu_API
-    GO_Bot -->|環境変数にGCP認証情報がある場合| Firestore
+    Reporter -->|日次レポート送信 (cmd/reporter)| Firestore
     
     Firestore -->|ドキュメント作成/更新トリガー| Eventarc
     Eventarc -->|イベント転送 - Protobufデシリアライズ| CloudFunction
     CloudFunction -->|Tweepy経由でツイート投稿| X_API
 
     %% クラス割り当て
-    class GO_Bot goApp;
+    class GO_Bot,Reporter goApp;
     class Firestore,Eventarc,CloudFunction gcp;
     class Kabu_API,X_API ext;
-    class ENV_File,Config_JSON,CSV_File,Log_File file;
+    class ENV_File,Config_JSON,CSV_File,Log_File,Report_File file;
 ```
 
-GCP（Firestore/Eventarc）および X（Twitter）APIとの連携は**完全に任意**です。環境変数 `GOOGLE_APPLICATION_CREDENTIALS` が設定されていない場合、Botは自動的に**ローカル保存モード（`./data/reports/` 配下へのJSON/CSV出力）**へフォールバックして稼働します。
+Bot本体（`cmd/bot`）はトレードに特化し、成績データをローカル（`./data/reports/` 配下のJSON）へ出力します。
+GCP（Firestore/Eventarc）および X（Twitter）APIとの連携は、専用のアップローダー（`cmd/reporter`）が大引け後などに独立して実行するため、Botの安定稼働がクラウド障害やネットワーク遅延に影響されません。

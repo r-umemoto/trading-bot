@@ -16,12 +16,14 @@ type UseCaseHandler interface {
 
 // Engine はシステム全体のライフサイクル（起動、終了、キルスイッチ監視）を統括するホストコンテナです
 type Engine struct {
-	usecase UseCaseHandler
+	usecase  UseCaseHandler
+	cleanups []func()
 }
 
-func NewEngine(usecase UseCaseHandler) *Engine {
+func NewEngine(usecase UseCaseHandler, cleanups ...func()) *Engine {
 	return &Engine{
-		usecase: usecase,
+		usecase:  usecase,
+		cleanups: cleanups,
 	}
 }
 
@@ -54,6 +56,13 @@ func (e *Engine) Run(ctx context.Context) error {
 
 	// 6. シャットダウン完了後にバックグラウンドワーカーを安全に停止します
 	bgCancel()
+
+	// 7. ログのフラッシュなどリソースのクリーンアップを実行します
+	for _, cleanup := range e.cleanups {
+		if cleanup != nil {
+			cleanup()
+		}
+	}
 
 	return err
 }
