@@ -34,9 +34,9 @@ func RunBacktest() error {
 	var operationsPath string
 	flag.StringVar(&operationsPath, "operations", "./configs/operations.json", "作戦設定JSONファイルのパス")
 	var execModelStr string
-	flag.StringVar(&execModelStr, "execution-model", "pessimistic", "約定モデル (touch, pessimistic, volume)")
+	flag.StringVar(&execModelStr, "execution-model", "volume", "約定モデル (touch, pessimistic, volume)")
 	var latencyMs int
-	flag.IntVar(&latencyMs, "latency", 0, "発注・キャンセル遅延時間 (ミリ秒)")
+	flag.IntVar(&latencyMs, "latency", 150, "発注・キャンセル遅延時間 (ミリ秒)")
 	var detailedLog bool
 	flag.BoolVar(&detailedLog, "detailed-log", false, "詳細なJSONLログをファイル出力する（デフォルト: false）")
 	flag.Parse()
