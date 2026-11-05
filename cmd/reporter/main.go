@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -73,23 +76,16 @@ func main() {
 		return
 	}
 
-	// GCP Project IDの解決
-	pid := *projectID
-	if pid == "" {
-		pid = os.Getenv("GCP_PROJECT_ID")
-		if pid == "" {
-			pid = "trading-bot-project"
-		}
-	}
+	// GCP Project ID & 認証情報（GOOGLE_APPLICATION_CREDENTIALS）の自動解決
+	creds, pid := resolveCredentialsAndProject(*projectID)
 
 	ctx := context.Background()
 
 	// 認証情報の注意喚起ログ
-	creds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	if creds == "" {
 		slog.Warn("⚠️ GOOGLE_APPLICATION_CREDENTIALS が設定されていません。Application Default Credentials (ADC) を試行します")
 	} else {
-		slog.Debug("🔑 認証情報ファイルを使用します", slog.String("credentials", creds))
+		slog.Info("🔑 認証情報ファイルを使用します", slog.String("credentials", creds))
 	}
 
 	slog.Info("🚀 Firestore クライアントを初期化します", slog.String("projectID", pid))
@@ -110,6 +106,96 @@ func main() {
 		slog.String("collection", "daily_reports"),
 		slog.String("doc", dailyReport.Date),
 	)
+}
+
+// resolveCredentialsAndProject は .env や同ディレクトリのサービスアカウントキーから自動解決します
+func resolveCredentialsAndProject(customProject string) (string, string) {
+	searchDirs := []string{"."}
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		if exeDir != "." {
+			searchDirs = append(searchDirs, exeDir)
+		}
+	}
+
+	// 1. .env を探索して環境変数に読み込み
+	for _, dir := range searchDirs {
+		envPath := filepath.Join(dir, ".env")
+		loadDotEnv(envPath)
+	}
+
+	// 2. GOOGLE_APPLICATION_CREDENTIALS の解決
+	creds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	if creds == "" || !fileExists(creds) {
+		for _, dir := range searchDirs {
+			candidates, _ := filepath.Glob(filepath.Join(dir, "daytrade-agent-*.json"))
+			if len(candidates) == 0 {
+				candidates, _ = filepath.Glob(filepath.Join(dir, "*credential*.json"))
+			}
+			if len(candidates) > 0 {
+				creds = candidates[0]
+				os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", creds)
+				break
+			}
+		}
+	}
+
+	// 3. プロジェクトIDの解決
+	pid := customProject
+	if pid == "" {
+		pid = os.Getenv("GCP_PROJECT_ID")
+	}
+	if pid == "" && creds != "" && fileExists(creds) {
+		if p, err := extractProjectID(creds); err == nil && p != "" {
+			pid = p
+		}
+	}
+	if pid == "" {
+		pid = "trading-bot-project"
+	}
+
+	return creds, pid
+}
+
+func fileExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir()
+}
+
+func loadDotEnv(p string) {
+	f, err := os.Open(p)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		k := strings.TrimSpace(parts[0])
+		v := strings.TrimSpace(parts[1])
+		if k != "" && os.Getenv(k) == "" {
+			os.Setenv(k, v)
+		}
+	}
+}
+
+func extractProjectID(jsonPath string) (string, error) {
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		return "", err
+	}
+	var sa struct {
+		ProjectID string `json:"project_id"`
+	}
+	if err := json.Unmarshal(data, &sa); err != nil {
+		return "", err
+	}
+	return sa.ProjectID, nil
 }
 
 func printReportSummary(r *report.DailyReport) {
