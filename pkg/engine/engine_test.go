@@ -175,3 +175,20 @@ func TestEngineRun_ShutdownError(t *testing.T) {
 		t.Errorf("expected error %v, got %v", shutdownErr, err)
 	}
 }
+
+func TestResolveKillSwitchTime(t *testing.T) {
+	t.Setenv("BOT_EXIT_TIME", "")
+	if h, m := engine.ResolveKillSwitchTime(); h != 15 || m != 32 {
+		t.Fatalf("expected default 15:32, got %02d:%02d", h, m)
+	}
+
+	t.Setenv("BOT_EXIT_TIME", "15:25")
+	if h, m := engine.ResolveKillSwitchTime(); h != 15 || m != 25 {
+		t.Fatalf("expected override 15:25, got %02d:%02d", h, m)
+	}
+
+	t.Setenv("BOT_EXIT_TIME", "invalid")
+	if h, m := engine.ResolveKillSwitchTime(); h != 15 || m != 32 {
+		t.Fatalf("expected fallback 15:32 on invalid input, got %02d:%02d", h, m)
+	}
+}
