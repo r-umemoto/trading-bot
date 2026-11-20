@@ -4,6 +4,9 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -67,8 +70,29 @@ func (e *Engine) Run(ctx context.Context) error {
 	return err
 }
 
-// monitorKillSwitch は取引終了時刻（15:15）を監視し、到達時にコンテキストをキャンセルします
+// ResolveKillSwitchTime は環境変数 BOT_EXIT_TIME ("HH:MM", デフォルト "15:32") から終了時刻を返します。
+func ResolveKillSwitchTime() (int, int) {
+	raw := strings.TrimSpace(os.Getenv("BOT_EXIT_TIME"))
+	if raw == "" {
+		return 15, 32
+	}
+	parts := strings.Split(raw, ":")
+	if len(parts) != 2 {
+		return 15, 32
+	}
+	h, errH := strconv.Atoi(parts[0])
+	m, errM := strconv.Atoi(parts[1])
+	if errH != nil || errM != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return 15, 32
+	}
+	return h, m
+}
+
+// monitorKillSwitch は取引終了時刻（BOT_EXIT_TIME、デフォルト 15:32 JST）を監視し、到達時にコンテキストをキャンセルします
 func (e *Engine) monitorKillSwitch(ctx context.Context, cancel context.CancelFunc) {
+	exitHour, exitMinute := ResolveKillSwitchTime()
+	jst := time.FixedZone("JST", 9*3600)
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -77,8 +101,9 @@ func (e *Engine) monitorKillSwitch(ctx context.Context, cancel context.CancelFun
 		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
-			if t.Hour() == 15 && t.Minute() >= 20 {
-				fmt.Println("\n⏰【キルスイッチ作動】指定時刻到達。全スナイパーに撤収を命じます！")
+			tj := t.In(jst)
+			if tj.Hour() > exitHour || (tj.Hour() == exitHour && tj.Minute() >= exitMinute) {
+				fmt.Printf("\n⏰【キルスイッチ作動】指定時刻 (%02d:%02d) 到達。全スナイパーに撤収を命じます！\n", exitHour, exitMinute)
 				cancel()
 				return
 			}
