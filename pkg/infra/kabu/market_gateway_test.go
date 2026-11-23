@@ -708,3 +708,28 @@ func TestMarketGateway_CancelOrder_LocalBypass(t *testing.T) {
 	}
 }
 
+func TestMarketGateway_SendOrderRaw_RecordsOrderRTT(t *testing.T) {
+	mockClient := &MockKabuClient{}
+	gateway := NewMarketGateway(nil, nil)
+	gateway.client = mockClient
+
+	ord := order.NewOrder("rtt-test-1", "7203", order.ACTION_BUY, 2000, 100)
+	ord.Request = &order.OrderRequest{
+		Exchange:        order.EXCHANGE_TOSHO,
+		SecurityType:    order.SECURITY_TYPE_STOCK,
+		MarginTradeType: order.TRADE_TYPE_GENERAL_DAY,
+		AccountType:     order.ACCOUNT_SPECIAL,
+	}
+	if _, err := gateway.SendOrderRaw(context.Background(), order.SendOrderInput{Order: ord}); err != nil {
+		t.Fatalf("SendOrderRaw failed: %v", err)
+	}
+	var buf [30]float64
+	n := gateway.DataPool().OrderRTTSamples(buf[:])
+	if n != 1 {
+		t.Fatalf("expected 1 RTT sample recorded in DataPool, got %d", n)
+	}
+	if buf[0] < 0 {
+		t.Fatalf("expected non-negative RTT sample, got %v", buf[0])
+	}
+}
+
