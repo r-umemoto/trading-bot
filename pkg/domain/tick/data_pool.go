@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 )
+
+const orderRTTWindowSize = 30
 
 type DataPool interface {
 	PushTick(tick Tick)
@@ -12,12 +15,21 @@ type DataPool interface {
 
 	// 新規汎用指標システム Indicatorをシングルトンで管理する
 	GetOrCreateIndicator(symbol, id string, factory func() Indicator) Indicator
+
+	// 発注API RTT（応答時間）の記録と直近サンプル取得
+	RecordOrderRTT(d time.Duration)
+	OrderRTTSamples(dst []float64) int
 }
 
 // DefaultDataPool は DataPool インターフェースの標準実装です
 type DefaultDataPool struct {
 	symbols        sync.Map // Key: string (symbol), Value: *symbolData
 	feederProvider HistoricalFeederProvider
+
+	rttMu      sync.RWMutex
+	rttSamples [orderRTTWindowSize]float64
+	rttIndex   int
+	rttCount   int
 }
 
 // symbolData は銘柄ごとのデータを保持し、個別にロックを制御します
@@ -39,6 +51,34 @@ func NewDefaultDataPool(provider HistoricalFeederProvider) *DefaultDataPool {
 	return &DefaultDataPool{
 		feederProvider: provider,
 	}
+}
+
+// RecordOrderRTT は発注APIのRTT（応答時間）を固定長リングバッファへ記録します。
+func (a *DefaultDataPool) RecordOrderRTT(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	ms := float64(d.Microseconds()) / 1000.0
+
+	a.rttMu.Lock()
+	a.rttSamples[a.rttIndex] = ms
+	a.rttIndex = (a.rttIndex + 1) % orderRTTWindowSize
+	if a.rttCount < orderRTTWindowSize {
+		a.rttCount++
+	}
+	a.rttMu.Unlock()
+}
+
+// OrderRTTSamples は保持している直近の発注API RTTサンプル(ms)を dst へコピーし、コピー件数を返します。
+func (a *DefaultDataPool) OrderRTTSamples(dst []float64) int {
+	a.rttMu.RLock()
+	n := a.rttCount
+	if n > len(dst) {
+		n = len(dst)
+	}
+	copy(dst[:n], a.rttSamples[:n])
+	a.rttMu.RUnlock()
+	return n
 }
 
 func (a *DefaultDataPool) getOrCreateSymbolData(symbol string) *symbolData {
@@ -85,11 +125,18 @@ func (a *DefaultDataPool) GetOrCreateIndicator(symbol, id string, factory func()
 		data.mu.Unlock()
 		return ind
 	}
+	if factory == nil {
+		data.mu.Unlock()
+		return nil
+	}
 
 	// ファクトリー関数の中でさらに GetOrCreateIndicator が呼ばれた場合（複合インジケーターなど）に
 	// デッドロックするのを防ぐため、一旦ロックを解除してからファクトリーを実行する（Double-Checked Locking）
 	data.mu.Unlock()
 	newInd := factory()
+	if newInd == nil {
+		return nil
+	}
 
 	// 🌟 追加：ヒストリカルフェッチを必要とする指標の場合、自動初期化を安全にロックの外で走らせる
 	if fetcher, ok := newInd.(FetcherIndicator); ok && a.feederProvider != nil {

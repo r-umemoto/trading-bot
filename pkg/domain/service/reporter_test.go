@@ -44,6 +44,8 @@ func (m *mockDataPool) GetState(symbol string) tick.MarketState {
 func (m *mockDataPool) GetOrCreateIndicator(symbol, id string, factory func() tick.Indicator) tick.Indicator {
 	return nil
 }
+func (m *mockDataPool) RecordOrderRTT(d time.Duration)     {}
+func (m *mockDataPool) OrderRTTSamples(dst []float64) int  { return 0 }
 
 func TestGeneratePerformanceReport(t *testing.T) {
 	// Setup mock data

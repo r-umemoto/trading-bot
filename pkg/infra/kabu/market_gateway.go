@@ -72,7 +72,7 @@ type MarketGateway struct {
 	regMu             sync.RWMutex
 	registeredSymbols map[string]market.ResisterSymbolRequest
 
-	shortDisabledMu sync.RWMutex
+	shortDisabledMu    sync.RWMutex
 	shortDisabledUntil map[string]time.Time // key: symbol
 }
 
@@ -293,9 +293,13 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 
 	fmt.Printf("発注完了 %+v\n", kabReq)
 
+	reqStart := time.Now()
 	resp, err := m.client.SendOrder(kabReq)
 	if err != nil {
 		return ord, fmt.Errorf("カブコムAPI発注失敗: %w", err)
+	}
+	if m.dataPool != nil {
+		m.dataPool.RecordOrderRTT(time.Since(reqStart))
 	}
 
 	ord.ID = resp.OrderId

@@ -25,6 +25,8 @@ func (d *dummyDataPool) GetOrCreateIndicator(symbol, id string, factory func() t
 	}
 	return d.indicator
 }
+func (d *dummyDataPool) RecordOrderRTT(t time.Duration)    {}
+func (d *dummyDataPool) OrderRTTSamples(dst []float64) int { return 0 }
 
 func TestSampleStrategy_Lifecycle(t *testing.T) {
 	factory, err := strategy.GetFactory("sample")
