@@ -384,3 +384,16 @@ func TestSniper_ShortCover_TDD_Verification(t *testing.T) {
 	}
 }
 
+func TestSyncBacktestGateway_SendOrder_RecordsOrderRTT(t *testing.T) {
+	g := NewSyncBacktestGateway(ExecutionModelVolume, 75*time.Millisecond)
+	ord := order.NewOrder("bt-rtt-1", "7203", order.ACTION_BUY, 2000, 100)
+	if _, err := g.SendOrder(context.Background(), order.SendOrderInput{Order: ord}); err != nil {
+		t.Fatalf("SendOrder failed: %v", err)
+	}
+	var buf [30]float64
+	n := g.DataPool().OrderRTTSamples(buf[:])
+	if n != 1 || buf[0] != 75.0 {
+		t.Fatalf("expected 1 RTT sample of 75.0ms, got n=%d val=%v", n, buf[0])
+	}
+}
+
