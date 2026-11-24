@@ -182,6 +182,9 @@ func (g *SyncBacktestGateway) SendOrder(ctx context.Context, input order.SendOrd
 		g.initialDepths[orderID] = g.getDepth(ord.Symbol, ord.Action, ord.OrderPrice)
 		g.cumulativeVolumes[orderID] = 0
 	}
+	if g.dataPool != nil && g.Latency > 0 {
+		g.dataPool.RecordOrderRTT(g.Latency)
+	}
 
 	return ord, nil
 }
