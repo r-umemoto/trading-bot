@@ -55,6 +55,12 @@ func TestUseCaseHandler_Lifecycle(t *testing.T) {
 	handler.PrintReport(false)
 	handler.PrintReport(true)
 
+	// 6.5. Test ForceExit (trading stops while system stays alive)
+	err = handler.ForceExit(ctx)
+	if err != nil {
+		t.Fatalf("ForceExit failed: %v", err)
+	}
+
 	// 7. Test Shutdown
 	err = handler.Shutdown(ctx)
 	if err != nil {

@@ -120,3 +120,32 @@ func TestSystemUseCase_Initialize_DuplicateFilter(t *testing.T) {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 }
+
+func TestSystemUseCase_ForceExit_DoesNotUnregister(t *testing.T) {
+	bg := backtest.NewSyncBacktestGateway(backtest.ExecutionModelTouch, 0)
+	// UnregisterSymbolAll が呼ばれたら必ずエラーになるゲートウェイを使う
+	eg := &errorGateway{
+		SyncBacktestGateway: bg,
+		unregisterErr:       errors.New("should not call UnregisterSymbolAll during ForceExit"),
+	}
+
+	detail := symbol.Symbol{Code: "7203"}
+	s := sniper.NewSniper("test_sniper", detail, sniper.NewInstructionStrategy(), &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	nest := sniper.NewSniperNest("7203", detail, []*sniper.Sniper{s}, nil)
+	op := sniper.NewDefaultOperation("Op_7203", nest)
+	watchTargets := []symbol.WatchTarget{
+		{
+			Detail:       detail,
+			Exchange:     order.EXCHANGE_TOSHO,
+			StrategyName: "test_strategy",
+		},
+	}
+	su := usecase.NewSystemUseCase(watchTargets, []sniper.Operation{op}, eg)
+
+	if err := su.ForceExit(context.Background()); err != nil {
+		t.Fatalf("ForceExit should not fail or call UnregisterSymbolAll, got: %v", err)
+	}
+	if s.GetLifecycle() != sniper.LifecycleStopped {
+		t.Errorf("expected sniper lifecycle to be stopped after ForceExit, got %v", s.GetLifecycle())
+	}
+}

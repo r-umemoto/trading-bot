@@ -168,3 +168,39 @@ func TestCSVLogger_AppendMode(t *testing.T) {
 		t.Errorf("expected EOF, got: %v", err)
 	}
 }
+
+func TestCSVLogger_CloseDrainsAllTicks(t *testing.T) {
+	tempDir := t.TempDir()
+	logger, err := storage.NewCSVLogger("all", "20261125", tempDir)
+	if err != nil {
+		t.Fatalf("failed to create CSVLogger: %v", err)
+	}
+
+	const totalTicks = 200
+	for i := 0; i < totalTicks; i++ {
+		logger.Log(tick.Tick{
+			Symbol:           "7203",
+			Price:            float64(2500 + i),
+			CurrentPriceTime: time.Date(2026, 11, 25, 15, 29, 59, i*1000000, time.Local),
+		})
+	}
+	// Sleep なしで即 Close しても全件書き込まれていること
+	logger.Close()
+	// 2重 Close でもパニックしないこと
+	logger.Close()
+
+	file, err := os.Open(filepath.Join(tempDir, "all_20261125.csv"))
+	if err != nil {
+		t.Fatalf("failed to open CSV: %v", err)
+	}
+	defer file.Close()
+
+	records, err := csv.NewReader(file).ReadAll()
+	if err != nil {
+		t.Fatalf("failed to read CSV: %v", err)
+	}
+	// ヘッダー1行 + totalTicks行
+	if len(records) != totalTicks+1 {
+		t.Fatalf("expected %d rows (including header), got %d", totalTicks+1, len(records))
+	}
+}

@@ -29,18 +29,34 @@ func (m *mockCleanableTarget) GetActiveOrders() []*order.Order {
 
 type mockGateway struct {
 	market.MarketGateway
-	cancelCalledWith string
+	cancelCalledWith []string
 	cancelErr        error
+	positionsQueue   [][]position.Position
+	getPosCallCount  int
+	sentOrders       []*order.Order
 }
 
 func (m *mockGateway) CancelOrder(ctx context.Context, orderID string) error {
-	m.cancelCalledWith = orderID
+	m.cancelCalledWith = append(m.cancelCalledWith, orderID)
 	return m.cancelErr
 }
 
 func (m *mockGateway) GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error) {
+	if len(m.positionsQueue) > 0 {
+		idx := m.getPosCallCount
+		m.getPosCallCount++
+		if idx < len(m.positionsQueue) {
+			return m.positionsQueue[idx], nil
+		}
+		return nil, nil
+	}
 	// Return empty positions to terminate CleanAllPositions loop early without retrying/waiting
 	return nil, nil
+}
+
+func (m *mockGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
+	m.sentOrders = append(m.sentOrders, input.Order)
+	return input.Order, nil
 }
 
 func TestPositionCleaner_CleanAllPositions(t *testing.T) {
@@ -90,7 +106,44 @@ func TestPositionCleaner_CleanAllPositions(t *testing.T) {
 	}
 
 	// - gateway.CancelOrder should be called for o1
-	if gateway.cancelCalledWith != "order-1" {
-		t.Errorf("expected gateway.CancelOrder to be called with 'order-1', got %q", gateway.cancelCalledWith)
+	if len(gateway.cancelCalledWith) != 1 || gateway.cancelCalledWith[0] != "order-1" {
+		t.Errorf("expected gateway.CancelOrder to be called once with 'order-1', got %v", gateway.cancelCalledWith)
+	}
+
+	// - Calling CleanAllPositions a second time (e.g. ForceExit followed by Shutdown) should not re-cancel CANCEL_SENT orders
+	if err := cleaner.CleanAllPositions(context.Background()); err != nil {
+		t.Fatalf("second CleanAllPositions failed: %v", err)
+	}
+	if len(gateway.cancelCalledWith) != 1 {
+		t.Errorf("expected no duplicate CancelOrder calls on second CleanAllPositions, got %v", gateway.cancelCalledWith)
+	}
+}
+
+func TestPositionCleaner_BuildForceExitOrder_SetsMarginExitAndHoldID(t *testing.T) {
+	pos := position.Position{
+		ExecutionID: "E_20261125_001",
+		Symbol:      "7203",
+		Exchange:    order.EXCHANGE_TOSHO,
+		Action:      order.ACTION_BUY,
+		TradeType:   order.TRADE_TYPE_GENERAL_DAY,
+		AccountType: order.ACCOUNT_SPECIAL,
+		LeavesQty:   100,
+	}
+
+	ord := buildForceExitOrder(pos)
+	if ord.CashMargin != order.CASH_MARGIN_MARGIN_EXIT {
+		t.Errorf("expected CASH_MARGIN_MARGIN_EXIT, got %v", ord.CashMargin)
+	}
+	if ord.Type != order.ORDER_TYPE_MARKET {
+		t.Errorf("expected ORDER_TYPE_MARKET, got %v", ord.Type)
+	}
+	if ord.Action != order.ACTION_SELL {
+		t.Errorf("expected ACTION_SELL for closing BUY position, got %v", ord.Action)
+	}
+	if ord.Request == nil || len(ord.Request.ClosePositions) != 1 {
+		t.Fatalf("expected 1 ClosePosition, got %+v", ord.Request)
+	}
+	if ord.Request.ClosePositions[0].HoldID != "E_20261125_001" || ord.Request.ClosePositions[0].Qty != 100 {
+		t.Errorf("unexpected ClosePosition: %+v", ord.Request.ClosePositions[0])
 	}
 }

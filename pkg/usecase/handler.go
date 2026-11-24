@@ -35,6 +35,11 @@ func (h *UseCaseHandler) Start(ctx context.Context) error {
 	return nil
 }
 
+// ForceExit はシステムを稼働させたまま、全スナイパーの強制撤退と全ポジション決済を行います
+func (h *UseCaseHandler) ForceExit(ctx context.Context) error {
+	return h.system.ForceExit(ctx)
+}
+
 // Shutdown はシステム終了時のポジション全決済と銘柄登録解除を行います
 func (h *UseCaseHandler) Shutdown(ctx context.Context) error {
 	return h.system.Shutdown(ctx)

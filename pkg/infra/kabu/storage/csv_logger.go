@@ -7,15 +7,18 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
 
 // CSVLogger はTickデータを非同期でCSVに書き込むための構造体です
 type CSVLogger struct {
-	tickChan chan tick.Tick
-	file     *os.File
-	writer   *csv.Writer
+	tickChan  chan tick.Tick
+	done      chan struct{}
+	closeOnce sync.Once
+	file      *os.File
+	writer    *csv.Writer
 }
 
 // NewCSVLogger は指定した銘柄・日付のCSVファイルを作成し、ロガーを初期化します
@@ -61,6 +64,7 @@ func NewCSVLogger(symbol string, date string, outputDir string) (*CSVLogger, err
 
 	logger := &CSVLogger{
 		tickChan: make(chan tick.Tick, 10000), // バッファサイズ1万（急激なTick流入に備える）
+		done:     make(chan struct{}),
 		file:     file,
 		writer:   writer,
 	}
@@ -80,6 +84,7 @@ func (l *CSVLogger) Log(tick tick.Tick) {
 
 // startWriting はチャネルからデータを受け取り、継続的にファイルへ書き込みます
 func (l *CSVLogger) startWriting() {
+	defer close(l.done)
 	for tick := range l.tickChan {
 		record := []string{
 			tick.CurrentPriceTime.Format("15:04:05.000"), // ミリ秒まで記録
@@ -123,8 +128,12 @@ func (l *CSVLogger) startWriting() {
 	}
 }
 
-// Close はチャネルとファイルを安全に閉じます
+// Close はキューに残ったTickをすべて書き終えてからファイルを安全に閉じます
 func (l *CSVLogger) Close() {
-	close(l.tickChan)
-	l.file.Close()
+	l.closeOnce.Do(func() {
+		close(l.tickChan)
+		<-l.done
+		l.writer.Flush()
+		_ = l.file.Close()
+	})
 }
