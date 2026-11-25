@@ -3,6 +3,7 @@ package tick_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
@@ -78,5 +79,57 @@ func TestDataPool_FetcherIndicatorInitialization(t *testing.T) {
 	expectedVal := 3500.5
 	if fetcher.value != expectedVal {
 		t.Errorf("expected initialized value to be %f, got %f", expectedVal, fetcher.value)
+	}
+}
+
+func TestDataPool_OrderRTTSamples_RingBufferOrder(t *testing.T) {
+	pool := tick.NewDefaultDataPool(nil)
+
+	// Before wrap-around: push 5 samples (10..50ms)
+	for i := 1; i <= 5; i++ {
+		pool.RecordOrderRTT(time.Duration(i*10) * time.Millisecond)
+	}
+
+	buf := make([]float64, 3)
+	n := pool.OrderRTTSamples(buf)
+	if n != 3 {
+		t.Fatalf("expected 3 samples, got %d", n)
+	}
+	wantBeforeWrap := []float64{30, 40, 50}
+	for i, want := range wantBeforeWrap {
+		if buf[i] != want {
+			t.Errorf("before wrap buf[%d] = %v, want %v (full=%v)", i, buf[i], want, buf)
+		}
+	}
+
+	// After wrap-around: push 35 more samples (total 40: 10..400ms, window size is 30 -> 110..400)
+	for i := 6; i <= 40; i++ {
+		pool.RecordOrderRTT(time.Duration(i*10) * time.Millisecond)
+	}
+
+	// Full window (30 samples) should be in chronological order: 110, 120, ..., 400
+	full := make([]float64, 30)
+	n = pool.OrderRTTSamples(full)
+	if n != 30 {
+		t.Fatalf("expected 30 samples, got %d", n)
+	}
+	for i := 0; i < 30; i++ {
+		want := float64((11 + i) * 10)
+		if full[i] != want {
+			t.Errorf("after wrap full[%d] = %v, want %v", i, full[i], want)
+		}
+	}
+
+	// Smaller dst (5 samples) should return the 5 most recent samples in chronological order: 360..400
+	recent := make([]float64, 5)
+	n = pool.OrderRTTSamples(recent)
+	if n != 5 {
+		t.Fatalf("expected 5 samples, got %d", n)
+	}
+	wantRecent := []float64{360, 370, 380, 390, 400}
+	for i, want := range wantRecent {
+		if recent[i] != want {
+			t.Errorf("after wrap recent[%d] = %v, want %v (recent=%v)", i, recent[i], want, recent)
+		}
 	}
 }

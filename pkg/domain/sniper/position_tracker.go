@@ -73,13 +73,15 @@ func (pt *PositionTracker) ApplyExecution(sniperID string, symbolCode string, ex
 	} else {
 		var closePositions []order.ClosePosition
 		reason := ""
+		orderID := ""
 		if parentOrder != nil {
 			if parentOrder.Request != nil {
 				closePositions = parentOrder.Request.ClosePositions
 			}
 			reason = parentOrder.Reason
+			orderID = parentOrder.ID
 		}
-		pt.reducePositions(sniperID, symbolCode, exec.Qty, exec.Price, exec.ExecutionTime, closePositions, reason, recordPnL)
+		pt.reducePositions(sniperID, symbolCode, exec.Qty, exec.Price, exec.ExecutionTime, closePositions, orderID, reason, recordPnL)
 	}
 }
 
@@ -90,11 +92,12 @@ func (pt *PositionTracker) reducePositions(
 	sellPrice float64,
 	sellTime time.Time,
 	closePositions []order.ClosePosition,
+	orderID string,
 	closeReason string,
 	recordPnL func(string, float64),
 ) {
 	// Domain Logic Delegation (FIFO matching and reduction)
-	totalTradePnL, earliestEntryTime, avgEntryPrice := pt.positions.Reduce(sellQty, sellPrice, closePositions, func(entrySniperID string, pnl float64) {
+	totalTradePnL, earliestEntryTime, avgEntryPrice := pt.positions.Reduce(sellQty, sellPrice, closePositions, orderID, func(entrySniperID string, pnl float64) {
 		targetSniper := entrySniperID
 		if targetSniper == "" {
 			targetSniper = sniperID
@@ -143,6 +146,12 @@ func (pt *PositionTracker) GetUnrealizedPnL(currentPrice float64) float64 {
 	return pt.positions.CalculateUnrealizedPnL(currentPrice)
 }
 
+func (pt *PositionTracker) GetUnrealizedPnLForSniper(sniperID string, currentPrice float64) float64 {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
+	return pt.positions.CalculateUnrealizedPnLForSniper(sniperID, currentPrice)
+}
+
 func (pt *PositionTracker) LockPositions(orderID string, closePositions []order.ClosePosition) error {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
@@ -189,6 +198,12 @@ func (pt *PositionTracker) MatchPositionsToClose(action order.Action, qty float6
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 	return pt.positions.MatchToClose(action, qty)
+}
+
+func (pt *PositionTracker) MatchPositionsToCloseForSniper(sniperID string, action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
+	return pt.positions.MatchToCloseForSniper(sniperID, action, qty)
 }
 
 func (pt *PositionTracker) GetCopy() []position.Position {

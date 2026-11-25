@@ -38,47 +38,19 @@ type FireAction struct {
 	Bullet   Bullet
 }
 
-// ReconciliationMode はネスト配下の戦略群の目標ポジション調停モードを表します
-type ReconciliationMode string
-
-const (
-	// ReconciliationModeLegacy は従来仕様（個別評価・クロス取引抑止ガード）です
-	ReconciliationModeLegacy ReconciliationMode = "legacy"
-	// ReconciliationModeAggregate は真のターゲットポジション集約（相殺・ドテン自動執行）です
-	ReconciliationModeAggregate ReconciliationMode = "aggregated"
-)
-
 // SniperNest は特定の銘柄（Symbol）におけるスナイパーたちを束ねるドメイン集約（Aggregate Root）です。
 // 子コンポーネント（OrderTracker, PositionTracker, PerformanceTracker, CooldownTracker）をオーケストレートし、銘柄ごとの取引状態を保護します。
 type SniperNest struct {
-	SymbolCode         string
-	Detail             symbol.Symbol // 銘柄情報
-	snipers            []*Sniper
-	orders             *OrderTracker
-	positions          *PositionTracker
-	performance        *PerformanceTracker
-	cooldowns          *CooldownTracker
-	Logger             *slog.Logger
-	mu                 sync.Mutex
-	lastTickTime       time.Time          // 🌟 最新のシミュレーション時刻を保存（エラー発生時の時間軸統一用）
-	reconciliationMode ReconciliationMode // 🌟 調停モード（デフォルト: legacy）
-}
-
-// SetReconciliationMode は調停モードを設定します
-func (n *SniperNest) SetReconciliationMode(mode ReconciliationMode) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.reconciliationMode = mode
-}
-
-// GetReconciliationMode は現在の調停モードを返します
-func (n *SniperNest) GetReconciliationMode() ReconciliationMode {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.reconciliationMode == "" {
-		return ReconciliationModeLegacy
-	}
-	return n.reconciliationMode
+	SymbolCode   string
+	Detail       symbol.Symbol // 銘柄情報
+	snipers      []*Sniper
+	orders       *OrderTracker
+	positions    *PositionTracker
+	performance  *PerformanceTracker
+	cooldowns    *CooldownTracker
+	Logger       *slog.Logger
+	mu           sync.Mutex
+	lastTickTime time.Time // 🌟 最新のシミュレーション時刻を保存（エラー発生時の時間軸統一用）
 }
 
 func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger *slog.Logger) *SniperNest {
@@ -92,10 +64,9 @@ func NewSniperNest(code string, detail symbol.Symbol, snipers []*Sniper, logger 
 		snipers:     snipers,
 		orders:      NewOrderTracker(positions, logger),
 		positions:   positions,
-		performance:        NewPerformanceTracker(),
-		cooldowns:          NewCooldownTracker(),
-		Logger:             logger,
-		reconciliationMode: ReconciliationModeLegacy,
+		performance: NewPerformanceTracker(),
+		cooldowns:   NewCooldownTracker(),
+		Logger:      logger,
 	}
 }
 
@@ -104,13 +75,9 @@ func (n *SniperNest) GetSymbolCodes() []string {
 	return []string{n.SymbolCode}
 }
 
-// HandleTick は時価（Tick）の更新を受け取り、設定された調停モード（Legacy / Aggregated）に応じて
-// 配下の各スナイパーの意思決定とアクション生成を行います。
+// HandleTick は時価（Tick）の更新を受け取り、配下の全スナイパーのターゲットポジションを集約調停（相殺・ドテン自動執行）します。
 func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
-	if n.GetReconciliationMode() == ReconciliationModeAggregate {
-		return n.handleTickAggregated(t)
-	}
-	return n.handleTickLegacy(t)
+	return n.handleTickAggregated(t)
 }
 
 func (n *SniperNest) evaluateSyntheticFills(s *Sniper, t tick.Tick) {
@@ -150,73 +117,6 @@ func (n *SniperNest) evaluateSyntheticFills(s *Sniper, t tick.Tick) {
 	}
 }
 
-func (n *SniperNest) commitLegacyBullet(s *Sniper, bullet Bullet) []FireAction {
-	if bullet == nil {
-		return nil
-	}
-
-	ordBullet, ok := bullet.(OrderBullet)
-	if !ok {
-		return []FireAction{{SniperID: s.ID, Bullet: bullet}}
-	}
-
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	newOrd := ordBullet.Order
-
-	var conflictingOrder *order.Order
-	var conflictingSniperID string
-
-	// 他のスナイパーが持つ「売買方向が反対」の未約定注文を探す
-	for otherSniperID, otherOrders := range n.orders.activeOrders {
-		if otherSniperID == s.ID {
-			continue
-		}
-		for _, actOrd := range otherOrders {
-			if actOrd.Action != newOrd.Action {
-				conflictingOrder = actOrd
-				conflictingSniperID = otherSniperID
-				break
-			}
-		}
-		if conflictingOrder != nil {
-			break
-		}
-	}
-
-	if conflictingOrder != nil {
-		if newOrd.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-			// 返済（決済）注文を優先するため、競合する反対側の新規指値注文などをキャンセルする
-			n.Logger.Warn("⚠️ [CrossTradeRegulation] 返済注文を優先するため、競合する反対側の未約定注文を自動キャンセルします",
-				slog.String("symbol", n.SymbolCode),
-				slog.String("exit_sniper", s.ID),
-				slog.String("canceling_order_id", conflictingOrder.ID),
-				slog.String("canceling_sniper", conflictingSniperID))
-
-			return []FireAction{{
-				SniperID: conflictingSniperID,
-				Bullet:   CancelBullet{OrderID: conflictingOrder.ID},
-			}}
-		}
-
-		// 新規エントリー注文の場合は、単に発注をスキップして様子見する
-		n.Logger.Warn("⚠️ [CrossTradeRegulation] 不公正取引（自己対当クロス）を防止するため、新規エントリーを一時的に抑止します",
-			slog.String("symbol", n.SymbolCode),
-			slog.String("entry_sniper", s.ID),
-			slog.String("conflicting_order_id", conflictingOrder.ID),
-			slog.String("conflicting_sniper", conflictingSniperID))
-		return nil
-	}
-
-	// 新規発注なら、自身の管理リストに注文を追加し、外部へはクローンを渡してポインタ共有を防ぐ
-	n.addOrderLocked(s.ID, newOrd)
-	return []FireAction{{
-		SniperID: s.ID,
-		Bullet:   OrderBullet{Order: newOrd.Clone()},
-	}}
-}
-
 func (n *SniperNest) cancelActiveEntries(sniperID string, now time.Time) []FireAction {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -234,29 +134,6 @@ func (n *SniperNest) cancelActiveEntries(sniperID string, now time.Time) []FireA
 		}
 	}
 	return acts
-}
-
-// handleTickLegacy は従来の個別評価・クロス取引抑止ガードによる発注処理です。
-func (n *SniperNest) handleTickLegacy(t tick.Tick) []FireAction {
-	var actions []FireAction
-	for _, s := range n.snipers {
-		if s.GetLifecycle() == LifecycleStopped {
-			continue
-		}
-		n.evaluateSyntheticFills(s, t)
-		obs := n.PrepareObservation(s.ID, t)
-		virtualPos := s.CalculateVirtualPosition(obs.Positions, obs.ActiveOrders)
-
-		input := strategy.StrategyInput{
-			Position:   virtualPos,
-			LatestTick: obs.Tick,
-		}
-
-		target := s.Evaluate(input)
-		bullet := n.ReconcileTarget(s.ID, obs.Tick, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
-		actions = append(actions, n.commitLegacyBullet(s, bullet)...)
-	}
-	return actions
 }
 
 // handleTickAggregated は真のターゲットポジション集約（相殺・ドテン自動執行）ロジックです。
@@ -508,17 +385,11 @@ func (n *SniperNest) GetPerformance(sniperID string) Performance {
 	return n.performance.Get(sniperID)
 }
 
-// GetUnrealizedPnL は指定したスナイパーの含み損益を計算します。
-// 集約モードでは同一ネスト内の建玉を共有しているため、複数スナイパーによる重複加算を防ぐため
-// ネスト全体の含み損益をスナイパー数で均等に按分して返します。
+// GetUnrealizedPnL は指定したスナイパーが保有する建玉の含み損益を計算します。
 func (n *SniperNest) GetUnrealizedPnL(sniperID string, currentPrice float64) float64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	total := n.positions.GetUnrealizedPnL(currentPrice)
-	if n.reconciliationMode == ReconciliationModeAggregate && len(n.snipers) > 1 {
-		return total / float64(len(n.snipers))
-	}
-	return total
+	return n.positions.GetUnrealizedPnLForSniper(sniperID, currentPrice)
 }
 
 // GetExchanges はこのネスト内のスナイパーが動作する一意な取引所のリストを返します。
@@ -649,7 +520,7 @@ func (n *SniperNest) GetSniperActiveOrders(sniperID string) []*order.Order {
 func (n *SniperNest) HoldQty(sniperID string) float64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if sniperID != "" && n.reconciliationMode == ReconciliationModeAggregate {
+	if sniperID != "" {
 		return n.positions.HoldQtyForSniper(sniperID)
 	}
 	return n.positions.HoldQty()
@@ -695,14 +566,10 @@ func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick) Observatio
 	activeOrders := n.orders.PrepareActiveOrders(sniperID)
 	allPos := n.positions.GetCopy()
 	var posCopy []position.Position
-	if n.reconciliationMode == ReconciliationModeAggregate {
-		for _, p := range allPos {
-			if p.SniperID == sniperID || p.SniperID == "" {
-				posCopy = append(posCopy, p)
-			}
+	for _, p := range allPos {
+		if sniperID == "" || p.SniperID == sniperID || p.SniperID == "" {
+			posCopy = append(posCopy, p)
 		}
-	} else {
-		posCopy = allPos
 	}
 
 	return Observation{
@@ -713,7 +580,7 @@ func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick) Observatio
 }
 
 func (n *SniperNest) getCommittedPositionLocked(sniperID string) CommittedPosition {
-	physicalQty := n.positions.HoldQty()
+	physicalQty := n.positions.HoldQtyForSniper(sniperID)
 	orderQty := n.orders.SignedQty(sniperID)
 
 	return CommittedPosition{
@@ -776,12 +643,9 @@ func (n *SniperNest) ReconcileTarget(
 		return nil
 	}
 
-	// 物理確定建玉と市場コミット中ポジション（CommittedPosition）の取得
-	physicalHoldQty := n.positions.HoldQty()
+	// 物理確定建玉と市場コミット中ポジション（CommittedPosition）の取得（スナイパー単位で分離）
+	physicalHoldQty := n.positions.HoldQtyForSniper(sniperID)
 	committedPos := n.getCommittedPositionLocked(sniperID)
-	if n.reconciliationMode == ReconciliationModeAggregate {
-		committedPos = n.getTotalCommittedPositionLocked()
-	}
 
 	// ポジション反転の安全弁:
 	// 反対ポジションを持つ場合は、両建てを防ぐため一旦全決済（Target=0）を優先する（エンティティの執行ポリシー）
@@ -1084,7 +948,7 @@ func (n *SniperNest) buildOrderPairFromTarget(
 
 	var closePositions []order.ClosePosition
 	if isExit {
-		closePositions, _ = n.positions.MatchPositionsToClose(action, qty)
+		closePositions, _ = n.positions.MatchPositionsToCloseForSniper(sniperID, action, qty)
 		if len(closePositions) == 0 {
 			// 🌟 信用返済時、ロック可能な建玉が1つもない（すべて決済中または残存ゼロ）場合は、
 			// 誤って重複返済や空返済を行わないよう発注を中止する。
