@@ -102,6 +102,24 @@ func TestRunBacktest_FileNotFound(t *testing.T) {
 	}
 }
 
+func TestRunBacktest_InvalidExecutionModel(t *testing.T) {
+	oldArgs := os.Args
+	defer func() {
+		os.Args = oldArgs
+	}()
+
+	os.Args = []string{
+		"cmd",
+		"-execution-model", "invalid_model",
+	}
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+
+	err := runner.RunBacktest()
+	if err == nil {
+		t.Fatal("expected RunBacktest to fail with invalid execution-model")
+	}
+}
+
 func TestRunBot_LoadConfigFailure(t *testing.T) {
 	// Clean environment variables that would allow loading to succeed or make it fail predictably
 	oldBroker := os.Getenv("BROKER_TYPE")

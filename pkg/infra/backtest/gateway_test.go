@@ -397,3 +397,125 @@ func TestSyncBacktestGateway_SendOrder_RecordsOrderRTT(t *testing.T) {
 	}
 }
 
+func TestSyncBacktestGateway_GetSymbol_DefaultAndCustomPriceRangeGroup(t *testing.T) {
+	g := NewSyncBacktestGateway(ExecutionModelVolume, 0)
+
+	// Unregistered symbol defaults to TSE Standard so CalcTickSize works
+	sym, err := g.GetSymbol(context.Background(), "7203", order.EXCHANGE_TOSHO)
+	if err != nil {
+		t.Fatalf("GetSymbol failed: %v", err)
+	}
+	if sym.PriceRangeGroup != symbol.PRICE_RANGE_GROUP_TSE_STANDARD {
+		t.Errorf("expected default PriceRangeGroup TSE_STANDARD, got %v", sym.PriceRangeGroup)
+	}
+	if ts := sym.CalcTickSize(2500); ts != 1.0 {
+		t.Errorf("expected CalcTickSize(2500)=1.0, got %v", ts)
+	}
+
+	// Explicitly registered TOPIX100 symbol
+	g.SetSymbol(symbol.Symbol{
+		Code:            "5016",
+		Name:            "JX金属",
+		PriceRangeGroup: symbol.PRICE_RANGE_GROUP_TSE_TOPIX100,
+	})
+	topixSym, err := g.GetSymbol(context.Background(), "5016", order.EXCHANGE_TOSHO)
+	if err != nil {
+		t.Fatalf("GetSymbol failed: %v", err)
+	}
+	if ts := topixSym.CalcTickSize(1944.5); ts != 0.5 {
+		t.Errorf("expected TOPIX100 CalcTickSize(1944.5)=0.5, got %v", ts)
+	}
+}
+
+func TestSyncBacktestGateway_PessimisticModel(t *testing.T) {
+	g := NewSyncBacktestGateway(ExecutionModelPessimistic, 0)
+	baseTime, _ := time.Parse("15:04:05.000", "10:00:00.000")
+
+	g.ProcessTick(tick.Tick{
+		Symbol:           "7203",
+		Price:            2000,
+		BestAsk:          tick.FirstQuote{Price: 2001},
+		BestBid:          tick.FirstQuote{Price: 2000},
+		CurrentPriceTime: baseTime,
+	})
+
+	ord, err := g.SendOrder(context.Background(), order.SendOrderInput{
+		Order: &order.Order{
+			Symbol:     "7203",
+			Action:     order.ACTION_BUY,
+			OrderQty:   100,
+			OrderPrice: 2000,
+			Type:       order.ORDER_TYPE_LIMIT,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendOrder failed: %v", err)
+	}
+
+	// Same-price touch (askPrice == orderPrice): must NOT fill in pessimistic mode
+	g.ProcessTick(tick.Tick{
+		Symbol:           "7203",
+		Price:            2000,
+		BestAsk:          tick.FirstQuote{Price: 2000},
+		BestBid:          tick.FirstQuote{Price: 1999},
+		TradingVolume:    50000,
+		CurrentPriceTime: baseTime.Add(time.Second),
+	})
+	if g.orders[ord.ID].Status() == order.ORDER_STATUS_FILLED {
+		t.Fatalf("expected order NOT to fill on same-price touch in pessimistic mode")
+	}
+
+	// Strict price cross (askPrice < orderPrice): MUST fill
+	g.ProcessTick(tick.Tick{
+		Symbol:           "7203",
+		Price:            1999,
+		BestAsk:          tick.FirstQuote{Price: 1999},
+		BestBid:          tick.FirstQuote{Price: 1998},
+		TradingVolume:    51000,
+		CurrentPriceTime: baseTime.Add(2 * time.Second),
+	})
+	if g.orders[ord.ID].Status() != order.ORDER_STATUS_FILLED {
+		t.Fatalf("expected order to fill on strict price cross in pessimistic mode, got %v", g.orders[ord.ID].Status())
+	}
+}
+
+func TestSyncBacktestGateway_VolumeDeltaResetNoNegative(t *testing.T) {
+	g := NewSyncBacktestGateway(ExecutionModelVolume, 0)
+	baseTime, _ := time.Parse("15:04:05.000", "10:00:00.000")
+
+	// Day 1 tick with high cumulative volume
+	g.ProcessTick(tick.Tick{
+		Symbol:           "7203",
+		Price:            2000,
+		TradingVolume:    100000,
+		BuyBoard:         []tick.Quote{{Price: 1990, Qty: 500}},
+		CurrentPriceTime: baseTime,
+	})
+
+	ord, err := g.SendOrder(context.Background(), order.SendOrderInput{
+		Order: &order.Order{
+			Symbol:     "7203",
+			Action:     order.ACTION_BUY,
+			OrderQty:   100,
+			OrderPrice: 1990,
+			Type:       order.ORDER_TYPE_LIMIT,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendOrder failed: %v", err)
+	}
+
+	// Day 2 tick where TradingVolume resets to 300 (< 100000)
+	g.ProcessTick(tick.Tick{
+		Symbol:           "7203",
+		Price:            1990,
+		TradingVolume:    300,
+		BuyBoard:         []tick.Quote{{Price: 1990, Qty: 500}},
+		CurrentPriceTime: baseTime.Add(24 * time.Hour),
+	})
+
+	if g.cumulativeVolumes[ord.ID] != 300 {
+		t.Fatalf("expected cumulativeVolumes=300 (non-negative after volume reset), got %v", g.cumulativeVolumes[ord.ID])
+	}
+}
+
