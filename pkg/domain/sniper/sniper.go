@@ -137,6 +137,7 @@ func (s *Sniper) logStatus(input strategy.StrategyInput) {
 	s.lastStatusLogAt = time.Now()
 }
 
+// OrderlyExit はスナイパーを撤退中（LifecycleExiting）に遷移させ、次回Tickで保有建玉を成行手仕舞いさせます。
 func (s *Sniper) OrderlyExit() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -144,6 +145,7 @@ func (s *Sniper) OrderlyExit() {
 	s.Logger.Warn("LIFECYCLE_EXIT_TRIGGERED", slog.String("symbol", s.Detail.Code))
 }
 
+// ForceStop はスナイパーを即座に完全停止（LifecycleStopped）に遷移させ、以降のTick評価をすべて抑止します。
 func (s *Sniper) ForceStop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,6 +159,8 @@ func (s *Sniper) GetLifecycle() LifecycleState {
 	return s.lifecycle
 }
 
+// ForceExit は PositionCleaner 等による一括強制決済の前段として、スナイパーのTick評価を即座に完全停止します。
+// スナイパー自身に次回Tickで手仕舞いさせたい場合は OrderlyExit を使用してください。
 func (s *Sniper) ForceExit() {
 	s.ForceStop()
 	fmt.Printf("🚨 [%s] 強制停止モードON。\n", s.Detail.Code)

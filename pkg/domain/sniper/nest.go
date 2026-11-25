@@ -315,10 +315,17 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 	return actions
 }
 
-// ForceExit は配下の全スナイパーに緊急撤退を命じます。
+// ForceExit は PositionCleaner 等による一括強制決済の前段として、配下の全スナイパーのTick評価を即座に完全停止します。
 func (n *SniperNest) ForceExit() {
 	for _, s := range n.snipers {
 		s.ForceExit()
+	}
+}
+
+// OrderlyExit は配下の全スナイパーを撤退中（LifecycleExiting）に遷移させ、次回Tickで保有建玉を成行手仕舞いさせます。
+func (n *SniperNest) OrderlyExit() {
+	for _, s := range n.snipers {
+		s.OrderlyExit()
 	}
 }
 

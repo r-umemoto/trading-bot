@@ -115,12 +115,13 @@ func (o *PairTradingOperation) GetExchanges() []order.ExchangeMarket {
 	return list
 }
 
+var pairTradingJST = time.FixedZone("JST", 9*60*60)
+
+const defaultPairStopLossMultiplier = 2.5
+
 func (o *PairTradingOperation) isAllowedTimeForEntry(t time.Time) bool {
-	// 日本時間 (Asia/Tokyo) に統一して時間判定する
-	loc, err := time.LoadLocation("Asia/Tokyo")
-	if err == nil {
-		t = t.In(loc)
-	}
+	// 日本時間 (JST) に統一して時間判定する
+	t = t.In(pairTradingJST)
 
 	hm := t.Hour()*100 + t.Minute()
 
@@ -132,6 +133,15 @@ func (o *PairTradingOperation) isAllowedTimeForEntry(t time.Time) bool {
 	return false
 }
 
+func (o *PairTradingOperation) isEODForceExitTime(t time.Time) bool {
+	if t.IsZero() {
+		return false
+	}
+	t = t.In(pairTradingJST)
+	hm := t.Hour()*100 + t.Minute()
+	return hm >= 1450
+}
+
 func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 	// 1. 最新価格の取得
 	stateA := o.dataPool.GetState(o.nestA.SymbolCode)
@@ -139,6 +149,15 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 
 	if stateA.LatestTick.CurrentPriceTime.IsZero() || stateB.LatestTick.CurrentPriceTime.IsZero() {
 		return nil
+	}
+
+	// 最新時刻は受信TickまたはA/Bのうち新しい方を採用（片方の板が閑散なときの時刻ズレを防止）
+	now := t.CurrentPriceTime
+	if now.IsZero() {
+		now = stateA.LatestTick.CurrentPriceTime
+		if stateB.LatestTick.CurrentPriceTime.After(now) {
+			now = stateB.LatestTick.CurrentPriceTime
+		}
 	}
 
 	priceA := stateA.LatestTick.Price
@@ -193,7 +212,7 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 	if qtyA == 0 && qtyB == 0 {
 		// ノーポジションのとき、スプレッド乖離を判定してエントリー
 		// 新規エントリー時のみ時間帯フィルターを適用する
-		if o.isAllowedTimeForEntry(stateA.LatestTick.CurrentPriceTime) {
+		if o.isAllowedTimeForEntry(now) {
 			if priceDiff > o.thresholdPriceDiff {
 				o.logger.Warn("PAIR_ENTRY_SIGNAL_DETECTED", slog.String("reason", "spread_exceeded_positive_threshold"))
 				// 銘柄Aを売り、銘柄Bを買う
@@ -209,21 +228,50 @@ func (o *PairTradingOperation) HandleTick(t tick.Tick) []FireAction {
 			if math.Abs(priceDiff) > o.thresholdPriceDiff {
 				o.logger.Info("PAIR_ENTRY_SKIPPED_BY_TIME_FILTER",
 					slog.String("reason", "outside_golden_time_windows"),
-					slog.Time("tick_time", stateA.LatestTick.CurrentPriceTime),
+					slog.Time("tick_time", now),
 				)
 			}
 		}
+	} else if (qtyA != 0) != (qtyB != 0) {
+		// 片足（Legging）状態の検知：片方のみ約定し、もう一方にアクティブ注文もない場合は裸ポジションを即時解消する
+		missingOrders := o.nestB.GetActiveOrders()
+		if qtyA == 0 {
+			missingOrders = o.nestA.GetActiveOrders()
+		}
+		if len(missingOrders) == 0 {
+			o.logger.Warn("PAIR_LEGGING_UNWIND_TRIGGERED",
+				slog.String("operation", o.ID),
+				slog.Float64("qty_a", qtyA),
+				slog.Float64("qty_b", qtyB),
+			)
+			o.strategyA.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairUnwind_LeggingA"})
+			o.strategyB.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairUnwind_LeggingB"})
+		}
 	} else {
-		// ポジションを保有している場合、平均回帰したら手仕舞い（利確/損切）
-		// スプレッドの絶対値が元の閾値の10%未満に収束したら決済
+		// 両建て保有中：平均回帰（利確）、スプレッド拡大ストップロス、または大引け前強制手仕舞いを判定
 		if math.Abs(priceDiff) < o.thresholdPriceDiff*0.1 {
 			o.logger.Warn("PAIR_EXIT_SIGNAL_DETECTED", slog.String("reason", "spread_reverted_to_mean"))
 			o.strategyA.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_FlatA"})
 			o.strategyB.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairExit_FlatB"})
+		} else if o.thresholdPriceDiff > 0 && math.Abs(priceDiff) >= o.thresholdPriceDiff*defaultPairStopLossMultiplier {
+			o.logger.Warn("PAIR_STOP_LOSS_TRIGGERED",
+				slog.String("operation", o.ID),
+				slog.Float64("spread", priceDiff),
+				slog.Float64("stop_threshold", o.thresholdPriceDiff*defaultPairStopLossMultiplier),
+			)
+			o.strategyA.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairStopLoss_FlatA"})
+			o.strategyB.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairStopLoss_FlatB"})
+		} else if o.isEODForceExitTime(now) {
+			o.logger.Warn("PAIR_EOD_EXIT_TRIGGERED",
+				slog.String("operation", o.ID),
+				slog.Time("tick_time", now),
+			)
+			o.strategyA.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEODExit_FlatA"})
+			o.strategyB.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairEODExit_FlatB"})
 		}
 	}
 
-	// 4. 2つの SniperNest にTick処理を伝達し、個別のアクション結果をマージして返却
+	// 5. 2つの SniperNest にTick処理を伝達し、個別のアクション結果をマージして返却
 	actA := o.nestA.HandleTick(stateA.LatestTick)
 	actB := o.nestB.HandleTick(stateB.LatestTick)
 
@@ -246,6 +294,11 @@ func (o *PairTradingOperation) ReconcilePositions(actualPositions []position.Pos
 func (o *PairTradingOperation) ForceExit() {
 	o.nestA.ForceExit()
 	o.nestB.ForceExit()
+}
+
+func (o *PairTradingOperation) OrderlyExit() {
+	o.nestA.OrderlyExit()
+	o.nestB.OrderlyExit()
 }
 
 func (o *PairTradingOperation) GetActiveOrders() []*order.Order {
@@ -295,6 +348,11 @@ func (o *PairTradingOperation) HandleOrderRejection(sniperID string, ord *order.
 		o.nestA.HandleOrderRejection(sniperID, ord, err)
 	} else if o.nestB.HasSniper(sniperID) {
 		o.nestB.HandleOrderRejection(sniperID, ord, err)
+	}
+	// 片方のエントリー注文が拒絶された場合は、もう一方の建玉や発注が残らないよう両方の目標を0へリセットする
+	if ord != nil && ord.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+		o.strategyA.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairUnwind_RejectedA"})
+		o.strategyB.SetTarget(strategy.TargetPosition{Qty: 0.0, Price: 0.0, OrderType: order.ORDER_TYPE_MARKET, Reason: "PairUnwind_RejectedB"})
 	}
 }
 
