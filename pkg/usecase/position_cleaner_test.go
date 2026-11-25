@@ -29,18 +29,38 @@ func (m *mockCleanableTarget) GetActiveOrders() []*order.Order {
 
 type mockGateway struct {
 	market.MarketGateway
-	cancelCalledWith string
+	cancelCalledWith []string
 	cancelErr        error
+	positionsQueue   [][]position.Position
+	getPosCallCount  int
+	sentOrders       []*order.Order
 }
 
 func (m *mockGateway) CancelOrder(ctx context.Context, orderID string) error {
-	m.cancelCalledWith = orderID
+	m.cancelCalledWith = append(m.cancelCalledWith, orderID)
 	return m.cancelErr
 }
 
 func (m *mockGateway) GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error) {
+	if len(m.positionsQueue) > 0 {
+		idx := m.getPosCallCount
+		m.getPosCallCount++
+		if idx < len(m.positionsQueue) {
+			return m.positionsQueue[idx], nil
+		}
+		return nil, nil
+	}
 	// Return empty positions to terminate CleanAllPositions loop early without retrying/waiting
 	return nil, nil
+}
+
+func (m *mockGateway) SendOrder(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
+	m.sentOrders = append(m.sentOrders, input.Order)
+	return input.Order, nil
+}
+
+func (m *mockGateway) GetOrders(ctx context.Context) (order.Orders, error) {
+	return order.Orders{}, nil
 }
 
 func TestPositionCleaner_CleanAllPositions(t *testing.T) {
@@ -90,7 +110,169 @@ func TestPositionCleaner_CleanAllPositions(t *testing.T) {
 	}
 
 	// - gateway.CancelOrder should be called for o1
-	if gateway.cancelCalledWith != "order-1" {
-		t.Errorf("expected gateway.CancelOrder to be called with 'order-1', got %q", gateway.cancelCalledWith)
+	if len(gateway.cancelCalledWith) != 1 || gateway.cancelCalledWith[0] != "order-1" {
+		t.Errorf("expected gateway.CancelOrder to be called once with 'order-1', got %v", gateway.cancelCalledWith)
+	}
+
+	// - Calling CleanAllPositions a second time (e.g. ForceExit followed by Shutdown) should not re-cancel CANCEL_SENT orders
+	if err := cleaner.CleanAllPositions(context.Background()); err != nil {
+		t.Fatalf("second CleanAllPositions failed: %v", err)
+	}
+	if len(gateway.cancelCalledWith) != 1 {
+		t.Errorf("expected no duplicate CancelOrder calls on second CleanAllPositions, got %v", gateway.cancelCalledWith)
+	}
+}
+
+func TestPositionCleaner_BuildForceExitOrder_SetsMarginExitAndHoldID(t *testing.T) {
+	pos := position.Position{
+		ExecutionID: "E_20261125_001",
+		Symbol:      "7203",
+		Exchange:    order.EXCHANGE_TOSHO,
+		Action:      order.ACTION_BUY,
+		TradeType:   order.TRADE_TYPE_GENERAL_DAY,
+		AccountType: order.ACCOUNT_SPECIAL,
+		LeavesQty:   200,
+		HoldQty:     100,
+	}
+
+	qty := pos.CloseableQty()
+	if qty != 100 {
+		t.Fatalf("expected CloseableQty 100, got %f", qty)
+	}
+
+	ord := buildForceExitOrder(pos, qty)
+	if ord.CashMargin != order.CASH_MARGIN_MARGIN_EXIT {
+		t.Errorf("expected CASH_MARGIN_MARGIN_EXIT, got %v", ord.CashMargin)
+	}
+	if ord.Type != order.ORDER_TYPE_MARKET {
+		t.Errorf("expected ORDER_TYPE_MARKET, got %v", ord.Type)
+	}
+	if ord.Action != order.ACTION_SELL {
+		t.Errorf("expected ACTION_SELL for closing BUY position, got %v", ord.Action)
+	}
+	if ord.OrderQty != 100 {
+		t.Errorf("expected OrderQty 100, got %f", ord.OrderQty)
+	}
+	if ord.Request == nil || len(ord.Request.ClosePositions) != 1 {
+		t.Fatalf("expected 1 ClosePosition, got %+v", ord.Request)
+	}
+	if ord.Request.ClosePositions[0].HoldID != "E_20261125_001" || ord.Request.ClosePositions[0].Qty != 100 {
+		t.Errorf("unexpected ClosePosition: %+v", ord.Request.ClosePositions[0])
+	}
+}
+
+func TestPositionCleaner_CleanAllPositions_RespectsHoldQty(t *testing.T) {
+	gateway := &mockGateway{
+		positionsQueue: [][]position.Position{
+			// 1回目: Aは200株中100株拘束（100株のみ発注可能）、Bは100株全量拘束（発注スキップ）
+			{
+				{
+					ExecutionID: "HOLD_A",
+					Symbol:      "7203",
+					Exchange:    order.EXCHANGE_TOSHO,
+					Action:      order.ACTION_BUY,
+					TradeType:   order.TRADE_TYPE_GENERAL_DAY,
+					AccountType: order.ACCOUNT_SPECIAL,
+					LeavesQty:   200,
+					HoldQty:     100,
+				},
+				{
+					ExecutionID: "HOLD_B",
+					Symbol:      "7203",
+					Exchange:    order.EXCHANGE_TOSHO,
+					Action:      order.ACTION_BUY,
+					TradeType:   order.TRADE_TYPE_GENERAL_DAY,
+					AccountType: order.ACCOUNT_SPECIAL,
+					LeavesQty:   100,
+					HoldQty:     100,
+				},
+			},
+			// 2回目: Aは決済完了、Bはキャンセル浸透して拘束解除（100株発注可能に）
+			{
+				{
+					ExecutionID: "HOLD_B",
+					Symbol:      "7203",
+					Exchange:    order.EXCHANGE_TOSHO,
+					Action:      order.ACTION_BUY,
+					TradeType:   order.TRADE_TYPE_GENERAL_DAY,
+					AccountType: order.ACCOUNT_SPECIAL,
+					LeavesQty:   100,
+					HoldQty:     0,
+				},
+			},
+			// 3回目: ノーポジ確認
+			{},
+		},
+	}
+
+	cleaner := NewPositionCleaner(nil, gateway)
+	cleaner.cancelWait = 0
+	cleaner.retryWait = 0
+	cleaner.orderInterval = 0
+
+	if err := cleaner.CleanAllPositions(context.Background()); err != nil {
+		t.Fatalf("CleanAllPositions failed: %v", err)
+	}
+
+	if len(gateway.sentOrders) != 2 {
+		t.Fatalf("expected 2 exit orders (HOLD_A:100 then HOLD_B:100), got %d", len(gateway.sentOrders))
+	}
+
+	first := gateway.sentOrders[0]
+	if first.CashMargin != order.CASH_MARGIN_MARGIN_EXIT || first.OrderQty != 100 || first.Request.ClosePositions[0].HoldID != "HOLD_A" {
+		t.Errorf("unexpected first exit order: %+v (ClosePositions: %+v)", first, first.Request.ClosePositions)
+	}
+
+	second := gateway.sentOrders[1]
+	if second.CashMargin != order.CASH_MARGIN_MARGIN_EXIT || second.OrderQty != 100 || second.Request.ClosePositions[0].HoldID != "HOLD_B" {
+		t.Errorf("unexpected second exit order: %+v (ClosePositions: %+v)", second, second.Request.ClosePositions)
+	}
+}
+
+func TestPositionCleaner_CleanupOnStartup_RespectsHoldQtyAndHoldID(t *testing.T) {
+	gateway := &mockGateway{
+		positionsQueue: [][]position.Position{
+			{
+				{
+					ExecutionID: "HOLD_1",
+					Symbol:      "7203",
+					Exchange:    order.EXCHANGE_TOSHO,
+					Action:      order.ACTION_BUY,
+					TradeType:   order.TRADE_TYPE_GENERAL_DAY,
+					AccountType: order.ACCOUNT_SPECIAL,
+					LeavesQty:   200,
+					HoldQty:     100,
+				},
+				{
+					ExecutionID: "HOLD_2",
+					Symbol:      "7203",
+					Exchange:    order.EXCHANGE_TOSHO,
+					Action:      order.ACTION_SELL,
+					TradeType:   order.TRADE_TYPE_GENERAL_DAY,
+					AccountType: order.ACCOUNT_SPECIAL,
+					LeavesQty:   100,
+					HoldQty:     0,
+				},
+			},
+			{},
+		},
+	}
+
+	cleaner := NewPositionCleaner(nil, gateway)
+	cleaner.cancelWait = 0
+	cleaner.startupWait = 0
+
+	if err := cleaner.CleanupOnStartup(context.Background()); err != nil {
+		t.Fatalf("CleanupOnStartup failed: %v", err)
+	}
+
+	if len(gateway.sentOrders) != 2 {
+		t.Fatalf("expected 2 exit orders, got %d", len(gateway.sentOrders))
+	}
+	if gateway.sentOrders[0].OrderQty != 100 || gateway.sentOrders[0].Request.ClosePositions[0].HoldID != "HOLD_1" || gateway.sentOrders[0].Action != order.ACTION_SELL {
+		t.Errorf("unexpected first startup exit order: %+v", gateway.sentOrders[0])
+	}
+	if gateway.sentOrders[1].OrderQty != 100 || gateway.sentOrders[1].Request.ClosePositions[0].HoldID != "HOLD_2" || gateway.sentOrders[1].Action != order.ACTION_BUY {
+		t.Errorf("unexpected second startup exit order: %+v", gateway.sentOrders[1])
 	}
 }

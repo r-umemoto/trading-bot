@@ -12,6 +12,7 @@ import (
 
 type mockUseCaseHandler struct {
 	startFunc       func(ctx context.Context) error
+	forceExitFunc   func(ctx context.Context) error
 	shutdownFunc    func(ctx context.Context) error
 	printReportFunc func(enableCSV bool)
 }
@@ -19,6 +20,13 @@ type mockUseCaseHandler struct {
 func (m *mockUseCaseHandler) Start(ctx context.Context) error {
 	if m.startFunc != nil {
 		return m.startFunc(ctx)
+	}
+	return nil
+}
+
+func (m *mockUseCaseHandler) ForceExit(ctx context.Context) error {
+	if m.forceExitFunc != nil {
+		return m.forceExitFunc(ctx)
 	}
 	return nil
 }
@@ -190,5 +198,22 @@ func TestResolveKillSwitchTime(t *testing.T) {
 	t.Setenv("BOT_EXIT_TIME", "invalid")
 	if h, m := engine.ResolveKillSwitchTime(); h != 15 || m != 32 {
 		t.Fatalf("expected fallback 15:32 on invalid input, got %02d:%02d", h, m)
+	}
+}
+
+func TestResolveForceExitTime(t *testing.T) {
+	t.Setenv("BOT_FORCE_EXIT_TIME", "")
+	if h, m := engine.ResolveForceExitTime(); h != 15 || m != 23 {
+		t.Fatalf("expected default 15:23, got %02d:%02d", h, m)
+	}
+
+	t.Setenv("BOT_FORCE_EXIT_TIME", "15:20")
+	if h, m := engine.ResolveForceExitTime(); h != 15 || m != 20 {
+		t.Fatalf("expected override 15:20, got %02d:%02d", h, m)
+	}
+
+	t.Setenv("BOT_FORCE_EXIT_TIME", "invalid")
+	if h, m := engine.ResolveForceExitTime(); h != 15 || m != 23 {
+		t.Fatalf("expected fallback 15:23 on invalid input, got %02d:%02d", h, m)
 	}
 }

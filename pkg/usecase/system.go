@@ -66,6 +66,11 @@ func (s *SystemUseCase) Listen(ctx context.Context) (*market.MarketChannels, err
 	return s.gateway.Listen(ctx)
 }
 
+// ForceExit はWebSocket受信やTickデータの収集を継続したまま、全スナイパーの取引停止と建玉の全決済を行います
+func (s *SystemUseCase) ForceExit(ctx context.Context) error {
+	return s.cleaner.CleanAllPositions(ctx)
+}
+
 // Shutdown はシステム終了時のポジション全決済と銘柄の全解除を行います
 func (s *SystemUseCase) Shutdown(ctx context.Context) error {
 	// 1. 撤収・強制終了＆全ポジションのクローズ

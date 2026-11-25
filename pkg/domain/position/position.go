@@ -21,10 +21,20 @@ type Position struct {
 	Action      order.Action
 	TradeType   order.MarginTradeType
 	AccountType order.AccountType
-	LeavesQty   float64            // 保有数量
+	LeavesQty   float64            // 保有数量（拘束数量を含む残数量）
+	HoldQty     float64            // 取引所・証券会社側で既存の返済注文等により拘束されている数量
 	Locks       map[string]float64 // 🌟 新設: Key: OrderID -> Value: ロック中の数量
 	Price       float64            // 取得価格
 	Meta        PositionMeta       // 🌟 分析用メタデータ
+}
+
+// CloseableQty は証券会社側で拘束されていない、新規に返済発注可能な数量（LeavesQty - HoldQty）を返します
+func (p *Position) CloseableQty() float64 {
+	qty := p.LeavesQty - p.HoldQty
+	if qty < 0 {
+		return 0
+	}
+	return qty
 }
 
 // AvailableQty はロックされていない、発注可能な余力数量を返します

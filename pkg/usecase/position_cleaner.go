@@ -3,10 +3,12 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/market"
 	"github.com/r-umemoto/trading-bot/pkg/domain/order"
+	"github.com/r-umemoto/trading-bot/pkg/domain/position"
 )
 
 type CleanableTarget interface {
@@ -15,16 +17,37 @@ type CleanableTarget interface {
 	GetActiveOrders() []*order.Order
 }
 
-// PositionCleaner はシステムの起動・終了時に、不要な建玉を強制決済してお掃除するアプリケーションサービスです。
+// PositionCleaner はシステムの起動・強制撤退・終了時に、不要な建玉を強制決済してお掃除するアプリケーションサービスです。
 type PositionCleaner struct {
 	targets       []CleanableTarget
 	marketGateway market.MarketGateway
+	mu            sync.Mutex
+	cancelWait    time.Duration
+	startupWait   time.Duration
+	retryWait     time.Duration
+	orderInterval time.Duration
 }
 
 func NewPositionCleaner(targets []CleanableTarget, marketGateway market.MarketGateway) *PositionCleaner {
 	return &PositionCleaner{
 		targets:       targets,
 		marketGateway: marketGateway,
+		cancelWait:    1 * time.Second,
+		startupWait:   3 * time.Second,
+		retryWait:     10 * time.Second,
+		orderInterval: 200 * time.Millisecond,
+	}
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
 	}
 }
 
@@ -34,6 +57,7 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 
 	// 1. 未約定の注文をすべてキャンセル
 	fmt.Println("🔍 未約定注文の確認...")
+	canceledAny := false
 	ords, err := c.marketGateway.GetOrders(ctx)
 	if err != nil {
 		fmt.Printf("⚠️ 注文取得エラー (スキップします): %v\n", err)
@@ -43,8 +67,17 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 				fmt.Printf("🛑 前回の残存注文をキャンセルします: %s %s @%.1f\n", o.Symbol, o.Action, o.OrderPrice)
 				if err := c.marketGateway.CancelOrder(ctx, o.ID); err != nil {
 					fmt.Printf("❌ キャンセル失敗 (ID: %s): %v\n", o.ID, err)
+				} else {
+					canceledAny = true
 				}
 			}
+		}
+	}
+
+	// キャンセルした返済注文による建玉拘束（HoldQty）の解除が反映されるのを待機
+	if canceledAny {
+		if err := sleepWithContext(ctx, c.cancelWait); err != nil {
+			return err
 		}
 	}
 
@@ -57,36 +90,35 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 
 	cleaned := false
 	for _, pos := range initialPositions {
-		if pos.LeavesQty > 0 {
-			fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %f株\n", pos.Symbol, pos.LeavesQty)
-
-			action := order.ACTION_SELL
-			if pos.Action == order.ACTION_SELL {
-				action = order.ACTION_BUY
-			}
-
-			ord := order.NewOrder(order.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
-			ord.Type = order.ORDER_TYPE_MARKET
-			ord.Request = &order.OrderRequest{
-				Exchange:           pos.Exchange,
-				SecurityType:       order.SECURITY_TYPE_STOCK,
-				MarginTradeType:    pos.TradeType,
-				AccountType:        pos.AccountType,
-				ClosePositionOrder: order.CLOSE_POSITION_ASC_DAY_DEC_PL,
-			}
-
-			updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord})
-			if err != nil {
-				return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.Symbol, err)
-			}
-			ord = updatedOrder
-			cleaned = true
+		if pos.LeavesQty <= 0 {
+			continue
 		}
+		closeableQty := pos.CloseableQty()
+		if closeableQty <= 0 {
+			fmt.Printf("⏳ [%s] 建玉(HoldID: %s, 残: %.0f株)は全量拘束中(HoldQty: %.0f株)のため新規返済をスキップし、反映を待機します\n",
+				pos.Symbol, pos.ExecutionID, pos.LeavesQty, pos.HoldQty)
+			cleaned = true
+			continue
+		}
+
+		fmt.Printf("🔥 前回の残存建玉を発見。成行で強制決済します: %s %.0f株 (残: %.0f株, 拘束: %.0f株)\n",
+			pos.Symbol, closeableQty, pos.LeavesQty, pos.HoldQty)
+
+		ord := buildForceExitOrder(pos, closeableQty)
+
+		updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord})
+		if err != nil {
+			return fmt.Errorf("強制決済の発注エラー (%s): %w", pos.Symbol, err)
+		}
+		ord = updatedOrder
+		cleaned = true
 	}
 
 	if cleaned {
 		fmt.Println("⏳ クリーンアップの約定処理を待機中 (3秒)...")
-		time.Sleep(3 * time.Second)
+		if err := sleepWithContext(ctx, c.startupWait); err != nil {
+			return err
+		}
 
 		finalPositions, err := c.marketGateway.GetPositions(ctx, order.PRODUCT_MARGIN)
 		if err != nil {
@@ -105,8 +137,10 @@ func (c *PositionCleaner) CleanupOnStartup(ctx context.Context) error {
 	return nil
 }
 
-// CleanAllPositions は終了時に全スナイパーを撤収させ、ノーポジになるまで見届けます
+// CleanAllPositions は強制撤退・終了時に全スナイパーを撤収させ、ノーポジになるまで見届けます
 func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	fmt.Println("\n🚨 全スナイパーに緊急撤退命令を出します...")
 
@@ -121,7 +155,7 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 				ordersToCancel = append(ordersToCancel, o.IfDone)
 			}
 			for _, o := range ordersToCancel {
-				if o != nil && !o.IsCompleted() {
+				if o != nil && !o.IsCompleted() && !o.IsCancelSent() {
 					// 🌟 取引所にまだ送信されていない仮注文は、APIキャンセルを送らずにローカルでCANCELED状態にする
 					if o.IsPending() {
 						o.ToCanceled()
@@ -138,14 +172,18 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 						o.ToCancelSent()
 						o.CancelSentAt = time.Now()
 					}
-					time.Sleep(200 * time.Millisecond)
+					if err := sleepWithContext(ctx, c.orderInterval); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
 
 	// 🌟 キャンセルが浸透するまで少し待つ
-	time.Sleep(1 * time.Second)
+	if err := sleepWithContext(ctx, c.cancelWait); err != nil {
+		return err
+	}
 
 	// --- 第二段階：証券会社側でのロック解除を待機しつつ、全決済を完遂する ---
 	safety := 0
@@ -157,41 +195,37 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 		} else {
 			remainingCount := 0
 			for _, pos := range positions {
-				if pos.LeavesQty > 0 {
-					remainingCount++
-					fmt.Printf("⚠️ 警告: 建玉が残っています！ 銘柄: %s, 数量: %f, 状態: %s\n", pos.Symbol, pos.LeavesQty, pos.Action)
+				if pos.LeavesQty <= 0 {
+					continue
+				}
+				remainingCount++
+				closeableQty := pos.CloseableQty()
+				if closeableQty <= 0 {
+					fmt.Printf("⏳ [%s] 建玉(HoldID: %s, 残: %.0f株)は全量拘束中(HoldQty: %.0f株)のため、キャンセル浸透・約定完了を待機します\n",
+						pos.Symbol, pos.ExecutionID, pos.LeavesQty, pos.HoldQty)
+					continue
+				}
 
-					// 反対売買の方向を決定
-					action := order.ACTION_SELL
-					if pos.Action == order.ACTION_SELL {
-						action = order.ACTION_BUY
-					}
+				fmt.Printf("⚠️ 警告: 建玉が残っています！ 銘柄: %s, 発注可能数量: %.0f株 (残: %.0f株, 拘束: %.0f株), 状態: %s\n",
+					pos.Symbol, closeableQty, pos.LeavesQty, pos.HoldQty, pos.Action)
 
-					fmt.Printf("🔥 成行で強制決済を試みます: %s (%s)\n", pos.Symbol, action)
+				ord := buildForceExitOrder(pos, closeableQty)
+				fmt.Printf("🔥 成行で強制決済を試みます: %s (%s %.0f株)\n", pos.Symbol, ord.Action, ord.OrderQty)
 
-					ord := order.NewOrder(order.GenerateLocalID(), pos.Symbol, action, 0, pos.LeavesQty)
-					ord.Type = order.ORDER_TYPE_MARKET
-					ord.Request = &order.OrderRequest{
-						Exchange:           pos.Exchange,
-						SecurityType:       order.SECURITY_TYPE_STOCK,
-						MarginTradeType:    pos.TradeType,
-						AccountType:        pos.AccountType,
-						ClosePositionOrder: order.CLOSE_POSITION_ASC_DAY_DEC_PL,
-					}
-
-					updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord})
-					if err != nil {
-						fmt.Printf("❌ [%s] 強送決済エラー: %v\n", pos.Symbol, err)
-					} else {
-						ord = updatedOrder
-					}
-					// 🌟 連射を避けるために少し待機
-					time.Sleep(200 * time.Millisecond)
+				updatedOrder, err := c.marketGateway.SendOrder(ctx, order.SendOrderInput{Order: ord})
+				if err != nil {
+					fmt.Printf("❌ [%s] 強制決済エラー: %v\n", pos.Symbol, err)
+				} else {
+					ord = updatedOrder
+				}
+				// 🌟 連射を避けるために少し待機
+				if err := sleepWithContext(ctx, c.orderInterval); err != nil {
+					return err
 				}
 			}
 
 			if remainingCount == 0 {
-				fmt.Println("✅ 【完全勝利】すべての建玉の決済が確認されました。ノーポジションです。システムを安全にシャットダウンします。")
+				fmt.Println("✅ 【完全勝利】すべての建玉の決済が確認されました。ノーポジションです。")
 				return nil
 			}
 
@@ -209,9 +243,44 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 		}
 
 		fmt.Println("🔄 10秒後に強制決済プロセスをリトライします...")
-		time.Sleep(10 * time.Second)
+		if err := sleepWithContext(ctx, c.retryWait); err != nil {
+			return err
+		}
 	}
 
-	fmt.Println("⚠️ 警告: 一部の建玉が未決済のままですが、システムを終了します。持ち越しリスクに注意してください。")
+	fmt.Println("⚠️ 警告: 一部の建玉が未決済のままですが、強制決済プロセスを終了します。持ち越しリスクに注意してください。")
 	return nil
+}
+
+func buildForceExitOrder(pos position.Position, qty float64) *order.Order {
+	action := order.ACTION_SELL
+	if pos.Action == order.ACTION_SELL {
+		action = order.ACTION_BUY
+	}
+
+	req := &order.OrderRequest{
+		Exchange:        pos.Exchange,
+		SecurityType:    order.SECURITY_TYPE_STOCK,
+		MarginTradeType: pos.TradeType,
+		AccountType:     pos.AccountType,
+	}
+	if pos.ExecutionID != "" {
+		req.ClosePositions = []order.ClosePosition{
+			{HoldID: pos.ExecutionID, Qty: qty},
+		}
+	} else {
+		req.ClosePositionOrder = order.CLOSE_POSITION_ASC_DAY_DEC_PL
+	}
+
+	return order.NewOrder(
+		order.GenerateLocalID(),
+		pos.Symbol,
+		action,
+		0,
+		qty,
+		order.WithType(order.ORDER_TYPE_MARKET),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+		order.WithRequest(req),
+		order.WithReason("FORCE_EXIT"),
+	)
 }

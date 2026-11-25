@@ -494,6 +494,7 @@ func (m *MarketGateway) GetPositions(ctx context.Context, product order.ProductT
 			TradeType:   m.toMakerTradeType(pos.MarginTradeType),
 			AccountType: m.toAccountType(pos.AccountType),
 			LeavesQty:   pos.LeavesQty,
+			HoldQty:     pos.HoldQty,
 			Price:       pos.Price,
 		})
 	}
