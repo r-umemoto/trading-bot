@@ -1,6 +1,9 @@
 package sniper_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -498,5 +501,42 @@ func TestPositionTracker_PartialCloseReducesLock(t *testing.T) {
 	}
 	if pos2[0].AvailableQty() != 100 {
 		t.Errorf("expected AvailableQty 100, got %f", pos2[0].AvailableQty())
+	}
+}
+
+func TestPositionTracker_HoldTimeSec_NeverNegative(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	pt := sniper.NewPositionTracker(logger)
+	now := time.Now()
+
+	// Entry time slightly ahead of exit time (e.g., clock skew between broker execution timestamps)
+	pt.ApplyExecution("sniper-1", "7203", order.Execution{
+		ID:            "hold-skew",
+		Qty:           100,
+		Price:         2000,
+		ExecutionTime: now.Add(5 * time.Second),
+	}, order.ACTION_BUY, nil, nil)
+
+	buf.Reset()
+	exitOrd := order.NewOrder("exit-skew", "7203", order.ACTION_SELL, 2010, 100)
+	exitOrd.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	pt.ApplyExecution("sniper-1", "7203", order.Execution{
+		ID:            "exec-skew",
+		Qty:           100,
+		Price:         2010,
+		ExecutionTime: now,
+	}, order.ACTION_SELL, exitOrd, nil)
+
+	var entry map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+		t.Fatalf("failed to parse JSON log: %v (raw=%q)", err, buf.String())
+	}
+	holdTime, ok := entry["hold_time_sec"].(float64)
+	if !ok {
+		t.Fatalf("expected hold_time_sec float64 in log, got %+v", entry)
+	}
+	if holdTime < 0 {
+		t.Fatalf("expected non-negative hold_time_sec, got %v", holdTime)
 	}
 }

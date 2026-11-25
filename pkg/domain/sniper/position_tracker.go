@@ -110,6 +110,9 @@ func (pt *PositionTracker) reducePositions(
 	holdTimeSec := 0.0
 	if !earliestEntryTime.IsZero() && !sellTime.IsZero() {
 		holdTimeSec = sellTime.Sub(earliestEntryTime).Seconds()
+		if holdTimeSec < 0 {
+			holdTimeSec = 0
+		}
 	}
 	if pt.logger != nil {
 		pt.logger.Info("POSITION_CLOSED",

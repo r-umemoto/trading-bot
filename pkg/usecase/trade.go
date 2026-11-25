@@ -300,14 +300,12 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 		combined = append(combined, mapAggregated(p))
 	}
 
-	// 日本時間 (JST) での日付文字列を取得
+	// 日本時間 (JST) での日付文字列を取得（tzdata 未導入環境でも UTC+9 固定でフォールバック）
 	jst, err := time.LoadLocation("Asia/Tokyo")
-	var dateStr string
-	if err == nil {
-		dateStr = time.Now().In(jst).Format("2006-01-02")
-	} else {
-		dateStr = time.Now().Format("2006-01-02")
+	if err != nil {
+		jst = time.FixedZone("JST", 9*60*60)
 	}
+	dateStr := time.Now().In(jst).Format("2006-01-02")
 
 	dailyReport := &report.DailyReport{
 		Date:      dateStr,
@@ -318,7 +316,7 @@ func (u *TradeUseCase) PrintPerformanceReport(enableCSV bool) {
 		Combined:  combined,
 	}
 
-	if u.reportRepo != nil {
+	if enableCSV && u.reportRepo != nil {
 		if err := u.reportRepo.Save(context.Background(), dailyReport); err != nil {
 			slog.Error("❌ 成績の自動保存に失敗しました", slog.Any("error", err))
 		} else {
