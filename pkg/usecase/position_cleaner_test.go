@@ -123,6 +123,45 @@ func TestPositionCleaner_CleanAllPositions(t *testing.T) {
 	}
 }
 
+type cloningCleanableTarget struct {
+	mockCleanableTarget
+}
+
+func (m *cloningCleanableTarget) GetActiveOrders() []*order.Order {
+	res := make([]*order.Order, len(m.activeOrders))
+	for i, o := range m.activeOrders {
+		res[i] = o.Clone()
+	}
+	return res
+}
+
+func TestPositionCleaner_CleanAllPositions_NoDuplicateCancelWithClonedOrders(t *testing.T) {
+	o1 := order.NewOrder("order-clone-1", "7203", order.ACTION_BUY, 2000, 100)
+	o1.BypassTransition(order.ORDER_STATUS_WAITING, order.STATE_ACTIVE)
+
+	target := &cloningCleanableTarget{
+		mockCleanableTarget: mockCleanableTarget{
+			symbolCode:   "7203",
+			activeOrders: []*order.Order{o1},
+		},
+	}
+	gateway := &mockGateway{}
+	cleaner := NewPositionCleaner([]CleanableTarget{target}, gateway)
+	cleaner.cancelWait = 0
+	cleaner.retryWait = 0
+	cleaner.orderInterval = 0
+
+	if err := cleaner.CleanAllPositions(context.Background()); err != nil {
+		t.Fatalf("first CleanAllPositions failed: %v", err)
+	}
+	if err := cleaner.CleanAllPositions(context.Background()); err != nil {
+		t.Fatalf("second CleanAllPositions failed: %v", err)
+	}
+	if len(gateway.cancelCalledWith) != 1 || gateway.cancelCalledWith[0] != "order-clone-1" {
+		t.Fatalf("expected CancelOrder called once even with cloned GetActiveOrders, got %v", gateway.cancelCalledWith)
+	}
+}
+
 func TestPositionCleaner_BuildForceExitOrder_SetsMarginExitAndHoldID(t *testing.T) {
 	pos := position.Position{
 		ExecutionID: "E_20261125_001",

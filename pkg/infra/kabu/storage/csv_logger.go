@@ -17,6 +17,8 @@ import (
 type CSVLogger struct {
 	tickChan  chan tick.Tick
 	done      chan struct{}
+	mu        sync.RWMutex
+	closed    bool
 	closeOnce sync.Once
 	file      *os.File
 	writer    *csv.Writer
@@ -76,11 +78,14 @@ func NewCSVLogger(symbol string, date string, outputDir string) (*CSVLogger, err
 	return logger, nil
 }
 
-// Log はTickデータをチャネルに送信します（呼び出し元はブロックされません）
-func (l *CSVLogger) Log(tick tick.Tick) {
-	// バッファが一杯の場合は破棄するか待つかの制御が必要ですが、
-	// 10000のバッファがあれば通常のTick流量で詰まることはほぼありません
-	l.tickChan <- tick
+// Log はTickデータをチャネルに送信します（Close 済みの場合は安全に無視します）
+func (l *CSVLogger) Log(t tick.Tick) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.closed {
+		return
+	}
+	l.tickChan <- t
 }
 
 // startWriting はチャネルからデータを受け取り、バッファリングしつつ定期的にフラッシュしてファイルへ書き込みます
@@ -154,7 +159,10 @@ func (l *CSVLogger) startWriting() {
 // Close はキューに残ったTickをすべて書き終えてからファイルを安全に閉じます
 func (l *CSVLogger) Close() {
 	l.closeOnce.Do(func() {
+		l.mu.Lock()
+		l.closed = true
 		close(l.tickChan)
+		l.mu.Unlock()
 		<-l.done
 		l.writer.Flush()
 		_ = l.file.Close()

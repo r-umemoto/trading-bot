@@ -540,3 +540,31 @@ func TestPositionTracker_HoldTimeSec_NeverNegative(t *testing.T) {
 		t.Fatalf("expected non-negative hold_time_sec, got %v", holdTime)
 	}
 }
+
+func TestPositionTracker_GetCopy_DeepCopiesLocks(t *testing.T) {
+	pt := sniper.NewPositionTracker(nil)
+	pt.ApplyExecution("sniper-1", "7203", order.Execution{
+		ID:    "hold-deep",
+		Qty:   100,
+		Price: 2000,
+	}, order.ACTION_BUY, nil, nil)
+	if err := pt.LockPositions("ord-1", []order.ClosePosition{{HoldID: "hold-deep", Qty: 60}}); err != nil {
+		t.Fatalf("LockPositions failed: %v", err)
+	}
+
+	cp := pt.GetCopy()
+	if len(cp) != 1 {
+		t.Fatalf("expected 1 position, got %d", len(cp))
+	}
+	// Mutating copied Locks map must NOT affect PositionTracker's internal Locks
+	cp[0].Locks["ord-1"] = 999
+	cp[0].Locks["injected"] = 50
+
+	cp2 := pt.GetCopy()
+	if cp2[0].Locks["ord-1"] != 60 {
+		t.Errorf("internal Locks was mutated via shallow copy: got %v, want 60", cp2[0].Locks["ord-1"])
+	}
+	if _, exists := cp2[0].Locks["injected"]; exists {
+		t.Errorf("injected key leaked into internal Locks map")
+	}
+}

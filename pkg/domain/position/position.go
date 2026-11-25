@@ -65,3 +65,15 @@ func (p *Position) Unlock(orderID string) {
 		delete(p.Locks, orderID)
 	}
 }
+
+// Clone は Locks マップを含めた Position のディープコピーを返します
+func (p Position) Clone() Position {
+	cp := p
+	if p.Locks != nil {
+		cp.Locks = make(map[string]float64, len(p.Locks))
+		for k, v := range p.Locks {
+			cp.Locks[k] = v
+		}
+	}
+	return cp
+}

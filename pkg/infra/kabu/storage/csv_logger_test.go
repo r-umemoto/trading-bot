@@ -204,3 +204,19 @@ func TestCSVLogger_CloseDrainsAllTicks(t *testing.T) {
 		t.Fatalf("expected %d rows (including header), got %d", totalTicks+1, len(records))
 	}
 }
+
+func TestCSVLogger_LogAfterClose_NoPanic(t *testing.T) {
+	tempDir := t.TempDir()
+	logger, err := storage.NewCSVLogger("all", "20261126", tempDir)
+	if err != nil {
+		t.Fatalf("failed to create CSVLogger: %v", err)
+	}
+
+	logger.Close()
+	// Close 後の Log 呼び出しがパニックせず安全に無視されること
+	logger.Log(tick.Tick{
+		Symbol:           "7203",
+		Price:            2500,
+		CurrentPriceTime: time.Now(),
+	})
+}
