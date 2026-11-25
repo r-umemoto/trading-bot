@@ -44,14 +44,23 @@ func NewMarketGateway(client *api.KabuClient, wsClient *api.WSClient) *MarketGat
 
 type KabuClientInterface interface {
 	GetToken() error
+	GetTokenContext(ctx context.Context) error
 	GetOrders() ([]api.Order, error)
+	GetOrdersContext(ctx context.Context) ([]api.Order, error)
 	SendOrder(req api.OrderRequest) (*api.OrderResponse, error)
+	SendOrderContext(ctx context.Context, req api.OrderRequest) (*api.OrderResponse, error)
 	CancelOrder(req api.CancelRequest) (*api.CancelResponse, error)
+	CancelOrderContext(ctx context.Context, req api.CancelRequest) (*api.CancelResponse, error)
 	GetPositions(product api.ProductType) ([]api.Position, error)
+	GetPositionsContext(ctx context.Context, product api.ProductType) ([]api.Position, error)
 	RegisterSymbol(req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error)
+	RegisterSymbolContext(ctx context.Context, req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error)
 	UnregisterSymbolAll() (*api.UnregisterSymbolAllResponse, error)
+	UnregisterSymbolAllContext(ctx context.Context) (*api.UnregisterSymbolAllResponse, error)
 	GetSymbol(symbol string, exchange api.ExchageType) (*api.SymbolSuccess, error)
+	GetSymbolContext(ctx context.Context, symbol string, exchange api.ExchageType) (*api.SymbolSuccess, error)
 	GetBoard(symbol string) (*api.BoardResponse, error)
+	GetBoardContext(ctx context.Context, symbol string) (*api.BoardResponse, error)
 }
 
 type MarketGateway struct {
@@ -317,7 +326,7 @@ func (m *MarketGateway) SendOrderRaw(ctx context.Context, input order.SendOrderI
 	fmt.Printf("発注完了 %+v\n", kabReq)
 
 	reqStart := time.Now()
-	resp, err := m.client.SendOrder(kabReq)
+	resp, err := m.client.SendOrderContext(ctx, kabReq)
 	if err != nil {
 		return ord, fmt.Errorf("カブコムAPI発注失敗: %w", err)
 	}
@@ -360,7 +369,7 @@ func (m *MarketGateway) CancelOrder(ctx context.Context, orderID string) error {
 // CancelOrderRaw は実際にAPIを叩く低レベルメソッドです
 func (m *MarketGateway) CancelOrderRaw(ctx context.Context, orderID string) error {
 	req := api.CancelRequest{OrderID: orderID}
-	_, err := m.client.CancelOrder(req)
+	_, err := m.client.CancelOrderContext(ctx, req)
 	if err != nil {
 		return fmt.Errorf("キャンセル失敗 (OrderID: %s): %w", orderID, err)
 	}
@@ -368,7 +377,7 @@ func (m *MarketGateway) CancelOrderRaw(ctx context.Context, orderID string) erro
 }
 
 func (m *MarketGateway) GetOrders(ctx context.Context) (order.Orders, error) {
-	ords, err := m.client.GetOrders()
+	ords, err := m.client.GetOrdersContext(ctx)
 	if err != nil {
 		return order.Orders{}, fmt.Errorf("注文取得失敗: %w", err)
 	}
@@ -502,7 +511,7 @@ func (m *MarketGateway) GetPositions(ctx context.Context, product order.ProductT
 		// 現状は信用取引しかしてない
 		return nil, fmt.Errorf("prodcutが不正です %d", product)
 	}
-	positions, err := m.client.GetPositions(arg)
+	positions, err := m.client.GetPositionsContext(ctx, arg)
 	if err != nil {
 		return nil, fmt.Errorf("建玉取得失敗: %d)", product)
 	}
@@ -779,7 +788,7 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
 
 				// 1. トークンの再取得
 				slog.Info("🔄 Fetching new API Token...")
-				if err := s.client.GetToken(); err != nil {
+				if err := s.client.GetTokenContext(ctx); err != nil {
 					slog.Error("❌ Failed to fetch new API token", slog.Any("error", err))
 					continue
 				}
@@ -804,7 +813,7 @@ func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
 					// 3. REST API経由での最新板情報強制取得＆DataPool再同期
 					slog.Info("🔄 Synchronizing DataPool via REST API...")
 					for _, req := range reqs {
-						board, err := s.client.GetBoard(req.Symbol)
+						board, err := s.client.GetBoardContext(ctx, req.Symbol)
 						if err != nil {
 							slog.Error("❌ Failed to fetch board via REST for sync", slog.String("symbol", req.Symbol), slog.Any("error", err))
 							continue
@@ -934,7 +943,7 @@ func (m *MarketGateway) RegisterSymbols(ctx context.Context, reqs []market.Resis
 			})
 		}
 
-		_, err := m.client.RegisterSymbol(clientReq)
+		_, err := m.client.RegisterSymbolContext(ctx, clientReq)
 		if err != nil {
 			return fmt.Errorf("銘柄一括登録失敗 (batch %d-%d): %w", i, end, err)
 		}
@@ -950,7 +959,7 @@ func (m *MarketGateway) RegisterSymbols(ctx context.Context, reqs []market.Resis
 }
 
 func (m *MarketGateway) GetSymbol(ctx context.Context, symbolCode string, exchange order.ExchangeMarket) (symbol.Symbol, error) {
-	resp, err := m.client.GetSymbol(symbolCode, m.toBaseKabuExchageType(exchange))
+	resp, err := m.client.GetSymbolContext(ctx, symbolCode, m.toBaseKabuExchageType(exchange))
 	if err != nil {
 		return symbol.Symbol{}, fmt.Errorf("銘柄情報取得失敗: %w", err)
 	}
@@ -967,9 +976,9 @@ func (m *MarketGateway) GetSymbol(ctx context.Context, symbolCode string, exchan
 }
 
 func (m *MarketGateway) UnregisterSymbolAll(ctx context.Context) error {
-	_, err := m.client.UnregisterSymbolAll()
+	_, err := m.client.UnregisterSymbolAllContext(ctx)
 	if err != nil {
-		return fmt.Errorf("銘柄登録全解除失敗)")
+		return fmt.Errorf("銘柄登録全解除失敗: %w", err)
 	}
 	return nil
 }

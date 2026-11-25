@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,8 +45,11 @@ func (c *KabuClient) getToken() string {
 
 // doRequest はすべてのAPI呼び出しの基盤となる内部メソッドです。
 // ここでURLの結合と、共通ヘッダー（トークンなど）のセットを必ず行います。
-func (c *KabuClient) doRequest(method, endpoint string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, c.BaseURL+endpoint, body)
+func (c *KabuClient) doRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+endpoint, body)
 	if err != nil {
 		return nil, err
 	}

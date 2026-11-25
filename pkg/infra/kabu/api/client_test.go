@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -251,6 +252,27 @@ func TestKabuClient_REST_All(t *testing.T) {
 	}
 	if len(positions) != 1 || positions[0].ExecutionID != "exec-1" {
 		t.Errorf("unexpected positions response: %+v", positions)
+	}
+}
+
+func TestKabuClient_ContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := api.NewKabuClient(api.Config{APIURL: server.URL})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := client.GetOrdersContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled from GetOrdersContext, got %v", err)
+	}
+	if _, err := client.GetBoardContext(ctx, "7203"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled from GetBoardContext, got %v", err)
+	}
+	if _, err := client.SendOrderContext(ctx, api.OrderRequest{Symbol: "7203"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled from SendOrderContext, got %v", err)
 	}
 }
 
