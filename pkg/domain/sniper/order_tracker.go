@@ -263,7 +263,11 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 								slog.String("serverID", ext.ID),
 							)
 						}
+						oldID := o.ID
 						o.ID = ext.ID
+						if ot.positions != nil {
+							ot.positions.UpdateLockOrderID(oldID, ext.ID)
+						}
 						untrackedAPIOrders[i] = nil
 						allTrackedIDs[ext.ID] = true
 						break
@@ -294,7 +298,11 @@ func (ot *OrderTracker) Update(report order.Orders, detail symbol.Symbol, now ti
 							slog.String("serverID", ext.ID),
 						)
 					}
+					oldID := t.ord.ID
 					t.ord.ID = ext.ID
+					if ot.positions != nil {
+						ot.positions.UpdateLockOrderID(oldID, ext.ID)
+					}
 					untrackedAPIOrders[i] = nil
 					allTrackedIDs[ext.ID] = true
 

@@ -164,6 +164,15 @@ func (o *Order) FilledQty() float64 {
 	return sum
 }
 
+// RemainingQty は注文数量から反映済み約定数量（FilledQty）を差し引いた未約定残数量を返します
+func (o *Order) RemainingQty() float64 {
+	rem := o.OrderQty - o.FilledQty()
+	if rem < 0 {
+		return 0
+	}
+	return rem
+}
+
 // AveragePrice は約定済みの平均単価を返します（未約定の場合は0）
 func (o *Order) AveragePrice() float64 {
 	if len(o.Executions) == 0 {
@@ -599,17 +608,18 @@ func (aos *ActiveOrders) Prepare() {
 	*aos = reconciled
 }
 
-// SignedQty はアクティブ注文による純保有数量の増減（買いはプラス、売りはマイナス）を合算して返します
+// SignedQty はアクティブ注文の未約定残数量による純保有数量の増減（買いはプラス、売りはマイナス）を合算して返します
 func (aos ActiveOrders) SignedQty() float64 {
 	var total float64
 	for _, o := range aos {
 		if o == nil || o.IsCompleted() || o.IsCancelSent() {
 			continue
 		}
+		rem := o.RemainingQty()
 		if o.Action == ACTION_BUY {
-			total += o.OrderQty
+			total += rem
 		} else if o.Action == ACTION_SELL {
-			total -= o.OrderQty
+			total -= rem
 		}
 	}
 	return total
