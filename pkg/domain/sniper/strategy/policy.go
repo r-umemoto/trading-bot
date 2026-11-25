@@ -213,7 +213,8 @@ func isOrderDesiredDefault(ord *order.Order, sig brain.Signal, symbol symbol.Sym
 
 	// 指値価格の比較
 	if sig.Price > 0 && ord.OrderPrice > 0 {
-		tickSize := symbol.CalcTickSize(ord.OrderPrice)
+		// 呼値境界（例: 3000円→3005円）を跨ぐ場合でも正確な1ティック幅を得るため、高い方の価格で呼値を計算する
+		tickSize := symbol.CalcTickSize(math.Max(ord.OrderPrice, sig.Price))
 		if ord.Action == order.ACTION_BUY {
 			// 1. 既にシグナル価格以上の指値なら、より約定しやすく、
 			// かつ取引所の価格改善（指値以下での約定）も期待できるため、あえてキャンセルしない。

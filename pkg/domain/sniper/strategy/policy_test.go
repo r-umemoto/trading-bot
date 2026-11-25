@@ -441,6 +441,33 @@ func TestIsOrderDesiredDefault(t *testing.T) {
 		}
 	})
 
+	t.Run("Cross tick-size boundary", func(t *testing.T) {
+		policy := &strategy.TouchTTLPolicy{}
+
+		// TSE Standard: 3000 -> 3005 is exactly 1 tick (5.0 yen above 3000)
+		ordStd := order.NewOrder("std-buy", "7203", order.ACTION_BUY, 3000, 100)
+		if !policy.IsOrderDesired(ordStd, brain.NewBuyEntry(100, 3005, order.ORDER_TYPE_LIMIT, ""), sym) {
+			t.Error("expected true for 3000 -> 3005 (1 tick across boundary) in TSE Standard")
+		}
+		// 2999 -> 3005 is 2 ticks (6.0 > 5.0) -> false
+		ordStd2 := order.NewOrder("std-buy-2", "7203", order.ACTION_BUY, 2999, 100)
+		if policy.IsOrderDesired(ordStd2, brain.NewBuyEntry(100, 3005, order.ORDER_TYPE_LIMIT, ""), sym) {
+			t.Error("expected false for 2999 -> 3005 (2 ticks across boundary) in TSE Standard")
+		}
+
+		// TOPIX100: 3000 -> 3001 is exactly 1 tick (1.0 yen above 3000)
+		topixSym := symbol.Symbol{Code: "7203", PriceRangeGroup: symbol.PRICE_RANGE_GROUP_TSE_TOPIX100}
+		ordTopix := order.NewOrder("topix-buy", "7203", order.ACTION_BUY, 3000, 100)
+		if !policy.IsOrderDesired(ordTopix, brain.NewBuyEntry(100, 3001, order.ORDER_TYPE_LIMIT, ""), topixSym) {
+			t.Error("expected true for 3000 -> 3001 (1 tick across boundary) in TOPIX100")
+		}
+		// 2999.5 -> 3001 is 2 ticks (1.5 > 1.0) -> false
+		ordTopix2 := order.NewOrder("topix-buy-2", "7203", order.ACTION_BUY, 2999.5, 100)
+		if policy.IsOrderDesired(ordTopix2, brain.NewBuyEntry(100, 3001, order.ORDER_TYPE_LIMIT, ""), topixSym) {
+			t.Error("expected false for 2999.5 -> 3001 (2 ticks across boundary) in TOPIX100")
+		}
+	})
+
 	t.Run("Sell Limit prices", func(t *testing.T) {
 		policy := &strategy.TouchTTLPolicy{}
 
