@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -14,6 +15,7 @@ type KabuClient struct {
 	Token       string
 	ApiPassword string
 	HTTPClient  *http.Client
+	tokenMu     sync.RWMutex
 }
 
 // NewKabuClient は新しいAPIクライアントを生成するコンストラクタです
@@ -27,6 +29,19 @@ func NewKabuClient(config Config) *KabuClient {
 	}
 }
 
+func (c *KabuClient) setToken(token string) {
+	c.tokenMu.Lock()
+	c.Token = token
+	c.tokenMu.Unlock()
+}
+
+func (c *KabuClient) getToken() string {
+	c.tokenMu.RLock()
+	token := c.Token
+	c.tokenMu.RUnlock()
+	return token
+}
+
 // doRequest はすべてのAPI呼び出しの基盤となる内部メソッドです。
 // ここでURLの結合と、共通ヘッダー（トークンなど）のセットを必ず行います。
 func (c *KabuClient) doRequest(method, endpoint string, body io.Reader) (*http.Response, error) {
@@ -37,8 +52,8 @@ func (c *KabuClient) doRequest(method, endpoint string, body io.Reader) (*http.R
 
 	// 共通ヘッダーの自動セット
 	req.Header.Set("Content-Type", "application/json")
-	if c.Token != "" {
-		req.Header.Set("X-API-KEY", c.Token)
+	if token := c.getToken(); token != "" {
+		req.Header.Set("X-API-KEY", token)
 	}
 
 	return c.HTTPClient.Do(req)

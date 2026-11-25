@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 )
 
 type RegisterSymbolsItem struct {
@@ -40,11 +38,10 @@ func (c *KabuClient) RegisterSymbol(req RegisterSymbolRequest) (*RegisterSymbolR
 	if err != nil {
 		return nil, fmt.Errorf("銘柄登録API通信エラー: %v", err)
 	}
-	defer resp.Body.Close()
 
 	var regResp RegisterSymbolResponse
-	if err := json.NewDecoder(resp.Body).Decode(&regResp); err != nil {
-		return nil, fmt.Errorf("銘柄登録レスポンス解析エラー: %v", err)
+	if err := c.DecodeResponse(resp, &regResp); err != nil {
+		return nil, fmt.Errorf("銘柄登録失敗: %w", err)
 	}
 
 	return &regResp, nil
@@ -55,11 +52,10 @@ func (c *KabuClient) UnregisterSymbolAll() (*UnregisterSymbolAllResponse, error)
 	if err != nil {
 		return nil, fmt.Errorf("銘柄登録全解除API通信エラー: %v", err)
 	}
-	defer resp.Body.Close()
 
 	var regResp UnregisterSymbolAllResponse
-	if err := json.NewDecoder(resp.Body).Decode(&regResp); err != nil {
-		return nil, fmt.Errorf("銘柄登録全解除レスポンス解析エラー: %v", err)
+	if err := c.DecodeResponse(resp, &regResp); err != nil {
+		return nil, fmt.Errorf("銘柄登録全解除失敗: %w", err)
 	}
 
 	return &regResp, nil
@@ -79,16 +75,10 @@ func (c *KabuClient) GetSymbol(symbol string, exchange ExchageType) (*SymbolSucc
 	if err != nil {
 		return nil, fmt.Errorf("銘柄情報取得API通信エラー: %v", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("銘柄情報取得APIエラー: status=%d, body=%s", resp.StatusCode, string(body))
-	}
 
 	var symbolResp SymbolSuccess
-	if err := json.NewDecoder(resp.Body).Decode(&symbolResp); err != nil {
-		return nil, fmt.Errorf("銘柄情報レスポンス解析エラー: %v", err)
+	if err := c.DecodeResponse(resp, &symbolResp); err != nil {
+		return nil, fmt.Errorf("銘柄情報取得失敗: %w", err)
 	}
 
 	return &symbolResp, nil

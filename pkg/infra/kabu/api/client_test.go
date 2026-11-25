@@ -2,8 +2,12 @@ package api_test
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/r-umemoto/trading-bot/pkg/infra/kabu/api"
@@ -248,6 +252,93 @@ func TestKabuClient_REST_All(t *testing.T) {
 	if len(positions) != 1 || positions[0].ExecutionID != "exec-1" {
 		t.Errorf("unexpected positions response: %+v", positions)
 	}
+}
+
+func TestKabuClient_HTTPErrorResponses(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"Code":    4001001,
+			"Message": "Bad request error",
+		})
+	}))
+	defer server.Close()
+
+	client := api.NewKabuClient(api.Config{APIURL: server.URL, Password: "pass"})
+	client.Token = "dummy-token"
+
+	assertAPIError := func(name string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: expected error on HTTP 400, got nil", name)
+		}
+		var apiErr *api.KabuAPIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("%s: expected *KabuAPIError, got %T (%v)", name, err, err)
+		}
+		if apiErr.StatusCode != http.StatusBadRequest || apiErr.Code != 4001001 {
+			t.Errorf("%s: unexpected apiErr: %+v", name, apiErr)
+		}
+	}
+
+	_, err := client.GetBoard("7203")
+	assertAPIError("GetBoard", err)
+
+	_, err = client.RegisterSymbol(api.RegisterSymbolRequest{
+		Symbols: []api.RegisterSymbolsItem{{Symbol: "7203", Exchange: api.EXCHANGE_TYPE_TOSHO}},
+	})
+	assertAPIError("RegisterSymbol", err)
+
+	_, err = client.UnregisterSymbolAll()
+	assertAPIError("UnregisterSymbolAll", err)
+
+	_, err = client.GetSymbol("7203", api.EXCHANGE_TYPE_TOSHO)
+	assertAPIError("GetSymbol", err)
+}
+
+func TestKabuClient_ConcurrentTokenRefreshAndRequests(t *testing.T) {
+	var tokenSeq atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/token":
+			n := tokenSeq.Add(1)
+			_ = json.NewEncoder(w).Encode(api.TokenResponse{
+				ResultCode: 0,
+				Token:      fmt.Sprintf("token-%d", n),
+			})
+		case "/board/7203@1":
+			_ = json.NewEncoder(w).Encode(api.BoardResponse{Symbol: "7203"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := api.NewKabuClient(api.Config{APIURL: server.URL, Password: "pass"})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			if err := client.GetToken(); err != nil {
+				t.Errorf("GetToken failed: %v", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			if _, err := client.GetBoard("7203"); err != nil {
+				t.Errorf("GetBoard failed: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
 }
 
 // Helper function to check error type

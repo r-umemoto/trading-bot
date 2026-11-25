@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -117,11 +116,10 @@ func (c *KabuClient) GetBoard(symbol string) (*BoardResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("API通信エラー: %v", err)
 	}
-	defer resp.Body.Close()
 
 	var boardResp BoardResponse
-	if err := json.NewDecoder(resp.Body).Decode(&boardResp); err != nil {
-		return nil, fmt.Errorf("レスポンス解析エラー: %v", err)
+	if err := c.DecodeResponse(resp, &boardResp); err != nil {
+		return nil, fmt.Errorf("板情報取得失敗: %w", err)
 	}
 
 	return &boardResp, nil

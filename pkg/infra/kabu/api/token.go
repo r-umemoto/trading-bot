@@ -36,7 +36,7 @@ func (c *KabuClient) GetToken() error {
 		return fmt.Errorf("トークン取得失敗 (ResultCode: %d)", tokenResp.ResultCode)
 	}
 
-	// 取得したトークンをクライアント自身に保持させる
-	c.Token = tokenResp.Token
+	// 取得したトークンをクライアント自身にスレッドセーフに保持させる
+	c.setToken(tokenResp.Token)
 	return nil
 }
