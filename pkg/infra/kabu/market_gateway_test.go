@@ -787,3 +787,83 @@ func TestMarketGateway_DispatchOrderReport_DropsOldestWhenFull(t *testing.T) {
 	}
 }
 
+func TestMarketGateway_BuildOrderJobKey(t *testing.T) {
+	entryA := order.NewOrder("local-1", "7203", order.ACTION_BUY, 2500, 100, order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY))
+	entryB := order.NewOrder("local-2", "7203", order.ACTION_BUY, 2500, 100, order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY))
+
+	keyA, prioA := buildOrderJobKey(order.SendOrderInput{Order: entryA, SniperID: "micro_flow_long_7203"})
+	keyB, prioB := buildOrderJobKey(order.SendOrderInput{Order: entryB, SniperID: "stage_action_long_7203"})
+	if prioA != 10 || prioB != 10 {
+		t.Fatalf("expected entry priority 10, got %d / %d", prioA, prioB)
+	}
+	if keyA == keyB {
+		t.Fatalf("expected distinct job keys for different snipers, got same key %q", keyA)
+	}
+
+	// SniperID 未指定時は後方互換キーにフォールバック
+	keyDefault, _ := buildOrderJobKey(order.SendOrderInput{Order: entryA})
+	if keyDefault != "entry_7203_BUY" {
+		t.Errorf("expected fallback key 'entry_7203_BUY', got %q", keyDefault)
+	}
+
+	// 複数 ClosePositions の場合は全 HoldID をキーに含める（先頭が同じでも別組み合わせなら別キー）
+	exit1 := order.NewOrder("local-3", "7203", order.ACTION_SELL, 0, 100,
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+		order.WithRequest(&order.OrderRequest{
+			ClosePositions: []order.ClosePosition{{HoldID: "H1", Qty: 100}},
+		}),
+	)
+	exit2 := order.NewOrder("local-4", "7203", order.ACTION_SELL, 0, 200,
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+		order.WithRequest(&order.OrderRequest{
+			ClosePositions: []order.ClosePosition{{HoldID: "H1", Qty: 100}, {HoldID: "H2", Qty: 100}},
+		}),
+	)
+	exitKey1, exitPrio1 := buildOrderJobKey(order.SendOrderInput{Order: exit1})
+	exitKey2, exitPrio2 := buildOrderJobKey(order.SendOrderInput{Order: exit2})
+	if exitPrio1 != 20 || exitPrio2 != 20 {
+		t.Fatalf("expected exit priority 20, got %d / %d", exitPrio1, exitPrio2)
+	}
+	if exitKey1 == exitKey2 {
+		t.Fatalf("expected distinct exit keys for different hold sets, got same key %q", exitKey1)
+	}
+	if exitKey2 != "exit_hold_H1+H2" {
+		t.Errorf("expected 'exit_hold_H1+H2', got %q", exitKey2)
+	}
+}
+
+func TestMarketGateway_SendOrder_DifferentSnipersDoNotCollide(t *testing.T) {
+	mockClient := &MockKabuClient{}
+	gateway := NewMarketGateway(nil, nil)
+	gateway.client = mockClient
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gateway.dispatcher.Start(ctx)
+
+	req := &order.OrderRequest{
+		Exchange:        order.EXCHANGE_TOSHO,
+		SecurityType:    order.SECURITY_TYPE_STOCK,
+		MarginTradeType: order.TRADE_TYPE_GENERAL_DAY,
+		AccountType:     order.ACCOUNT_SPECIAL,
+	}
+
+	ord1 := order.NewOrder("local-s1", "7203", order.ACTION_BUY, 2500, 100, order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY), order.WithRequest(req))
+	ord2 := order.NewOrder("local-s2", "7203", order.ACTION_BUY, 2500, 100, order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY), order.WithRequest(req))
+
+	// 別スナイパーなら同一銘柄・同方向でも1秒以内に両方成功すること
+	if _, err := gateway.SendOrder(ctx, order.SendOrderInput{Order: ord1, SniperID: "sniper_A"}); err != nil {
+		t.Fatalf("sniper_A SendOrder failed: %v", err)
+	}
+	if _, err := gateway.SendOrder(ctx, order.SendOrderInput{Order: ord2, SniperID: "sniper_B"}); err != nil {
+		t.Fatalf("sniper_B SendOrder should not collide with sniper_A, got error: %v", err)
+	}
+
+	// 同一スナイパーの1秒以内の連射は従来通り ErrOrderSkipped で抑止されること
+	ord1Dup := order.NewOrder("local-s1-dup", "7203", order.ACTION_BUY, 2500, 100, order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY), order.WithRequest(req))
+	_, err := gateway.SendOrder(ctx, order.SendOrderInput{Order: ord1Dup, SniperID: "sniper_A"})
+	if !errors.Is(err, order.ErrOrderSkipped) {
+		t.Fatalf("expected ErrOrderSkipped for duplicate sniper_A entry within 1s, got: %v", err)
+	}
+}
+

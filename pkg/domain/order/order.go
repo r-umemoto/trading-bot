@@ -242,7 +242,8 @@ type Orders struct {
 
 // SendOrderInput は新規発注に必要なパラメータを一括してまとめた構造体です
 type SendOrderInput struct {
-	Order *Order
+	Order    *Order
+	SniperID string // 発注元スナイパーID（同一銘柄・複数戦略での重複排除キー分離用）
 }
 
 // GetCancelTimeout は注文の理由や重要度に応じて最適なキャンセルタイムアウト値を返します

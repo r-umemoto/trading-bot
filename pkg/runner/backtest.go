@@ -344,7 +344,7 @@ func RunBacktest() error {
 				case sniper.OrderBullet:
 					fmt.Printf("🔫 [Backtest] 発注: %s %v %.0f株 (Price: %.1f, CashMargin: %v, Reason: %s)\n",
 						b.Order.Symbol, b.Order.Action, b.Order.OrderQty, b.Order.OrderPrice, b.Order.CashMargin, b.Order.Reason)
-					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: b.Order})
+					updatedOrder, err := gateway.SendOrder(context.Background(), order.SendOrderInput{Order: b.Order, SniperID: act.SniperID})
 					if err != nil {
 						op.FailSendingOrder(act.SniperID, b.Order)
 					} else {

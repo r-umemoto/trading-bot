@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,19 +122,7 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 		}
 	}
 
-	priority := 10 // Entry
-	jobID := input.Order.ID
-	if input.Order.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-		priority = 20 // Exit
-		if input.Order.Request != nil && len(input.Order.Request.ClosePositions) > 0 {
-			jobID = "exit_hold_" + input.Order.Request.ClosePositions[0].HoldID
-		} else {
-			jobID = fmt.Sprintf("exit_%s_%s", input.Order.Symbol, input.Order.Action)
-		}
-	} else if input.Order.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
-		// 🌟 新規エントリー注文の重複排除キー（同一銘柄・同一方向の連続エントリーを物理的に遮断）
-		jobID = fmt.Sprintf("entry_%s_%s", input.Order.Symbol, input.Order.Action)
-	}
+	jobID, priority := buildOrderJobKey(input)
 	resCh := m.dispatcher.Submit(jobID, input.Order.Symbol, input.Order, "", priority)
 	select {
 	case <-ctx.Done():
@@ -160,6 +149,40 @@ func (m *MarketGateway) SendOrder(ctx context.Context, input order.SendOrderInpu
 		}
 		return input.Order, nil
 	}
+}
+
+func buildOrderJobKey(input order.SendOrderInput) (string, int) {
+	ord := input.Order
+	priority := 10 // Entry
+	jobID := ord.ID
+
+	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+		priority = 20 // Exit
+		if ord.Request != nil && len(ord.Request.ClosePositions) > 0 {
+			if len(ord.Request.ClosePositions) == 1 {
+				jobID = "exit_hold_" + ord.Request.ClosePositions[0].HoldID
+			} else {
+				holdIDs := make([]string, len(ord.Request.ClosePositions))
+				for i, cp := range ord.Request.ClosePositions {
+					holdIDs[i] = cp.HoldID
+				}
+				sort.Strings(holdIDs)
+				jobID = "exit_hold_" + strings.Join(holdIDs, "+")
+			}
+		} else if input.SniperID != "" {
+			jobID = fmt.Sprintf("exit_%s_%s_%s", input.SniperID, ord.Symbol, ord.Action)
+		} else {
+			jobID = fmt.Sprintf("exit_%s_%s", ord.Symbol, ord.Action)
+		}
+	} else if ord.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+		// 同一スナイパーの連射を遮断しつつ、同一銘柄の別戦略同士の衝突を防ぐため SniperID をキーに含める
+		if input.SniperID != "" {
+			jobID = fmt.Sprintf("entry_%s_%s_%s", input.SniperID, ord.Symbol, ord.Action)
+		} else {
+			jobID = fmt.Sprintf("entry_%s_%s", ord.Symbol, ord.Action)
+		}
+	}
+	return jobID, priority
 }
 
 // SendOrderRaw は実際にAPIを叩く低レベルメソッドです

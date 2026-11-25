@@ -218,7 +218,7 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 			op.FailCancelingOrder(sniperID, act.OrderID)
 		}
 	case sniper.OrderBullet:
-		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: act.Order})
+		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: act.Order, SniperID: sniperID})
 		if err != nil {
 			if errors.Is(err, order.ErrDispatchQueueBypass) {
 				slog.Info("ℹ️ [SendOrder_API_BYPASS] 注文は送信前にキュー内で上書きまたはキャンセルされました。",
