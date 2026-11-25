@@ -222,15 +222,22 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 	case totalTargetQty > 0:
 		// 【ロング優勢】ショート建玉があればまずドテン相殺決済（建玉解消までロング発注は待機）
 		if physicalHoldQty < 0 {
+			var offsetActions []FireAction
 			for _, ev := range evals {
 				if n.HoldQty(ev.sniper.ID) < 0 {
-					return fireTarget(ev.sniper, ev.obs, strategy.TargetPosition{
+					offsetActions = append(offsetActions, fireTarget(ev.sniper, ev.obs, strategy.TargetPosition{
 						Qty:       0,
 						Price:     0,
 						OrderType: order.ORDER_TYPE_MARKET,
 						Reason:    "NET_OFFSET_EXIT_SHORT",
-					})
+					})...)
 				}
+				if strings.Contains(ev.sniper.ID, "short") || ev.target.IsShort() {
+					offsetActions = append(offsetActions, cancelActiveEntries(ev.sniper.ID)...)
+				}
+			}
+			if len(offsetActions) > 0 {
+				return offsetActions
 			}
 			if shortSniper != nil {
 				return fireTarget(shortSniper, shortObs, strategy.TargetPosition{
@@ -240,6 +247,7 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 					Reason:    "NET_OFFSET_EXIT_SHORT",
 				})
 			}
+			return nil
 		}
 		// ショート側の未約定新規売り注文をキャンセル
 		for _, ev := range evals {
@@ -257,15 +265,22 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 	case totalTargetQty < 0:
 		// 【ショート優勢】ロング建玉があればまずドテン相殺決済（建玉解消までショート発注は待機）
 		if physicalHoldQty > 0 {
+			var offsetActions []FireAction
 			for _, ev := range evals {
 				if n.HoldQty(ev.sniper.ID) > 0 {
-					return fireTarget(ev.sniper, ev.obs, strategy.TargetPosition{
+					offsetActions = append(offsetActions, fireTarget(ev.sniper, ev.obs, strategy.TargetPosition{
 						Qty:       0,
 						Price:     0,
 						OrderType: order.ORDER_TYPE_MARKET,
 						Reason:    "NET_OFFSET_EXIT_LONG",
-					})
+					})...)
 				}
+				if strings.Contains(ev.sniper.ID, "long") || ev.target.IsLong() {
+					offsetActions = append(offsetActions, cancelActiveEntries(ev.sniper.ID)...)
+				}
+			}
+			if len(offsetActions) > 0 {
+				return offsetActions
 			}
 			if longSniper != nil {
 				return fireTarget(longSniper, longObs, strategy.TargetPosition{
@@ -275,6 +290,7 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 					Reason:    "NET_OFFSET_EXIT_LONG",
 				})
 			}
+			return nil
 		}
 		// ロング側の未約定新規買い注文をキャンセル
 		for _, ev := range evals {
@@ -960,6 +976,17 @@ func (n *SniperNest) buildOrderPairFromTarget(
 			// 🌟 信用返済時、ロック可能な建玉が1つもない（すべて決済中または残存ゼロ）場合は、
 			// 誤って重複返済や空返済を行わないよう発注を中止する。
 			return nil, nil
+		}
+		// 実際の返済指定合計数量（ClosePositions）と注文数量（OrderQty）を一致させる（Code 8 拒絶防止）
+		var matchedQty float64
+		for _, cp := range closePositions {
+			matchedQty += cp.Qty
+		}
+		if matchedQty <= 0 {
+			return nil, nil
+		}
+		if matchedQty < qty {
+			qty = matchedQty
 		}
 	}
 

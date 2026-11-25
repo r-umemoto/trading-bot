@@ -193,16 +193,20 @@ func (s *Sniper) CalculateVirtualPosition(positions []position.Position, activeO
 	}
 	for _, curr := range activeOrders {
 		if curr != nil && (curr.IsFillExpected() || curr.IsMarket()) {
-			// 🌟 エントリー注文（新規建て）の約定予定のみを仮想ポジションに加算する。
+			// 🌟 エントリー注文（新規建て）の未約定残数量のみを仮想ポジションに加算する（部分約定済み分は positions に計上済み）。
 			// 決済注文（返済）の約定予定は、物理ポジションから減算しない（決済完了までポジション維持として扱う）。
 			if curr.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+				remQty := curr.RemainingQty()
+				if remQty <= 0 {
+					continue
+				}
 				switch curr.Action {
 				case order.ACTION_BUY:
-					totalQty += curr.OrderQty
-					totalCost += curr.OrderPrice * curr.OrderQty
+					totalQty += remQty
+					totalCost += curr.OrderPrice * remQty
 				case order.ACTION_SELL:
-					totalQty -= curr.OrderQty
-					totalCost -= curr.OrderPrice * curr.OrderQty
+					totalQty -= remQty
+					totalCost -= curr.OrderPrice * remQty
 				}
 			}
 		}

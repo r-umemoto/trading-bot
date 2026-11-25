@@ -1320,3 +1320,145 @@ func TestSniperNest_SameDirectionMultipleSnipers_IndependentHoldingsAndPnL(t *te
 		t.Fatalf("expected exit order to close hold-a-1 only, got %+v", exitBullet.Order.Request)
 	}
 }
+
+func TestSniperNest_ExitOrderQtyClampedToMatchedClosePositions(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+
+	// 200 shares held, 100 already locked by another order -> only 100 available
+	nest.positions.ApplyExecution(sniperID, "7203", order.Execution{
+		ID:    "hold-1",
+		Price: 2000,
+		Qty:   200,
+	}, order.ACTION_BUY, nil, nil)
+	if err := nest.positions.LockPositions("other-exit", []order.ClosePosition{{HoldID: "hold-1", Qty: 100}}); err != nil {
+		t.Fatalf("LockPositions failed: %v", err)
+	}
+
+	entry, _ := nest.buildOrderPairFromTarget(
+		sniperID,
+		strategy.TargetPosition{Qty: 0, OrderType: order.ORDER_TYPE_MARKET, Reason: "EXIT"},
+		order.ACTION_SELL,
+		200,
+		order.CASH_MARGIN_MARGIN_EXIT,
+		order.EXCHANGE_TOSHO,
+		order.TRADE_TYPE_GENERAL_DAY,
+		order.ACCOUNT_SPECIAL,
+	)
+	if entry == nil {
+		t.Fatalf("expected exit order for remaining 100 shares, got nil")
+	}
+	if entry.OrderQty != 100 {
+		t.Fatalf("expected OrderQty clamped to matched ClosePositions sum (100), got %v", entry.OrderQty)
+	}
+	if len(entry.Request.ClosePositions) != 1 || entry.Request.ClosePositions[0].Qty != 100 {
+		t.Fatalf("unexpected ClosePositions: %+v", entry.Request.ClosePositions)
+	}
+}
+
+func TestSniperNest_PartialFill_NoDoubleCountingInCommittedAndVirtualPos(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	s := NewSniper("sniper-1", sym, &controllableStrategy{}, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	nest := NewSniperNest("7203", sym, []*Sniper{s}, nil)
+
+	// 100 shares already physically filled from a 200-share market buy order
+	nest.positions.ApplyExecution(s.ID, "7203", order.Execution{
+		ID:    "exec-1",
+		Price: 2000,
+		Qty:   100,
+	}, order.ACTION_BUY, nil, nil)
+
+	partOrd := order.NewOrder("ord-1", "7203", order.ACTION_BUY, 0, 200,
+		order.WithType(order.ORDER_TYPE_MARKET),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY),
+	)
+	partOrd.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	partOrd.CumQty = 100
+	partOrd.AddExecution(order.Execution{ID: "exec-1", Price: 2000, Qty: 100})
+	nest.AddOrder(s.ID, partOrd)
+
+	committed := nest.GetCommittedPosition(s.ID)
+	if committed.TotalQty != 200 {
+		t.Errorf("expected CommittedPosition.TotalQty == 200 (100 physical + 100 remaining), got %v", committed.TotalQty)
+	}
+
+	obs := nest.PrepareObservation(s.ID, tick.Tick{Symbol: "7203", Price: 2000})
+	vpos := s.CalculateVirtualPosition(obs.Positions, obs.ActiveOrders)
+	if vpos.Qty != 200 {
+		t.Errorf("expected VirtualPosition.Qty == 200 (no double counting), got %v", vpos.Qty)
+	}
+}
+
+func TestSniperNest_LocalIDResolved_UpdatesPositionLockOrderID(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	nest := NewSniperNest("7203", sym, nil, nil)
+	sniperID := "sniper-1"
+	now := time.Now()
+
+	// 1. Hold 100 shares and add a local-ID exit order that locks the position under local ID
+	nest.positions.ApplyExecution(sniperID, "7203", order.Execution{
+		ID:            "hold-1",
+		Price:         2000,
+		Qty:           100,
+		ExecutionTime: now,
+	}, order.ACTION_BUY, nil, nil)
+
+	localID := order.GenerateLocalID()
+	exitOrd := order.NewOrder(localID, "7203", order.ACTION_SELL, 2010, 100,
+		order.WithType(order.ORDER_TYPE_LIMIT),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+		order.WithRequest(&order.OrderRequest{
+			ClosePositions: []order.ClosePosition{{HoldID: "hold-1", Qty: 100}},
+		}),
+	)
+	exitOrd.CreatedAt = now
+	exitOrd.ToPending()
+	nest.AddOrder(sniperID, exitOrd)
+
+	// 2. Polling report resolves localID -> server-999 AND already shows CANCELED
+	serverOrd := order.NewOrder("server-999", "7203", order.ACTION_SELL, 2010, 100,
+		order.WithType(order.ORDER_TYPE_LIMIT),
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+	)
+	serverOrd.CreatedAt = now
+	serverOrd.BypassTransition(order.ORDER_STATUS_CANCELED, order.STATE_CLOSED)
+
+	nest.Update(order.Orders{Orders: []order.Order{*serverOrd}}, now.Add(time.Second))
+
+	// Lock must be completely released (AvailableQty == 100)
+	posCopy := nest.positions.GetCopy()
+	if len(posCopy) != 1 {
+		t.Fatalf("expected 1 position, got %d", len(posCopy))
+	}
+	if posCopy[0].AvailableQty() != 100 {
+		t.Fatalf("expected AvailableQty 100 after LOCAL_ID_RESOLVED cancel, got %v (locks=%+v)", posCopy[0].AvailableQty(), posCopy[0].Locks)
+	}
+}
+
+func TestSniperNest_OffsetExit_MultipleOpposingSnipersParallel(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	stratShortA := &controllableStrategy{target: strategy.TargetPosition{Qty: -100}}
+	stratShortB := &controllableStrategy{target: strategy.TargetPosition{Qty: -100}}
+	stratLongC := &controllableStrategy{target: strategy.TargetPosition{Qty: 300}}
+
+	sA := NewSniper("sniper-short-a", sym, stratShortA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sB := NewSniper("sniper-short-b", sym, stratShortB, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sC := NewSniper("sniper-long-c", sym, stratLongC, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	nest := NewSniperNest("7203", sym, []*Sniper{sA, sB, sC}, nil)
+
+	nest.positions.ApplyExecution("sniper-short-a", "7203", order.Execution{ID: "hold-sa", Price: 2000, Qty: 100}, order.ACTION_SELL, nil, nil)
+	nest.positions.ApplyExecution("sniper-short-b", "7203", order.Execution{ID: "hold-sb", Price: 2000, Qty: 100}, order.ACTION_SELL, nil, nil)
+
+	actions := nest.HandleTick(tick.Tick{Symbol: "7203", Price: 2005, CurrentPriceTime: time.Now()})
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 parallel offset exit actions (for short-a and short-b), got %d: %+v", len(actions), actions)
+	}
+	seen := make(map[string]bool)
+	for _, act := range actions {
+		seen[act.SniperID] = true
+	}
+	if !seen["sniper-short-a"] || !seen["sniper-short-b"] {
+		t.Fatalf("expected both sniper-short-a and sniper-short-b to exit in parallel, got %+v", seen)
+	}
+}
