@@ -19,6 +19,7 @@ import (
 // MockKabuClient は KabuClient の振る舞いを模倣します
 type MockKabuClient struct {
 	Orders          []api.Order
+	Positions       []api.Position
 	LastSendRequest *api.OrderRequest
 	GetTokenCount   int
 	RegisterCount   int
@@ -43,7 +44,7 @@ func (m *MockKabuClient) CancelOrder(req api.CancelRequest) (*api.CancelResponse
 	return nil, nil
 }
 func (m *MockKabuClient) GetPositions(product api.ProductType) ([]api.Position, error) {
-	return nil, nil
+	return m.Positions, nil
 }
 func (m *MockKabuClient) RegisterSymbol(req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error) {
 	m.RegisterCount++
@@ -730,6 +731,37 @@ func TestMarketGateway_SendOrderRaw_RecordsOrderRTT(t *testing.T) {
 	}
 	if buf[0] < 0 {
 		t.Fatalf("expected non-negative RTT sample, got %v", buf[0])
+	}
+}
+
+func TestMarketGateway_GetPositions_MapsHoldQty(t *testing.T) {
+	mockClient := &MockKabuClient{
+		Positions: []api.Position{
+			{
+				ExecutionID:     "E_001",
+				Symbol:          "7203",
+				Exchange:        api.EXCHANGE_TYPE_TOSHO,
+				Side:            string(api.SIDE_BUY),
+				MarginTradeType: 3,
+				AccountType:     4,
+				LeavesQty:       300,
+				HoldQty:         100,
+				Price:           2500,
+			},
+		},
+	}
+	gateway := &MarketGateway{client: mockClient}
+
+	positions, err := gateway.GetPositions(context.Background(), order.PRODUCT_MARGIN)
+	if err != nil {
+		t.Fatalf("GetPositions failed: %v", err)
+	}
+	if len(positions) != 1 {
+		t.Fatalf("expected 1 position, got %d", len(positions))
+	}
+	if positions[0].LeavesQty != 300 || positions[0].HoldQty != 100 || positions[0].CloseableQty() != 200 {
+		t.Errorf("unexpected position quantities: LeavesQty=%f, HoldQty=%f, CloseableQty=%f",
+			positions[0].LeavesQty, positions[0].HoldQty, positions[0].CloseableQty())
 	}
 }
 

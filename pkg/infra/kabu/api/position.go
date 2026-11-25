@@ -13,8 +13,8 @@ type Position struct {
 	Side            string      `json:"Side"`            //
 	Symbol          string      `json:"Symbol"`          // 銘柄コード (例: "7012")
 	SymbolName      string      `json:"SymbolName"`      // 銘柄名
-	LeavesQty       float64     `json:"LeavesQty"`       // 残数量（いま決済できる株数）
-	HoldQty         float64     `json:"HoldQty"`         // 拘束数量（すでに売り注文を出して待機中の株数）
+	LeavesQty       float64     `json:"LeavesQty"`       // 保有数量（拘束数量を含む残数量）
+	HoldQty         float64     `json:"HoldQty"`         // 拘束数量（すでに返済注文を出して待機中の株数）
 	Price           float64     `json:"Price"`           // 建値（平均取得単価） ★0.2%計算の基準！
 	CurrentPrice    float64     `json:"CurrentPrice"`    // 現在値
 	Valuation       float64     `json:"Valuation"`       // 評価金額
