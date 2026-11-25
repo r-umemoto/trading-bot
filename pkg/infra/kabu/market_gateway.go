@@ -560,15 +560,27 @@ func (m *MarketGateway) startPollingLoop(ctx context.Context) {
 
 			// 注文一覧を全銘柄のチャネルへ安全にディスパッチ
 			for symbol, ch := range m.orderChannels {
-				select {
-				case ch <- ords:
-				default:
-					fmt.Printf("⚠️ 🚨 [%s] OrdersReportチャネルがフルです。非同期でキューイングを試みます。\n", symbol)
-					go func(c chan<- order.Orders, r order.Orders) {
-						c <- r
-					}(ch, ords)
-				}
+				m.dispatchOrderReport(symbol, ch, ords)
 			}
+		}
+	}
+}
+
+func (m *MarketGateway) dispatchOrderReport(symbol string, ch chan order.Orders, ords order.Orders) {
+	select {
+	case ch <- ords:
+		return
+	default:
+		// ポーリング結果は常に最新スナップショットのため、満杯時は古い1件を捨てて最新を投入する（無制限ゴルーチン生成を防止）
+		select {
+		case <-ch:
+		default:
+		}
+		select {
+		case ch <- ords:
+			slog.Warn("⚠️ OrdersReportチャネルがフルのため古いレポートを破棄して最新レポートを投入しました", slog.String("symbol", symbol))
+		default:
+			slog.Warn("⚠️ OrdersReportチャネルがフルのためレポートをスキップしました（次回ポーリングで再送）", slog.String("symbol", symbol))
 		}
 	}
 }

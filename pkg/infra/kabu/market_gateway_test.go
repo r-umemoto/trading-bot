@@ -765,3 +765,25 @@ func TestMarketGateway_GetPositions_MapsHoldQty(t *testing.T) {
 	}
 }
 
+func TestMarketGateway_DispatchOrderReport_DropsOldestWhenFull(t *testing.T) {
+	gateway := &MarketGateway{}
+	ch := make(chan order.Orders, 1)
+
+	oldReport := order.Orders{Orders: []order.Order{{ID: "old-order"}}}
+	newReport := order.Orders{Orders: []order.Order{{ID: "new-order"}}}
+
+	// 1件目で満杯にする
+	gateway.dispatchOrderReport("7203", ch, oldReport)
+	// 2件目: ブロックせず古いレポートを捨てて最新レポートを投入すること
+	gateway.dispatchOrderReport("7203", ch, newReport)
+
+	select {
+	case got := <-ch:
+		if len(got.Orders) != 1 || got.Orders[0].ID != "new-order" {
+			t.Fatalf("expected latest report 'new-order', got %+v", got.Orders)
+		}
+	default:
+		t.Fatal("expected latest order report to be queued")
+	}
+}
+
