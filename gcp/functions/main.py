@@ -43,37 +43,30 @@ def post_to_x(cloudevent):
             print(f"Warning: Failed to convert event_data to dict: {e}")
 
         # 辞書化できた場合は辞書から抽出、できない場合は元のオブジェクトから抽出
+        # ※ ドキュメント削除イベント（value がなく old_value のみ存在）の場合は誤爆ツイートを防ぐためスキップする
         daily_report = None
         if event_dict:
             print(f"event_dict keys: {list(event_dict.keys())}")
-            document = None
             if "value" in event_dict and event_dict["value"] and "fields" in event_dict["value"]:
-                document = event_dict["value"]
+                daily_report = event_dict["value"]["fields"]
                 print("Found fields in event_dict['value']")
-            elif "old_value" in event_dict and event_dict["old_value"] and "fields" in event_dict["old_value"]:
-                document = event_dict["old_value"]
-                print("Found fields in event_dict['old_value'] (document was deleted)")
-            
-            if document:
-                daily_report = document["fields"]
+            elif "old_value" in event_dict and event_dict["old_value"]:
+                print("Document was deleted (only old_value present). Skipping tweet.")
+                return "Deleted document skipped", 200
             else:
                 print("No fields found in event_dict.")
         
         if not daily_report:
             # 従来通りのオブジェクトによるアクセス
-            document = None
             if hasattr(event_data, "value") and event_data.value and event_data.value.fields:
-                document = event_data.value
+                daily_report = event_data.value.fields
                 print("Found fields in event_data.value")
             elif hasattr(event_data, "old_value") and event_data.old_value and event_data.old_value.fields:
-                document = event_data.old_value
-                print("Found fields in event_data.old_value (document was deleted)")
-            
-            if not document or not document.fields:
-                print("No fields found in the document value or old_value.")
+                print("Document was deleted (only old_value present). Skipping tweet.")
+                return "Deleted document skipped", 200
+            else:
+                print("No fields found in the document value.")
                 return "No fields", 400
-                
-            daily_report = document.fields
     except Exception as e:
         print(f"Failed to deserialize Firestore Eventarc data: {e}")
         return f"Deserialize Error: {e}", 400

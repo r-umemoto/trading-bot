@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -20,7 +19,8 @@ type AsyncWriter struct {
 	underlying io.Writer
 	queue      chan []byte
 	done       chan struct{}
-	closed     atomic.Bool
+	mu         sync.RWMutex
+	closed     bool
 	closeOnce  sync.Once
 	flushReq   chan chan struct{}
 }
@@ -47,13 +47,15 @@ func NewAsyncWriter(w io.Writer, bufferSize int) *AsyncWriter {
 // Write はログバイト列をキューに送信して即時リターンします。
 // 呼び出し元のスライス再利用に備えて内部でメモリコピーを行います。
 func (aw *AsyncWriter) Write(p []byte) (n int, err error) {
-	if aw.closed.Load() {
-		return 0, ErrClosed
-	}
-
 	// 呼び出し元のバッファ再利用によるデータ競合を防ぐためコピー
 	data := make([]byte, len(p))
 	copy(data, p)
+
+	aw.mu.RLock()
+	defer aw.mu.RUnlock()
+	if aw.closed {
+		return 0, ErrClosed
+	}
 
 	aw.queue <- data
 	return len(p), nil
@@ -131,14 +133,26 @@ func (aw *AsyncWriter) worker() {
 
 // Flush は現在キューに入っているすべてのデータを下流Writerに同期フラッシュします。
 func (aw *AsyncWriter) Flush() error {
-	if aw.closed.Load() {
+	aw.mu.RLock()
+	if aw.closed {
+		aw.mu.RUnlock()
 		return ErrClosed
 	}
 
 	resp := make(chan struct{})
-	aw.flushReq <- resp
-	<-resp
-	return nil
+	select {
+	case aw.flushReq <- resp:
+		aw.mu.RUnlock()
+	case <-aw.done:
+		aw.mu.RUnlock()
+		return ErrClosed
+	}
+	select {
+	case <-resp:
+		return nil
+	case <-aw.done:
+		return nil
+	}
 }
 
 // Close はキューを閉じ、残存するすべてのログデータをディスクへフラッシュした後に終了します。
@@ -146,8 +160,10 @@ func (aw *AsyncWriter) Flush() error {
 func (aw *AsyncWriter) Close() error {
 	var err error
 	aw.closeOnce.Do(func() {
-		aw.closed.Store(true)
+		aw.mu.Lock()
+		aw.closed = true
 		close(aw.queue)
+		aw.mu.Unlock()
 		<-aw.done
 	})
 	return err
