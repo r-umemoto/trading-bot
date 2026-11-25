@@ -11,9 +11,9 @@ func (d *Symbol) CalcTickSize(price float64) float64 {
 	absPrice := math.Abs(price)
 
 	switch d.PriceRangeGroup {
-	case PRICE_RANGE_GROUP_TSE_TOPIX100:
+	case PRICE_RANGE_GROUP_TSE_TOPIX100, PRICE_RANGE_GROUP_TSE_ETF, PRICE_RANGE_GROUP_TSE_ETF_FINE:
 		return getTSETopix100TickSize(absPrice)
-	case PRICE_RANGE_GROUP_TSE_STANDARD:
+	case PRICE_RANGE_GROUP_TSE_STANDARD, PRICE_RANGE_GROUP_TSE_STANDARD_ALT:
 		return getTSEStandardTickSize(absPrice)
 	default:
 		return 0.0

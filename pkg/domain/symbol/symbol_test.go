@@ -185,3 +185,18 @@ func TestSymbol_RoundPrice(t *testing.T) {
 		t.Errorf("expected price to be returned completely untouched when tick is 0, got %f", roundedPrice)
 	}
 }
+
+func TestSymbol_CalcTickSize_AdditionalPriceRangeGroups(t *testing.T) {
+	etfSym := symbol.Symbol{Code: "1570", PriceRangeGroup: symbol.PRICE_RANGE_GROUP_TSE_ETF}
+	if ts := etfSym.CalcTickSize(2500); ts != 0.5 {
+		t.Errorf("ETF(10118) price=2500: expected 0.5, got %v", ts)
+	}
+	etfFineSym := symbol.Symbol{Code: "1357", PriceRangeGroup: symbol.PRICE_RANGE_GROUP_TSE_ETF_FINE}
+	if ts := etfFineSym.CalcTickSize(500); ts != 0.1 {
+		t.Errorf("ETF_FINE(10119) price=500: expected 0.1, got %v", ts)
+	}
+	reitSym := symbol.Symbol{Code: "8951", PriceRangeGroup: symbol.PRICE_RANGE_GROUP_TSE_STANDARD_ALT}
+	if ts := reitSym.CalcTickSize(4000); ts != 5.0 {
+		t.Errorf("STANDARD_ALT(10001) price=4000: expected 5.0, got %v", ts)
+	}
+}
