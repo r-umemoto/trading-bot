@@ -152,6 +152,33 @@ func (ot *OrderTracker) RevertOrderStatus(sniperID string, ord *order.Order, sta
 	}
 }
 
+// FailCancel はキャンセル送信に失敗した注文を CANCEL_SENT から WAITING へロールバックします。
+// 既に完了済みまたは CANCEL_SENT 以外の注文には何もしません。
+func (ot *OrderTracker) FailCancel(sniperID string, orderID string) bool {
+	if orderID == "" {
+		return false
+	}
+	orders := ot.activeOrders[sniperID]
+	for _, o := range orders {
+		if o == nil {
+			continue
+		}
+		if o.ID == orderID || (o.LocalID != "" && o.LocalID == orderID) {
+			if !o.IsCancelSent() {
+				return false
+			}
+			nextInternal := o.InternalState()
+			if nextInternal == order.STATE_CANCELING {
+				nextInternal = order.STATE_ACTIVE
+			}
+			o.BypassTransition(order.ORDER_STATUS_WAITING, nextInternal)
+			o.CancelSentAt = time.Time{}
+			return true
+		}
+	}
+	return false
+}
+
 func (ot *OrderTracker) IsExecutionProcessed(id string) bool {
 	return ot.processedExecutions[id]
 }

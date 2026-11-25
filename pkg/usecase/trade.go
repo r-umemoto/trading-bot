@@ -210,10 +210,12 @@ func (u *TradeUseCase) fire(ctx context.Context, op sniper.Operation, sniperID s
 	case sniper.CancelBullet:
 		err := u.gateway.CancelOrder(ctx, act.OrderID)
 		if err != nil {
-			slog.Error("❌ キャンセル注文の送信に失敗しました",
+			slog.Error("❌ キャンセル注文の送信に失敗しました。注文ステータスをロールバックします",
+				slog.String("sniperID", sniperID),
 				slog.String("orderID", act.OrderID),
 				slog.Any("error", err),
 			)
+			op.FailCancelingOrder(sniperID, act.OrderID)
 		}
 	case sniper.OrderBullet:
 		updatedOrder, err := u.gateway.SendOrder(ctx, order.SendOrderInput{Order: act.Order})

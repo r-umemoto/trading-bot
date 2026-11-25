@@ -133,7 +133,8 @@ func TestTradeUseCase_StartAndEventLoop(t *testing.T) {
 }
 
 type mockGateway struct {
-	sendOrderFunc func(ctx context.Context, input order.SendOrderInput) (*order.Order, error)
+	sendOrderFunc   func(ctx context.Context, input order.SendOrderInput) (*order.Order, error)
+	cancelOrderFunc func(ctx context.Context, orderID string) error
 }
 
 func (m *mockGateway) Listen(ctx context.Context) (*market.MarketChannels, error) { return nil, nil }
@@ -144,7 +145,12 @@ func (m *mockGateway) SendOrder(ctx context.Context, input order.SendOrderInput)
 	}
 	return input.Order, nil
 }
-func (m *mockGateway) CancelOrder(ctx context.Context, orderID string) error { return nil }
+func (m *mockGateway) CancelOrder(ctx context.Context, orderID string) error {
+	if m.cancelOrderFunc != nil {
+		return m.cancelOrderFunc(ctx, orderID)
+	}
+	return nil
+}
 func (m *mockGateway) GetPositions(ctx context.Context, product order.ProductType) ([]position.Position, error) { return nil, nil }
 func (m *mockGateway) GetOrders(ctx context.Context) (order.Orders, error) { return order.Orders{}, nil }
 func (m *mockGateway) GetSymbol(ctx context.Context, symbolCode string, exchange order.ExchangeMarket) (symbol.Symbol, error) { return symbol.Symbol{}, nil }
@@ -677,5 +683,68 @@ func TestTradeUseCase_OutofOrderReconciliation_PartialClose(t *testing.T) {
 	perf2_multi := nest.GetPerformance("test_sniper_7203")
 	if perf2_multi.RealizedPnL != 20000.0 {
 		t.Errorf("expected 20000.0 final realized PnL, got %f", perf2_multi.RealizedPnL)
+	}
+}
+
+func TestTradeUseCase_CancelFailureRollsBackCancelSent(t *testing.T) {
+	detail := symbol.Symbol{Code: "7203"}
+
+	var cancelCalled atomic.Bool
+	gw := &mockGateway{
+		cancelOrderFunc: func(ctx context.Context, orderID string) error {
+			cancelCalled.Store(true)
+			return errors.New("simulated cancel API error")
+		},
+	}
+
+	// ターゲット0（ノーポジ希望）なので既存の新規買い注文に対してキャンセルが発火する
+	strat := &mockStrategy{
+		target: strategy.TargetPosition{Qty: 0},
+	}
+
+	s := sniper.NewSniper("test_sniper_7203", detail, strat, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	nest := sniper.NewSniperNest("7203", detail, []*sniper.Sniper{s}, nil)
+	op := sniper.NewDefaultOperation("Op_7203", nest)
+
+	activeOrder := order.NewOrder("broker-order-1", "7203", order.ACTION_BUY, 2500, 100, order.WithCashMargin(order.CASH_MARGIN_MARGIN_ENTRY))
+	activeOrder.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
+	op.AddOrder("test_sniper_7203", activeOrder)
+
+	tradeUC := usecase.NewTradeUseCase([]sniper.Operation{op}, gw, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tickCh := make(chan tick.Tick, 1)
+	orderCh := make(chan order.Orders, 1)
+	chs := &market.MarketChannels{
+		Ticks:  map[string]<-chan tick.Tick{"7203": tickCh},
+		Orders: map[string]<-chan order.Orders{"7203": orderCh},
+	}
+
+	tradeUC.Start(ctx, chs)
+
+	tickCh <- tick.Tick{
+		Symbol:           "7203",
+		Price:            2500,
+		CurrentPriceTime: time.Now(),
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if !cancelCalled.Load() {
+		t.Fatal("expected CancelOrder to be called")
+	}
+
+	// CancelOrder が失敗したため、CANCEL_SENT に膠着せず WAITING へロールバックされ CancelSentAt もクリアされていること
+	active := nest.GetActiveOrders()
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active order, got %d", len(active))
+	}
+	if active[0].Status() != order.ORDER_STATUS_WAITING {
+		t.Errorf("expected order status to roll back to WAITING, got %v", active[0].Status())
+	}
+	if !active[0].CancelSentAt.IsZero() {
+		t.Errorf("expected CancelSentAt to be cleared on rollback, got %v", active[0].CancelSentAt)
 	}
 }

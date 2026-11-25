@@ -568,6 +568,19 @@ func (n *SniperNest) FailSendingOrder(sniperID string, ord *order.Order) {
 	}
 }
 
+// FailCancelingOrder はキャンセル送信失敗時に CANCEL_SENT 状態をロールバックし、注文スタックを防ぎます。
+func (n *SniperNest) FailCancelingOrder(sniperID string, orderID string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.orders.FailCancel(sniperID, orderID) {
+		n.Logger.Warn("↩️ [CANCEL_ROLLBACK] キャンセル送信失敗のため注文ステータスを WAITING にロールバックしました",
+			slog.String("symbol", n.SymbolCode),
+			slog.String("sniper", sniperID),
+			slog.String("orderID", orderID),
+		)
+	}
+}
+
 // DestroySendingOrder は対象のスナイパーから注文を即座に完全抹消します（確定失敗用）
 func (n *SniperNest) DestroySendingOrder(sniperID string, ord *order.Order) {
 	n.mu.Lock()
