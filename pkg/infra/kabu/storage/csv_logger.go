@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/r-umemoto/trading-bot/pkg/domain/tick"
 )
@@ -82,49 +83,71 @@ func (l *CSVLogger) Log(tick tick.Tick) {
 	l.tickChan <- tick
 }
 
-// startWriting はチャネルからデータを受け取り、継続的にファイルへ書き込みます
+// startWriting はチャネルからデータを受け取り、バッファリングしつつ定期的にフラッシュしてファイルへ書き込みます
 func (l *CSVLogger) startWriting() {
 	defer close(l.done)
-	for tick := range l.tickChan {
+	flushTicker := time.NewTicker(1 * time.Second)
+	defer flushTicker.Stop()
+	dirty := false
+
+	writeRecord := func(t tick.Tick) {
 		record := []string{
-			tick.CurrentPriceTime.Format("15:04:05.000"), // ミリ秒まで記録
-			tick.Symbol,
-			strconv.FormatFloat(tick.Price, 'f', -1, 64),
-			strconv.FormatFloat(tick.TradingVolume, 'f', -1, 64),
-			strconv.FormatFloat(tick.VWAP, 'f', -1, 64),
-			strconv.FormatFloat(tick.BestAsk.Price, 'f', -1, 64),
-			strconv.FormatFloat(tick.BestAsk.Qty, 'f', -1, 64),
-			strconv.FormatFloat(tick.BestBid.Price, 'f', -1, 64),
-			strconv.FormatFloat(tick.BestBid.Qty, 'f', -1, 64),
+			t.CurrentPriceTime.Format("15:04:05.000"), // ミリ秒まで記録
+			t.Symbol,
+			strconv.FormatFloat(t.Price, 'f', -1, 64),
+			strconv.FormatFloat(t.TradingVolume, 'f', -1, 64),
+			strconv.FormatFloat(t.VWAP, 'f', -1, 64),
+			strconv.FormatFloat(t.BestAsk.Price, 'f', -1, 64),
+			strconv.FormatFloat(t.BestAsk.Qty, 'f', -1, 64),
+			strconv.FormatFloat(t.BestBid.Price, 'f', -1, 64),
+			strconv.FormatFloat(t.BestBid.Qty, 'f', -1, 64),
 		}
 
 		// 板10本の記録（2〜10本目）
 		for i := 0; i < 9; i++ {
 			askP, askQ, bidP, bidQ := 0.0, 0.0, 0.0, 0.0
-			if i < len(tick.SellBoard) {
-				askP, askQ = tick.SellBoard[i].Price, tick.SellBoard[i].Qty
+			if i < len(t.SellBoard) {
+				askP, askQ = t.SellBoard[i].Price, t.SellBoard[i].Qty
 			}
-			if i < len(tick.BuyBoard) {
-				bidP, bidQ = tick.BuyBoard[i].Price, tick.BuyBoard[i].Qty
+			if i < len(t.BuyBoard) {
+				bidP, bidQ = t.BuyBoard[i].Price, t.BuyBoard[i].Qty
 			}
 			record = append(record, strconv.FormatFloat(askP, 'f', -1, 64), strconv.FormatFloat(askQ, 'f', -1, 64))
 			record = append(record, strconv.FormatFloat(bidP, 'f', -1, 64), strconv.FormatFloat(bidQ, 'f', -1, 64))
 		}
 
 		record = append(record,
-			strconv.Itoa(int(tick.CurrentPriceStatus)),
-			string(tick.CurrentPriceChangeStatus),
-			strconv.FormatFloat(tick.OpeningPrice, 'f', -1, 64),
-			strconv.FormatFloat(tick.PreviousClose, 'f', -1, 64),
-			strconv.FormatFloat(tick.TradingValue, 'f', -1, 64),
-			strconv.FormatFloat(tick.MarketOrderSellQty, 'f', -1, 64),
-			strconv.FormatFloat(tick.MarketOrderBuyQty, 'f', -1, 64),
-			strconv.FormatFloat(tick.OverSellQty, 'f', -1, 64),
-			strconv.FormatFloat(tick.UnderBuyQty, 'f', -1, 64),
+			strconv.Itoa(int(t.CurrentPriceStatus)),
+			string(t.CurrentPriceChangeStatus),
+			strconv.FormatFloat(t.OpeningPrice, 'f', -1, 64),
+			strconv.FormatFloat(t.PreviousClose, 'f', -1, 64),
+			strconv.FormatFloat(t.TradingValue, 'f', -1, 64),
+			strconv.FormatFloat(t.MarketOrderSellQty, 'f', -1, 64),
+			strconv.FormatFloat(t.MarketOrderBuyQty, 'f', -1, 64),
+			strconv.FormatFloat(t.OverSellQty, 'f', -1, 64),
+			strconv.FormatFloat(t.UnderBuyQty, 'f', -1, 64),
 		)
 
-		l.writer.Write(record)
-		l.writer.Flush() // Tickごとに確実にディスクへ保存
+		_ = l.writer.Write(record)
+		dirty = true
+	}
+
+	for {
+		select {
+		case t, ok := <-l.tickChan:
+			if !ok {
+				if dirty {
+					l.writer.Flush()
+				}
+				return
+			}
+			writeRecord(t)
+		case <-flushTicker.C:
+			if dirty {
+				l.writer.Flush()
+				dirty = false
+			}
+		}
 	}
 }
 

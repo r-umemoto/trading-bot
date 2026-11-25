@@ -81,6 +81,14 @@ func TestTradeUseCase_PrintPerformanceReport(t *testing.T) {
 		t.Errorf("expected Total report name, got %s", repo.savedReport.Total.Name)
 	}
 
+	// Disabled save path (enableCSV=false should skip reportRepo.Save)
+	repoSkipped := &mockReportRepo{}
+	tradeUC3 := usecase.NewTradeUseCase([]sniper.Operation{op}, gateway, repoSkipped)
+	tradeUC3.PrintPerformanceReport(false)
+	if repoSkipped.savedReport != nil {
+		t.Error("expected report NOT to be saved when enableCSV is false")
+	}
+
 	// Error saving path
 	repoErr := &mockReportRepo{saveErr: errors.New("save error")}
 	tradeUC2 := usecase.NewTradeUseCase([]sniper.Operation{op}, gateway, repoErr)

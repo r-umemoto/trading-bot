@@ -717,7 +717,8 @@ func (m *MarketGateway) cloneChildOrderForExecution(template *order.Order, exec 
 func (s *MarketGateway) startWebSocketLoop(ctx context.Context) {
 	rawCh := make(chan api.PushMessage)
 
-	today := time.Now().Format("20060102")
+	jst := time.FixedZone("JST", 9*60*60)
+	today := time.Now().In(jst).Format("20060102")
 	// "all" というプレフィックスで、./data/<today> ディレクトリに保存
 	logger, err := storage.NewCSVLogger("all", today, filepath.Join("./data", today))
 	if err != nil {

@@ -287,8 +287,9 @@ func deploySnipers(watchList []symbol.WatchTarget, dataPool tick.DataPool) ([]*s
 	var snipers []*sniper.Sniper
 	var cleanups []func()
 
-	// ログディレクトリの準備
-	logDir := filepath.Join("logs", time.Now().Format("20060102"))
+	// ログディレクトリの準備（JST固定）
+	jst := time.FixedZone("JST", 9*60*60)
+	logDir := filepath.Join("logs", time.Now().In(jst).Format("20060102"))
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return nil, nil, fmt.Errorf("ログディレクトリの作成に失敗: %w", err)
 	}
