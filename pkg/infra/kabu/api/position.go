@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 )
 
@@ -24,13 +25,18 @@ type Position struct {
 
 // GetPositions は現在の建玉一覧を取得します。
 func (c *KabuClient) GetPositions(product ProductType) ([]Position, error) {
+	return c.GetPositionsContext(context.Background(), product)
+}
+
+// GetPositionsContext はコンテキスト付きで現在の建玉一覧を取得します。
+func (c *KabuClient) GetPositionsContext(ctx context.Context, product ProductType) ([]Position, error) {
 	// エンドポイントにクエリパラメータを付与
 	endpoint := fmt.Sprintf("/positions?product=%s", product)
 
 	// GETリクエストを送信
-	resp, err := c.doRequest("GET", endpoint, nil)
+	resp, err := c.doRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("建玉照会API通信エラー: %v", err)
+		return nil, fmt.Errorf("建玉照会API通信エラー: %w", err)
 	}
 
 	var positions []Position

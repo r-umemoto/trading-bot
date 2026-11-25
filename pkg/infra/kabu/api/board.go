@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -109,12 +110,17 @@ type BoardResponse struct {
 
 // GetBoard は指定した銘柄の板情報を取得します
 func (c *KabuClient) GetBoard(symbol string) (*BoardResponse, error) {
+	return c.GetBoardContext(context.Background(), symbol)
+}
+
+// GetBoardContext はコンテキスト付きで指定した銘柄の板情報を取得します
+func (c *KabuClient) GetBoardContext(ctx context.Context, symbol string) (*BoardResponse, error) {
 	endpoint := fmt.Sprintf("/board/%s@1", symbol) // @1は東証
 
 	// ヘッダーセットなどのボイラープレートは一切不要になる
-	resp, err := c.doRequest("GET", endpoint, nil)
+	resp, err := c.doRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("API通信エラー: %v", err)
+		return nil, fmt.Errorf("API通信エラー: %w", err)
 	}
 
 	var boardResp BoardResponse

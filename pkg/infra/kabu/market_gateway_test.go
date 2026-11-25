@@ -31,30 +31,54 @@ func (m *MockKabuClient) GetToken() error {
 	m.GetTokenCount++
 	return nil
 }
+func (m *MockKabuClient) GetTokenContext(ctx context.Context) error {
+	return m.GetToken()
+}
 
 func (m *MockKabuClient) GetOrders() ([]api.Order, error) {
 	return m.Orders, nil
+}
+func (m *MockKabuClient) GetOrdersContext(ctx context.Context) ([]api.Order, error) {
+	return m.GetOrders()
 }
 
 func (m *MockKabuClient) SendOrder(req api.OrderRequest) (*api.OrderResponse, error) {
 	m.LastSendRequest = &req
 	return &api.OrderResponse{OrderId: "test-order-id"}, nil
 }
+func (m *MockKabuClient) SendOrderContext(ctx context.Context, req api.OrderRequest) (*api.OrderResponse, error) {
+	return m.SendOrder(req)
+}
 func (m *MockKabuClient) CancelOrder(req api.CancelRequest) (*api.CancelResponse, error) {
 	return nil, nil
 }
+func (m *MockKabuClient) CancelOrderContext(ctx context.Context, req api.CancelRequest) (*api.CancelResponse, error) {
+	return m.CancelOrder(req)
+}
 func (m *MockKabuClient) GetPositions(product api.ProductType) ([]api.Position, error) {
 	return m.Positions, nil
+}
+func (m *MockKabuClient) GetPositionsContext(ctx context.Context, product api.ProductType) ([]api.Position, error) {
+	return m.GetPositions(product)
 }
 func (m *MockKabuClient) RegisterSymbol(req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error) {
 	m.RegisterCount++
 	return nil, nil
 }
+func (m *MockKabuClient) RegisterSymbolContext(ctx context.Context, req api.RegisterSymbolRequest) (*api.RegisterSymbolResponse, error) {
+	return m.RegisterSymbol(req)
+}
 func (m *MockKabuClient) UnregisterSymbolAll() (*api.UnregisterSymbolAllResponse, error) {
 	return nil, nil
 }
+func (m *MockKabuClient) UnregisterSymbolAllContext(ctx context.Context) (*api.UnregisterSymbolAllResponse, error) {
+	return m.UnregisterSymbolAll()
+}
 func (m *MockKabuClient) GetSymbol(symbol string, exchange api.ExchageType) (*api.SymbolSuccess, error) {
 	return nil, nil
+}
+func (m *MockKabuClient) GetSymbolContext(ctx context.Context, symbol string, exchange api.ExchageType) (*api.SymbolSuccess, error) {
+	return m.GetSymbol(symbol, exchange)
 }
 func (m *MockKabuClient) GetBoard(symbol string) (*api.BoardResponse, error) {
 	m.GetBoardCount++
@@ -62,6 +86,9 @@ func (m *MockKabuClient) GetBoard(symbol string) (*api.BoardResponse, error) {
 		return m.GetBoardFunc(symbol)
 	}
 	return &api.BoardResponse{Symbol: symbol, CurrentPrice: 5000.0}, nil
+}
+func (m *MockKabuClient) GetBoardContext(ctx context.Context, symbol string) (*api.BoardResponse, error) {
+	return m.GetBoard(symbol)
 }
 
 func TestMarketGateway_GetOrders(t *testing.T) {
@@ -522,6 +549,10 @@ func (m *regulatedMockClient) SendOrder(req api.OrderRequest) (*api.OrderRespons
 		return m.sendOrderFunc(req)
 	}
 	return m.MockKabuClient.SendOrder(req)
+}
+
+func (m *regulatedMockClient) SendOrderContext(ctx context.Context, req api.OrderRequest) (*api.OrderResponse, error) {
+	return m.SendOrder(req)
 }
 
 func TestMarketGateway_ShortRegulation(t *testing.T) {

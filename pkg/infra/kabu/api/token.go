@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -19,12 +20,17 @@ type TokenResponse struct {
 
 // GetToken はパスワードを使って認証を行い、クライアント自身にトークンをセットします
 func (c *KabuClient) GetToken() error {
+	return c.GetTokenContext(context.Background())
+}
+
+// GetTokenContext はコンテキスト付きで認証トークンを取得します
+func (c *KabuClient) GetTokenContext(ctx context.Context) error {
 	reqBody := TokenRequest{APIPassword: c.ApiPassword}
 	jsonData, _ := json.Marshal(reqBody)
 
-	resp, err := c.doRequest("POST", "/token", bytes.NewBuffer(jsonData))
+	resp, err := c.doRequest(ctx, "POST", "/token", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("API通信エラー: %v", err)
+		return fmt.Errorf("API通信エラー: %w", err)
 	}
 
 	var tokenResp TokenResponse

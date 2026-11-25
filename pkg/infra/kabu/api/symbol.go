@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -29,14 +30,18 @@ type UnregisterSymbolAllResponse struct {
 }
 
 func (c *KabuClient) RegisterSymbol(req RegisterSymbolRequest) (*RegisterSymbolResponse, error) {
+	return c.RegisterSymbolContext(context.Background(), req)
+}
+
+func (c *KabuClient) RegisterSymbolContext(ctx context.Context, req RegisterSymbolRequest) (*RegisterSymbolResponse, error) {
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("銘柄登録のJSON変換エラー: %v", err)
 	}
 
-	resp, err := c.doRequest("PUT", "/register", bytes.NewBuffer(jsonData))
+	resp, err := c.doRequest(ctx, "PUT", "/register", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("銘柄登録API通信エラー: %v", err)
+		return nil, fmt.Errorf("銘柄登録API通信エラー: %w", err)
 	}
 
 	var regResp RegisterSymbolResponse
@@ -48,9 +53,13 @@ func (c *KabuClient) RegisterSymbol(req RegisterSymbolRequest) (*RegisterSymbolR
 }
 
 func (c *KabuClient) UnregisterSymbolAll() (*UnregisterSymbolAllResponse, error) {
-	resp, err := c.doRequest("PUT", "/unregister/all", nil)
+	return c.UnregisterSymbolAllContext(context.Background())
+}
+
+func (c *KabuClient) UnregisterSymbolAllContext(ctx context.Context) (*UnregisterSymbolAllResponse, error) {
+	resp, err := c.doRequest(ctx, "PUT", "/unregister/all", nil)
 	if err != nil {
-		return nil, fmt.Errorf("銘柄登録全解除API通信エラー: %v", err)
+		return nil, fmt.Errorf("銘柄登録全解除API通信エラー: %w", err)
 	}
 
 	var regResp UnregisterSymbolAllResponse
@@ -70,10 +79,14 @@ type SymbolSuccess struct {
 }
 
 func (c *KabuClient) GetSymbol(symbol string, exchange ExchageType) (*SymbolSuccess, error) {
+	return c.GetSymbolContext(context.Background(), symbol, exchange)
+}
+
+func (c *KabuClient) GetSymbolContext(ctx context.Context, symbol string, exchange ExchageType) (*SymbolSuccess, error) {
 	endpoint := fmt.Sprintf("/symbol/%s@%d", symbol, exchange)
-	resp, err := c.doRequest("GET", endpoint, nil)
+	resp, err := c.doRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("銘柄情報取得API通信エラー: %v", err)
+		return nil, fmt.Errorf("銘柄情報取得API通信エラー: %w", err)
 	}
 
 	var symbolResp SymbolSuccess

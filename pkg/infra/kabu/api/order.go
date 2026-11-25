@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -82,6 +83,11 @@ type OrderDetail struct {
 
 // SendOrder は構成した注文リクエストをAPIに送信し、注文を実行します
 func (c *KabuClient) SendOrder(req OrderRequest) (*OrderResponse, error) {
+	return c.SendOrderContext(context.Background(), req)
+}
+
+// SendOrderContext はコンテキスト付きで注文リクエストをAPIに送信します
+func (c *KabuClient) SendOrderContext(ctx context.Context, req OrderRequest) (*OrderResponse, error) {
 	// 構造体をJSONに変換
 	jsonData, err := json.Marshal(req)
 	if err != nil {
@@ -89,9 +95,9 @@ func (c *KabuClient) SendOrder(req OrderRequest) (*OrderResponse, error) {
 	}
 
 	// POSTリクエストを送信 (エンドポイントは /sendorder)
-	resp, err := c.doRequest("POST", "/sendorder", bytes.NewBuffer(jsonData))
+	resp, err := c.doRequest(ctx, "POST", "/sendorder", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("発注API通信エラー: %v", err)
+		return nil, fmt.Errorf("発注API通信エラー: %w", err)
 	}
 
 	var orderResp OrderResponse
@@ -124,15 +130,20 @@ type CancelResponse struct {
 
 // CancelOrder は指定した注文IDの注文を取り消します
 func (c *KabuClient) CancelOrder(req CancelRequest) (*CancelResponse, error) {
+	return c.CancelOrderContext(context.Background(), req)
+}
+
+// CancelOrderContext はコンテキスト付きで指定した注文IDの注文を取り消します
+func (c *KabuClient) CancelOrderContext(ctx context.Context, req CancelRequest) (*CancelResponse, error) {
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("キャンセルデータのJSON変換エラー: %v", err)
 	}
 
 	// キャンセルは PUT リクエスト
-	resp, err := c.doRequest("PUT", "/cancelorder", bytes.NewBuffer(jsonData))
+	resp, err := c.doRequest(ctx, "PUT", "/cancelorder", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("キャンセルAPI通信エラー: %v", err)
+		return nil, fmt.Errorf("キャンセルAPI通信エラー: %w", err)
 	}
 
 	var cancelResp CancelResponse
@@ -149,9 +160,14 @@ func (c *KabuClient) CancelOrder(req CancelRequest) (*CancelResponse, error) {
 
 // GetOrders は現在の注文一覧を取得します
 func (c *KabuClient) GetOrders() ([]Order, error) {
-	resp, err := c.doRequest("GET", "/orders", nil)
+	return c.GetOrdersContext(context.Background())
+}
+
+// GetOrdersContext はコンテキスト付きで現在の注文一覧を取得します
+func (c *KabuClient) GetOrdersContext(ctx context.Context) ([]Order, error) {
+	resp, err := c.doRequest(ctx, "GET", "/orders", nil)
 	if err != nil {
-		return nil, fmt.Errorf("注文照会API通信エラー: %v", err)
+		return nil, fmt.Errorf("注文照会API通信エラー: %w", err)
 	}
 
 	var orders []Order
