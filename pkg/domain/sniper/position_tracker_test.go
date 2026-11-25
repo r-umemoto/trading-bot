@@ -408,3 +408,95 @@ func TestPositionTracker_Reconcile(t *testing.T) {
 		}
 	}
 }
+
+func TestPositionTracker_PartialCloseReducesLock(t *testing.T) {
+	pt := sniper.NewPositionTracker(nil)
+	sniperID := "test-sniper"
+	now := time.Now()
+
+	// 1. Create a 200-share long position and lock all 200 shares with exit-ord-1
+	pt.ApplyExecution(sniperID, "7203", order.Execution{
+		ID:            "hold-1",
+		Qty:           200,
+		Price:         2000,
+		ExecutionTime: now,
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+
+	matched, _ := pt.MatchPositionsToClose(order.ACTION_SELL, 200)
+	if len(matched) != 1 || matched[0].Qty != 200 {
+		t.Fatalf("expected 1 matched close position of 200, got %+v", matched)
+	}
+	if err := pt.LockPositions("exit-ord-1", matched); err != nil {
+		t.Fatalf("LockPositions failed: %v", err)
+	}
+
+	// Partial fill of 80 shares on exit-ord-1
+	exitOrd1 := order.NewOrder("exit-ord-1", "7203", order.ACTION_SELL, 2010, 200)
+	exitOrd1.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	exitOrd1.Request = &order.OrderRequest{
+		ClosePositions: []order.ClosePosition{{HoldID: "hold-1", Qty: 200}},
+	}
+	pt.ApplyExecution(sniperID, "7203", order.Execution{
+		ID:            "exec-part-1",
+		Qty:           80,
+		Price:         2010,
+		ExecutionTime: now.Add(time.Second),
+	}, order.ACTION_SELL, exitOrd1, func(_ string, pnl float64) {})
+
+	positions := pt.GetCopy()
+	if len(positions) != 1 {
+		t.Fatalf("expected 1 remaining position, got %d", len(positions))
+	}
+	if positions[0].LeavesQty != 120 {
+		t.Errorf("expected LeavesQty 120, got %f", positions[0].LeavesQty)
+	}
+	if positions[0].Locks["exit-ord-1"] != 120 {
+		t.Errorf("expected lock for exit-ord-1 to be decremented to 120, got %f", positions[0].Locks["exit-ord-1"])
+	}
+	if positions[0].AvailableQty() != 0 {
+		t.Errorf("expected AvailableQty 0 (not negative), got %f", positions[0].AvailableQty())
+	}
+
+	// 2. Partial lock case: 200 shares total, lock 100 with exit-ord-2, partial fill 40
+	//    LeavesQty = 160, lock = 60, AvailableQty = 100
+	pt2 := sniper.NewPositionTracker(nil)
+	pt2.ApplyExecution(sniperID, "7203", order.Execution{
+		ID:            "hold-2",
+		Qty:           200,
+		Price:         2000,
+		ExecutionTime: now,
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+	matched2, _ := pt2.MatchPositionsToClose(order.ACTION_SELL, 100)
+	if len(matched2) != 1 || matched2[0].Qty != 100 {
+		t.Fatalf("expected 1 matched close position of 100, got %+v", matched2)
+	}
+	if err := pt2.LockPositions("exit-ord-2", matched2); err != nil {
+		t.Fatalf("LockPositions failed: %v", err)
+	}
+
+	exitOrd2 := order.NewOrder("exit-ord-2", "7203", order.ACTION_SELL, 2010, 100)
+	exitOrd2.CashMargin = order.CASH_MARGIN_MARGIN_EXIT
+	exitOrd2.Request = &order.OrderRequest{
+		ClosePositions: []order.ClosePosition{{HoldID: "hold-2", Qty: 100}},
+	}
+	pt2.ApplyExecution(sniperID, "7203", order.Execution{
+		ID:            "exec-part-2",
+		Qty:           40,
+		Price:         2010,
+		ExecutionTime: now.Add(time.Second),
+	}, order.ACTION_SELL, exitOrd2, func(_ string, pnl float64) {})
+
+	pos2 := pt2.GetCopy()
+	if len(pos2) != 1 {
+		t.Fatalf("expected 1 remaining position, got %d", len(pos2))
+	}
+	if pos2[0].LeavesQty != 160 {
+		t.Errorf("expected LeavesQty 160, got %f", pos2[0].LeavesQty)
+	}
+	if pos2[0].Locks["exit-ord-2"] != 60 {
+		t.Errorf("expected lock for exit-ord-2 to be 60, got %f", pos2[0].Locks["exit-ord-2"])
+	}
+	if pos2[0].AvailableQty() != 100 {
+		t.Errorf("expected AvailableQty 100, got %f", pos2[0].AvailableQty())
+	}
+}

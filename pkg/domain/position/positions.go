@@ -41,6 +41,11 @@ func (ps Positions) UpdateLockOrderID(oldID, newID string) {
 
 // MatchToClose は指定した方向と数量に一致する返済候補の建玉を探します
 func (ps Positions) MatchToClose(action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
+	return ps.MatchToCloseForSniper("", action, qty)
+}
+
+// MatchToCloseForSniper は指定したスナイパーが保有する建玉（または SniperID 未割当の建玉）から返済候補を探します
+func (ps Positions) MatchToCloseForSniper(sniperID string, action order.Action, qty float64) ([]order.ClosePosition, order.ClosePositionOrder) {
 	var closePositions []order.ClosePosition
 	remainingQty := qty
 
@@ -50,6 +55,9 @@ func (ps Positions) MatchToClose(action order.Action, qty float64) ([]order.Clos
 	}
 
 	for _, p := range ps {
+		if sniperID != "" && p.SniperID != "" && p.SniperID != sniperID {
+			continue
+		}
 		if p.Action != targetAction {
 			continue
 		}
@@ -72,8 +80,16 @@ func (ps Positions) MatchToClose(action order.Action, qty float64) ([]order.Clos
 
 // CalculateUnrealizedPnL は評価損益を計算します
 func (ps Positions) CalculateUnrealizedPnL(currentPrice float64) float64 {
+	return ps.CalculateUnrealizedPnLForSniper("", currentPrice)
+}
+
+// CalculateUnrealizedPnLForSniper は指定したスナイパーが保有する建玉の評価損益を計算します
+func (ps Positions) CalculateUnrealizedPnLForSniper(sniperID string, currentPrice float64) float64 {
 	var unrealized float64
 	for _, p := range ps {
+		if sniperID != "" && p.SniperID != "" && p.SniperID != sniperID {
+			continue
+		}
 		pnlFactor := 1.0
 		if p.Action == order.ACTION_SELL {
 			pnlFactor = -1.0
@@ -96,11 +112,11 @@ func (ps Positions) TotalHoldQty() float64 {
 	return total
 }
 
-// TotalHoldQtyForSniper は特定のスナイパーの純保有数量を計算します
+// TotalHoldQtyForSniper は特定のスナイパーの純保有数量を計算します（SniperID 未割当の野良建玉も含む）
 func (ps Positions) TotalHoldQtyForSniper(sniperID string) float64 {
 	var total float64
 	for _, p := range ps {
-		if sniperID != "" && p.SniperID != sniperID {
+		if sniperID != "" && p.SniperID != "" && p.SniperID != sniperID {
 			continue
 		}
 		if p.Action == order.ACTION_SELL {
@@ -117,6 +133,7 @@ func (ps *Positions) Reduce(
 	sellQty float64,
 	sellPrice float64,
 	closePositions []order.ClosePosition,
+	orderID string,
 	recordPnL func(entrySniperID string, pnl float64),
 ) (float64, time.Time, float64) {
 	remainingToSell := sellQty
@@ -126,6 +143,20 @@ func (ps *Positions) Reduce(
 	var totalClosedQty float64
 
 	current := *ps
+
+	reduceOrderLock := func(p *Position, closedQty float64) {
+		if orderID == "" || p.Locks == nil {
+			return
+		}
+		if lockedQty, exists := p.Locks[orderID]; exists {
+			lockedQty -= closedQty
+			if lockedQty <= 0 {
+				delete(p.Locks, orderID)
+			} else {
+				p.Locks[orderID] = lockedQty
+			}
+		}
+	}
 
 	if len(closePositions) > 0 {
 		closeMap := make(map[string]float64)
@@ -163,6 +194,7 @@ func (ps *Positions) Reduce(
 				totalClosedQty += closeQty
 
 				p.LeavesQty -= closeQty
+				reduceOrderLock(&p, closeQty)
 				closeMap[p.ExecutionID] -= closeQty
 				remainingToSell -= closeQty
 
@@ -211,6 +243,7 @@ func (ps *Positions) Reduce(
 				remainingToSell -= p.LeavesQty
 			} else {
 				p.LeavesQty -= remainingToSell
+				reduceOrderLock(&p, remainingToSell)
 				remainingToSell = 0
 				newPositions = append(newPositions, p)
 			}

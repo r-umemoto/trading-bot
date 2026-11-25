@@ -69,15 +69,23 @@ func (a *DefaultDataPool) RecordOrderRTT(d time.Duration) {
 	a.rttMu.Unlock()
 }
 
-// OrderRTTSamples は保持している直近の発注API RTTサンプル(ms)を dst へコピーし、コピー件数を返します。
+// OrderRTTSamples は保持している直近の発注API RTTサンプル(ms)を時系列順（古→新）で dst へコピーし、コピー件数を返します。
 func (a *DefaultDataPool) OrderRTTSamples(dst []float64) int {
 	a.rttMu.RLock()
+	defer a.rttMu.RUnlock()
+
 	n := a.rttCount
 	if n > len(dst) {
 		n = len(dst)
 	}
-	copy(dst[:n], a.rttSamples[:n])
-	a.rttMu.RUnlock()
+	if n == 0 {
+		return 0
+	}
+	// rttIndex は次に書き込む位置（最新サンプルの1つ先）のため、直近 n 件の開始位置をリングバッファ上で逆算する
+	start := (a.rttIndex - n + orderRTTWindowSize) % orderRTTWindowSize
+	for i := 0; i < n; i++ {
+		dst[i] = a.rttSamples[(start+i)%orderRTTWindowSize]
+	}
 	return n
 }
 

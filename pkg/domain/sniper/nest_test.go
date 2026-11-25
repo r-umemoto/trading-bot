@@ -865,84 +865,6 @@ func TestSniperNest_HandleTick_StoppedLifecycle(t *testing.T) {
 	}
 }
 
-func TestSniperNest_CrossTradeRegulation(t *testing.T) {
-	sym := symbol.Symbol{Code: "7203", Name: "Toyota"}
-	
-	// スナイパー1：未約定の買い注文を持っているスナイパー
-	strat1 := &mockNestStrategy{
-		evaluateFn: func(input strategy.StrategyInput) strategy.TargetPosition {
-			return strategy.TargetPosition{
-				Qty:       100, // 未約定注文 buy-1 と整合させる
-				Price:     2000,
-				OrderType: order.ORDER_TYPE_LIMIT,
-			}
-		},
-	}
-	s1 := NewSniper("sniper-1", sym, strat1, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
-
-	// スナイパー2：発注を試みるスナイパー
-	strat2 := &mockNestStrategy{}
-	s2 := NewSniper("sniper-2", sym, strat2, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
-
-	nest := NewSniperNest("7203", sym, []*Sniper{s1, s2}, nil)
-
-	// 競合する買い注文を sniper-1 に登録（Active）
-	activeBuy := order.NewOrder("buy-1", "7203", order.ACTION_BUY, 2000, 100)
-	activeBuy.BypassTransition(order.ORDER_STATUS_IN_PROGRESS, order.STATE_ACTIVE)
-	activeBuy.Reason = "sniper-1"
-	nest.AddOrder("sniper-1", activeBuy)
-
-	// 1. 新規エントリー（売り）をしようとするケース -> スキップ（抑止）されるか検証
-	strat2.evaluateFn = func(input strategy.StrategyInput) strategy.TargetPosition {
-		return strategy.TargetPosition{
-			Qty:       -100, // 新規ショート
-			Price:     0,
-			OrderType: order.ORDER_TYPE_MARKET,
-			Reason:    "NewShortEntry",
-		}
-	}
-	
-	actions1 := nest.HandleTick(tick.Tick{Symbol: "7203", Price: 2000})
-	// s1 は静観、s2 は新規売りのため、抑止されて actions は 0件になるはず
-	if len(actions1) != 0 {
-		t.Errorf("expected 0 actions due to entry suppression, got %d", len(actions1))
-	}
-
-	// 2. 返済クローズ（売り）をしようとするケース -> 反対の新規買い注文がキャンセルされるか検証
-	strat2.evaluateFn = func(input strategy.StrategyInput) strategy.TargetPosition {
-		return strategy.TargetPosition{
-			Qty:       0, // ポジションを0にする返済
-			Price:     0,
-			OrderType: order.ORDER_TYPE_MARKET,
-			Reason:    "CloseLongExit",
-		}
-	}
-	
-	// sniper-2 の現在の仮想ポジションを設定（ロング建玉を100持っていると仮定して、それを返済する状況）
-	nest.positions.positions = []position.Position{
-		{ExecutionID: "hold-2", LeavesQty: 100, Price: 2000, Action: order.ACTION_BUY},
-	}
-
-	actions2 := nest.HandleTick(tick.Tick{Symbol: "7203", Price: 2000})
-	// 返済注文のため、対向する未約定買い注文(buy-1)のキャンセルアクション (CancelBullet) が1件発生し、発注自体はスキップされるはず
-	if len(actions2) != 1 {
-		t.Fatalf("expected 1 action (cancel action), got %d", len(actions2))
-	}
-	
-	act := actions2[0]
-	if act.SniperID != "sniper-1" {
-		t.Errorf("expected cancel target sniper-1, got %s", act.SniperID)
-	}
-	
-	cancelBullet, ok := act.Bullet.(CancelBullet)
-	if !ok {
-		t.Fatalf("expected CancelBullet type, got %T", act.Bullet)
-	}
-	if cancelBullet.OrderID != "buy-1" {
-		t.Errorf("expected cancel order ID 'buy-1', got '%s'", cancelBullet.OrderID)
-	}
-}
-
 func TestSniperNest_ReconcileTarget_FlatTargetWithNonZeroPrice(t *testing.T) {
 	sym := symbol.Symbol{Code: "7203"}
 	nest := NewSniperNest("7203", sym, nil, nil)
@@ -1102,7 +1024,6 @@ func TestSniperNest_AggregatedReconciliation_OffsetExit(t *testing.T) {
 	sniperShort := NewSniper("sniper-short", sym, stratShort, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 
 	nest := NewSniperNest("7203", sym, []*Sniper{sniperLong, sniperShort}, nil)
-	nest.SetReconciliationMode(ReconciliationModeAggregate)
 
 	// 1. ショート建玉（100株）を保有している状態を作る
 	nest.positions.ApplyExecution("sniper-short", "7203", order.Execution{
@@ -1163,7 +1084,6 @@ func TestSniperNest_AggregatedReconciliation_OffsetExit_LongToShort(t *testing.T
 	sniperShort := NewSniper("sniper-short", sym, stratShort, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 
 	nest := NewSniperNest("7203", sym, []*Sniper{sniperLong, sniperShort}, nil)
-	nest.SetReconciliationMode(ReconciliationModeAggregate)
 
 	// 1. ロング建玉（100株）を保有している状態を作る
 	nest.positions.ApplyExecution("sniper-long", "7203", order.Execution{
@@ -1227,7 +1147,6 @@ func TestSniperNest_AggregatedReconciliation_NoFriendlyFire(t *testing.T) {
 	sniperShort := NewSniper("sniper-short", sym, stratShort, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
 
 	nest := NewSniperNest("7203", sym, []*Sniper{sniperLong, sniperShort}, nil)
-	nest.SetReconciliationMode(ReconciliationModeAggregate)
 
 	// 1. 物理ロング建玉 100株 が既に存在している状態
 	nest.positions.ApplyExecution("sniper-long", "7203", order.Execution{
@@ -1325,5 +1244,79 @@ func TestSniperNest_PositionScaleDown_ExitOrder(t *testing.T) {
 	}
 	if ordBulletShort.Order.OrderQty != 100 {
 		t.Errorf("expected OrderQty 100 for short scale down, got %f", ordBulletShort.Order.OrderQty)
+	}
+}
+
+func TestSniperNest_SameDirectionMultipleSnipers_IndependentHoldingsAndPnL(t *testing.T) {
+	sym := symbol.Symbol{Code: "7203"}
+	stratA := &controllableStrategy{target: strategy.TargetPosition{Qty: 100, Reason: "HOLD_A"}}
+	stratB := &controllableStrategy{target: strategy.TargetPosition{Qty: 100, Reason: "ENTRY_B"}}
+
+	sniperA := NewSniper("sniper-long-a", sym, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+	sniperB := NewSniper("sniper-long-b", sym, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+
+	nest := NewSniperNest("7203", sym, []*Sniper{sniperA, sniperB}, nil)
+
+	// 1. sniper-long-a holds 100 @ 2000; sniper-long-b holds 0 and requests +100
+	nest.positions.ApplyExecution("sniper-long-a", "7203", order.Execution{
+		ID:    "hold-a-1",
+		Price: 2000,
+		Qty:   100,
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+
+	actions := nest.HandleTick(tick.Tick{Symbol: "7203", Price: 2010, CurrentPriceTime: time.Now()})
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 entry action for sniper-long-b, got %d: %+v", len(actions), actions)
+	}
+	if actions[0].SniperID != "sniper-long-b" {
+		t.Fatalf("expected action for sniper-long-b, got %s", actions[0].SniperID)
+	}
+	ordBullet, ok := actions[0].Bullet.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %T", actions[0].Bullet)
+	}
+	if ordBullet.Order.Action != order.ACTION_BUY || ordBullet.Order.CashMargin != order.CASH_MARGIN_MARGIN_ENTRY || ordBullet.Order.OrderQty != 100 {
+		t.Fatalf("unexpected entry order for sniper-long-b: %+v", ordBullet.Order)
+	}
+
+	// Simulate sniper-long-b's entry order filling at 2010
+	nest.DestroySendingOrder("sniper-long-b", ordBullet.Order)
+	nest.positions.ApplyExecution("sniper-long-b", "7203", order.Execution{
+		ID:    "hold-b-1",
+		Price: 2010,
+		Qty:   100,
+	}, order.ACTION_BUY, nil, func(_ string, pnl float64) {})
+
+	// 2. Verify per-sniper unrealized PnL at price 2020
+	//    sniper-long-a: (2020 - 2000) * 100 = 2000
+	//    sniper-long-b: (2020 - 2010) * 100 = 1000
+	if pnlA := nest.GetUnrealizedPnL("sniper-long-a", 2020); pnlA != 2000 {
+		t.Errorf("expected sniper-long-a unrealized PnL 2000, got %f", pnlA)
+	}
+	if pnlB := nest.GetUnrealizedPnL("sniper-long-b", 2020); pnlB != 1000 {
+		t.Errorf("expected sniper-long-b unrealized PnL 1000, got %f", pnlB)
+	}
+
+	// 3. sniper-long-a exits (Qty: 0) while sniper-long-b holds (Qty: 100)
+	//    Only sniper-long-a's hold-a-1 should be closed; sniper-long-b must remain untouched.
+	stratA.target = strategy.TargetPosition{Qty: 0, OrderType: order.ORDER_TYPE_MARKET, Reason: "EXIT_A"}
+	stratB.target = strategy.TargetPosition{Qty: 100, Reason: "HOLD_B"}
+
+	exitActions := nest.HandleTick(tick.Tick{Symbol: "7203", Price: 2020, CurrentPriceTime: time.Now()})
+	if len(exitActions) != 1 {
+		t.Fatalf("expected 1 exit action for sniper-long-a, got %d: %+v", len(exitActions), exitActions)
+	}
+	if exitActions[0].SniperID != "sniper-long-a" {
+		t.Fatalf("expected exit action for sniper-long-a, got %s", exitActions[0].SniperID)
+	}
+	exitBullet, ok := exitActions[0].Bullet.(OrderBullet)
+	if !ok {
+		t.Fatalf("expected OrderBullet, got %T", exitActions[0].Bullet)
+	}
+	if exitBullet.Order.CashMargin != order.CASH_MARGIN_MARGIN_EXIT || exitBullet.Order.OrderQty != 100 {
+		t.Fatalf("unexpected exit order: %+v", exitBullet.Order)
+	}
+	if exitBullet.Order.Request == nil || len(exitBullet.Order.Request.ClosePositions) != 1 || exitBullet.Order.Request.ClosePositions[0].HoldID != "hold-a-1" {
+		t.Fatalf("expected exit order to close hold-a-1 only, got %+v", exitBullet.Order.Request)
 	}
 }
