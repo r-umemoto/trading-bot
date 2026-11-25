@@ -130,3 +130,31 @@ func TestAsyncWriter_TickerFlush(t *testing.T) {
 		t.Errorf("expected ticker to flush %q, got %q", string(msg), buf.String())
 	}
 }
+
+func TestAsyncWriter_ConcurrentWriteFlushAndClose(t *testing.T) {
+	buf := &safeBuffer{}
+	aw := logger.NewAsyncWriter(buf, 256)
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				_, err := aw.Write([]byte(fmt.Sprintf("g%d-%d\n", gid, i)))
+				if err == logger.ErrClosed {
+					return
+				}
+				if i%25 == 0 {
+					_ = aw.Flush()
+				}
+			}
+		}(g)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	if err := aw.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	wg.Wait()
+}
