@@ -550,3 +550,93 @@ func TestPairTradingOperation_HandleTick_ScalingAndRounding(t *testing.T) {
 	})
 }
 
+func TestPairTradingOperation_SafetyGuards_LeggingStopLossEOD(t *testing.T) {
+	newPairOp := func() (*PairTradingOperation, *SniperNest, *SniperNest, tick.DataPool) {
+		detailA := symbol.Symbol{Code: "7203"}
+		detailB := symbol.Symbol{Code: "7267"}
+		stratA := NewInstructionStrategy()
+		stratB := NewInstructionStrategy()
+		sniperA := NewSniper("sniper-a", detailA, stratA, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+		sniperB := NewSniper("sniper-b", detailB, stratB, &strategy.NoopPolicy{}, order.EXCHANGE_TOSHO, nil)
+		nestA := NewSniperNest("7203", detailA, []*Sniper{sniperA}, nil)
+		nestB := NewSniperNest("7267", detailB, []*Sniper{sniperB}, nil)
+		dp := tick.NewDefaultDataPool(&DummyHistoricalFeederProvider{})
+		op := NewPairTradingOperation("test-pair-safety", nestA, nestB, stratA, stratB, dp, 0.01, 100.0, slog.Default())
+		return op, nestA, nestB, dp
+	}
+
+	t.Run("Legging unwind when only leg A filled and leg B has no active orders", func(t *testing.T) {
+		op, nestA, _, dp := newPairOp()
+		nestA.positions.positions = []position.Position{
+			{ExecutionID: "exec-a", SniperID: "sniper-a", Symbol: "7203", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_BUY},
+		}
+		now := time.Date(2026, 6, 1, 10, 30, 0, 0, pairTradingJST)
+		tickA := tick.Tick{Symbol: "7203", Price: 1015.0, OpeningPrice: 1000.0, CurrentPriceTime: now}
+		tickB := tick.Tick{Symbol: "7267", Price: 1000.0, OpeningPrice: 1000.0, CurrentPriceTime: now}
+		dp.PushTick(tickA)
+		dp.PushTick(tickB)
+
+		actions := op.HandleTick(tickA)
+		if len(actions) != 1 {
+			t.Fatalf("expected 1 unwind action for leg A, got %d: %+v", len(actions), actions)
+		}
+		if actions[0].SniperID != "sniper-a" {
+			t.Errorf("expected unwind on sniper-a, got %s", actions[0].SniperID)
+		}
+		b, ok := actions[0].Bullet.(OrderBullet)
+		if !ok || b.Order.CashMargin != order.CASH_MARGIN_MARGIN_EXIT || b.Order.Action != order.ACTION_SELL {
+			t.Errorf("expected SELL exit order for leg A unwind, got %+v", actions[0].Bullet)
+		}
+	})
+
+	t.Run("Stop loss triggers when spread widens >= 2.5x threshold", func(t *testing.T) {
+		op, nestA, nestB, dp := newPairOp()
+		nestA.positions.positions = []position.Position{
+			{ExecutionID: "exec-a", SniperID: "sniper-a", Symbol: "7203", LeavesQty: 100, Price: 1010.0, Action: order.ACTION_SELL},
+		}
+		nestB.positions.positions = []position.Position{
+			{ExecutionID: "exec-b", SniperID: "sniper-b", Symbol: "7267", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_BUY},
+		}
+		now := time.Date(2026, 6, 1, 10, 30, 0, 0, pairTradingJST)
+		// Spread = 0.03 >= 0.01 * 2.5 = 0.025 -> stop loss
+		tickA := tick.Tick{Symbol: "7203", Price: 1030.0, OpeningPrice: 1000.0, CurrentPriceTime: now}
+		tickB := tick.Tick{Symbol: "7267", Price: 1000.0, OpeningPrice: 1000.0, CurrentPriceTime: now}
+		dp.PushTick(tickA)
+		dp.PushTick(tickB)
+
+		actions := op.HandleTick(tickA)
+		if len(actions) != 2 {
+			t.Fatalf("expected 2 stop-loss exit actions, got %d", len(actions))
+		}
+	})
+
+	t.Run("EOD force exit at 14:50 JST even when spread has not reverted", func(t *testing.T) {
+		op, nestA, nestB, dp := newPairOp()
+		nestA.positions.positions = []position.Position{
+			{ExecutionID: "exec-a", SniperID: "sniper-a", Symbol: "7203", LeavesQty: 100, Price: 1010.0, Action: order.ACTION_SELL},
+		}
+		nestB.positions.positions = []position.Position{
+			{ExecutionID: "exec-b", SniperID: "sniper-b", Symbol: "7267", LeavesQty: 100, Price: 1000.0, Action: order.ACTION_BUY},
+		}
+		now := time.Date(2026, 6, 1, 14, 50, 0, 0, pairTradingJST)
+		// Spread = 0.015 (not reverted, not stop-loss, but >= 14:50 JST)
+		tickA := tick.Tick{Symbol: "7203", Price: 1015.0, OpeningPrice: 1000.0, CurrentPriceTime: now}
+		tickB := tick.Tick{Symbol: "7267", Price: 1000.0, OpeningPrice: 1000.0, CurrentPriceTime: now}
+		dp.PushTick(tickA)
+		dp.PushTick(tickB)
+
+		actions := op.HandleTick(tickA)
+		if len(actions) != 2 {
+			t.Fatalf("expected 2 EOD exit actions, got %d", len(actions))
+		}
+	})
+
+	t.Run("OrderlyExit transitions snipers to LifecycleExiting", func(t *testing.T) {
+		op, nestA, nestB, _ := newPairOp()
+		op.OrderlyExit()
+		if nestA.snipers[0].GetLifecycle() != LifecycleExiting || nestB.snipers[0].GetLifecycle() != LifecycleExiting {
+			t.Errorf("expected both snipers to be LifecycleExiting")
+		}
+	})
+}
+

@@ -193,7 +193,7 @@ func RunBacktest() error {
 	// 4. スナイパーの配備
 	var snipers []*sniper.Sniper
 	snipersBySymbol := make(map[string][]*sniper.Sniper)
-	pairSnipersBySymbol := make(map[string]*sniper.Sniper)
+	pairSnipersBySymbol := make(map[string][]*sniper.Sniper)
 
 	for _, sym := range watchList {
 		factory, err := strategy.GetFactory(sym.StrategyName)
@@ -224,7 +224,7 @@ func RunBacktest() error {
 		s := sniper.NewSniper(sniperID, sym.Detail, st, policy, sym.Exchange, analysisLogger)
 		snipers = append(snipers, s)
 		if s.Strategy.Name() == "InstructionStrategy" {
-			pairSnipersBySymbol[s.Detail.Code] = s
+			pairSnipersBySymbol[s.Detail.Code] = append(pairSnipersBySymbol[s.Detail.Code], s)
 		} else {
 			snipersBySymbol[s.Detail.Code] = append(snipersBySymbol[s.Detail.Code], s)
 		}
@@ -251,10 +251,15 @@ func RunBacktest() error {
 			threshold, _ := op.Params["threshold"].(float64)
 			qty, _ := op.Params["qty"].(float64)
 
-			sniperA, okA := pairSnipersBySymbol[symbolA]
-			sniperB, okB := pairSnipersBySymbol[symbolB]
+			listA := pairSnipersBySymbol[symbolA]
+			listB := pairSnipersBySymbol[symbolB]
 
-			if okA && okB {
+			if len(listA) > 0 && len(listB) > 0 {
+				sniperA := listA[0]
+				pairSnipersBySymbol[symbolA] = listA[1:]
+				sniperB := listB[0]
+				pairSnipersBySymbol[symbolB] = listB[1:]
+
 				nestA := sniper.NewSniperNest(symbolA, sniperA.Detail, []*sniper.Sniper{sniperA}, sniperA.Logger)
 				nestB := sniper.NewSniperNest(symbolB, sniperB.Detail, []*sniper.Sniper{sniperB}, sniperB.Logger)
 
