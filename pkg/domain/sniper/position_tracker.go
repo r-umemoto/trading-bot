@@ -213,7 +213,9 @@ func (pt *PositionTracker) GetCopy() []position.Position {
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 	posCopy := make([]position.Position, len(pt.positions))
-	copy(posCopy, pt.positions)
+	for i, p := range pt.positions {
+		posCopy[i] = p.Clone()
+	}
 	return posCopy
 }
 

@@ -19,23 +19,25 @@ type CleanableTarget interface {
 
 // PositionCleaner はシステムの起動・強制撤退・終了時に、不要な建玉を強制決済してお掃除するアプリケーションサービスです。
 type PositionCleaner struct {
-	targets       []CleanableTarget
-	marketGateway market.MarketGateway
-	mu            sync.Mutex
-	cancelWait    time.Duration
-	startupWait   time.Duration
-	retryWait     time.Duration
-	orderInterval time.Duration
+	targets          []CleanableTarget
+	marketGateway    market.MarketGateway
+	mu               sync.Mutex
+	canceledOrderIDs map[string]bool
+	cancelWait       time.Duration
+	startupWait      time.Duration
+	retryWait        time.Duration
+	orderInterval    time.Duration
 }
 
 func NewPositionCleaner(targets []CleanableTarget, marketGateway market.MarketGateway) *PositionCleaner {
 	return &PositionCleaner{
-		targets:       targets,
-		marketGateway: marketGateway,
-		cancelWait:    1 * time.Second,
-		startupWait:   3 * time.Second,
-		retryWait:     10 * time.Second,
-		orderInterval: 200 * time.Millisecond,
+		targets:          targets,
+		marketGateway:    marketGateway,
+		canceledOrderIDs: make(map[string]bool),
+		cancelWait:       1 * time.Second,
+		startupWait:      3 * time.Second,
+		retryWait:        10 * time.Second,
+		orderInterval:    200 * time.Millisecond,
 	}
 }
 
@@ -156,10 +158,16 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 			}
 			for _, o := range ordersToCancel {
 				if o != nil && !o.IsCompleted() && !o.IsCancelSent() {
+					if c.canceledOrderIDs != nil && c.canceledOrderIDs[o.ID] {
+						continue
+					}
 					// 🌟 取引所にまだ送信されていない仮注文は、APIキャンセルを送らずにローカルでCANCELED状態にする
 					if o.IsPending() {
 						o.ToCanceled()
 						o.ToClosed()
+						if c.canceledOrderIDs != nil {
+							c.canceledOrderIDs[o.ID] = true
+						}
 						continue
 					}
 					fmt.Printf("🛑 [%s] 注文(ID: %s)をキャンセル中...\n", symbolCode, o.ID)
@@ -168,9 +176,12 @@ func (c *PositionCleaner) CleanAllPositions(ctx context.Context) error {
 						fmt.Printf("❌ [%s] キャンセルエラー: %v\n", symbolCode, err)
 					} else {
 						// 🌟 強制的にCANCELEDにBypassするのではなく、通常のドメインルールに従ってToCancelSentに遷移させる。
-						// その後、バックグラウンドのポーリングで取引所からCANCELED（FINISHED）が同期されるのを待つ。
+						// GetActiveOrders() がクローンを返す場合でも再実行時に重複キャンセルしないようIDを記録する。
 						o.ToCancelSent()
 						o.CancelSentAt = time.Now()
+						if c.canceledOrderIDs != nil {
+							c.canceledOrderIDs[o.ID] = true
+						}
 					}
 					if err := sleepWithContext(ctx, c.orderInterval); err != nil {
 						return err
