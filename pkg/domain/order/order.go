@@ -682,6 +682,30 @@ func (o *Order) IsEligibleForSyntheticFill() bool {
 	return !o.IsCompleted() && !o.IsCancelSent()
 }
 
+// Clone は Order のディープコピーを返します（並行ゴルーチン間でのポインタ共有・Data Race 防止用）。
+func (o *Order) Clone() *Order {
+	if o == nil {
+		return nil
+	}
+	cp := *o
+	if len(o.Executions) > 0 {
+		cp.Executions = make([]Execution, len(o.Executions))
+		copy(cp.Executions, o.Executions)
+	}
+	if o.Request != nil {
+		reqCopy := *o.Request
+		if len(o.Request.ClosePositions) > 0 {
+			reqCopy.ClosePositions = make([]ClosePosition, len(o.Request.ClosePositions))
+			copy(reqCopy.ClosePositions, o.Request.ClosePositions)
+		}
+		cp.Request = &reqCopy
+	}
+	if o.IfDone != nil {
+		cp.IfDone = o.IfDone.Clone()
+	}
+	return &cp
+}
+
 
 
 

@@ -110,11 +110,17 @@ func (d *OrderDispatcher) Submit(jobID string, symbol string, ord *order.Order, 
 		return resCh
 	}
 
+	var jobOrder *order.Order
+	if ord != nil {
+		// 呼び出し元の *order.Order とインフラ層の非同期実行でポインタを共有しないようディープコピーする
+		jobOrder = ord.Clone()
+	}
+
 	d.pendingJobs = append(d.pendingJobs, &OrderJob{
 		Key:         jobID,
 		Symbol:      symbol,
 		OrderID:     cancelID,
-		OrderPtr:    ord,
+		OrderPtr:    jobOrder,
 		Priority:    priority,
 		UpdateCount: updateCount,
 		RequestedAt: requestedAt,

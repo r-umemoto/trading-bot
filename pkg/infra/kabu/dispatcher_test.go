@@ -364,3 +364,44 @@ func TestOrderDispatcher_InFlightDeduplication(t *testing.T) {
 	}
 }
 
+func TestOrderDispatcher_DoesNotMutateCallerOrderPointer(t *testing.T) {
+	sender := &MockSender{}
+	dispatcher := NewOrderDispatcher(sender)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dispatcher.Start(ctx)
+
+	callerOrd := order.NewOrder("loc-1", "7203", order.ACTION_BUY, 2500, 100)
+	resCh := dispatcher.Submit("entry_7203_BUY", callerOrd.Symbol, callerOrd, "", 10)
+
+	// 送信完了を待つ間、呼び出し元が元のポインタを並行で読んでも Data Race が起きないこと
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			_ = callerOrd.ID
+			_ = callerOrd.Status()
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case res := <-resCh:
+		if res.Error != nil {
+			t.Fatalf("expected success, got: %v", res.Error)
+		}
+		if res.OrderID != "server-loc-1" {
+			t.Errorf("expected res.OrderID 'server-loc-1', got %s", res.OrderID)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for dispatcher result")
+	}
+	<-done
+
+	// 呼び出し元の元の Order ポインタが破壊されていないこと
+	if callerOrd.ID != "loc-1" {
+		t.Errorf("expected caller order ID to remain 'loc-1', got %s", callerOrd.ID)
+	}
+}
+

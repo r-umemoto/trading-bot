@@ -371,9 +371,10 @@ func TestSniperNest_UpdateAndObserve(t *testing.T) {
 
 func TestSniperNest_Tick_Timeout(t *testing.T) {
 	detail := symbol.Symbol{Code: "9434"}
-	nest := NewSniperNest("9434", detail, nil, nil)
 	policy := &strategy.TouchTTLPolicy{TTL: 2 * time.Second}
 	sniperID := "test-sniper"
+	s := NewSniper(sniperID, detail, NewInstructionStrategy(), policy, order.EXCHANGE_TOSHO, nil)
+	nest := NewSniperNest("9434", detail, []*Sniper{s}, nil)
 
 	ord := order.NewOrder("test-order", "9434", order.ACTION_BUY, 2000, 100)
 	ord.BypassTransition(order.ORDER_STATUS_FILL_EXPECTED, order.STATE_ACTIVE)
@@ -382,11 +383,13 @@ func TestSniperNest_Tick_Timeout(t *testing.T) {
 	}
 	nest.AddOrder(sniperID, ord)
 
-	ApplyPolicyHelper(policy, nest.GetSniperActiveOrders(sniperID), tick.Tick{Price: 2000, CurrentPriceTime: time.Now()})
-	nest.PrepareObservation(sniperID, tick.Tick{Price: 2000, CurrentPriceTime: time.Now()})
-
-	if ord.Status() != order.ORDER_STATUS_WAITING {
-		t.Errorf("expected status to revert to WAITING, got %v", ord.Status())
+	nest.evaluateSyntheticFills(s, tick.Tick{Price: 2000, CurrentPriceTime: time.Now()})
+	active := nest.GetSniperActiveOrders(sniperID)
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active order, got %d", len(active))
+	}
+	if active[0].Status() != order.ORDER_STATUS_WAITING {
+		t.Errorf("expected status to revert to WAITING, got %v", active[0].Status())
 	}
 }
 

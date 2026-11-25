@@ -79,10 +79,26 @@ func (ot *OrderTracker) GetAllActive() []*order.Order {
 	return all
 }
 
+func matchesTrackedOrder(o, target *order.Order) bool {
+	if o == nil || target == nil {
+		return false
+	}
+	if o == target {
+		return true
+	}
+	if target.LocalID != "" && o.LocalID == target.LocalID {
+		return true
+	}
+	if target.ID != "" && o.ID == target.ID {
+		return true
+	}
+	return false
+}
+
 func (ot *OrderTracker) FailOrder(sniperID string, ord *order.Order) bool {
 	orders := ot.activeOrders[sniperID]
 	for i, o := range orders {
-		if o == ord {
+		if matchesTrackedOrder(o, ord) {
 			ot.activeOrders[sniperID] = append(orders[:i], orders[i+1:]...)
 			ot.tombstones[sniperID] = append(ot.tombstones[sniperID], tombstoneEntry{
 				ord:       o,
@@ -102,7 +118,7 @@ func (ot *OrderTracker) FailOrder(sniperID string, ord *order.Order) bool {
 func (ot *OrderTracker) DestroyOrder(sniperID string, ord *order.Order) bool {
 	orders := ot.activeOrders[sniperID]
 	for i, o := range orders {
-		if o == ord {
+		if matchesTrackedOrder(o, ord) {
 			ot.activeOrders[sniperID] = append(orders[:i], orders[i+1:]...)
 			if ot.positions != nil {
 				ot.positions.UnlockPositions(o.ID)
@@ -116,8 +132,11 @@ func (ot *OrderTracker) DestroyOrder(sniperID string, ord *order.Order) bool {
 func (ot *OrderTracker) UpdateOrderID(sniperID string, ord *order.Order, newID string) {
 	orders := ot.activeOrders[sniperID]
 	for _, o := range orders {
-		if o == ord || o.ID == ord.ID {
+		if matchesTrackedOrder(o, ord) {
 			o.ID = newID
+			if o.IsPending() {
+				o.ToActive()
+			}
 			break
 		}
 	}
@@ -126,7 +145,7 @@ func (ot *OrderTracker) UpdateOrderID(sniperID string, ord *order.Order, newID s
 func (ot *OrderTracker) RevertOrderStatus(sniperID string, ord *order.Order, status order.OrderStatus) {
 	orders := ot.activeOrders[sniperID]
 	for _, o := range orders {
-		if o == ord || o.ID == ord.ID {
+		if matchesTrackedOrder(o, ord) {
 			o.BypassTransition(status, o.InternalState())
 			break
 		}

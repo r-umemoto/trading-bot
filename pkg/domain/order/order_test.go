@@ -2,6 +2,7 @@ package order_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -649,5 +650,89 @@ func TestOrder_Transitions_ExtraPanics(t *testing.T) {
 		o.BypassTransition(order.ORDER_STATUS_CANCEL_SENT, order.STATE_CANCELING)
 		o.ToFillExpected()
 	})
+}
+
+func TestOrder_Clone_DeepCopyAndReferenceFieldGuard(t *testing.T) {
+	// 1. 構造体定義ガード:
+	// Order / OrderRequest / ネストされた値構造体に新しい参照型フィールド (Slice, Map, Ptr 等) が追加された場合、
+	// Order.Clone() へのディープコピー追記漏れを検知してテストを失敗させる。
+	handledRefFields := map[string]bool{
+		"Order.Executions":            true,
+		"Order.IfDone":                true,
+		"Order.Request":               true,
+		"OrderRequest.ClosePositions": true,
+	}
+
+	timeType := reflect.TypeOf(time.Time{})
+	var inspectStruct func(rt reflect.Type)
+	inspectStruct = func(rt reflect.Type) {
+		for i := 0; i < rt.NumField(); i++ {
+			f := rt.Field(i)
+			ft := f.Type
+			if ft == timeType {
+				continue
+			}
+			key := rt.Name() + "." + f.Name
+			switch ft.Kind() {
+			case reflect.Slice, reflect.Map, reflect.Ptr, reflect.Chan, reflect.Interface:
+				if !handledRefFields[key] {
+					t.Errorf("unhandled reference-type field %s (%s): Order.Clone() にディープコピー処理を追加し、本テストの handledRefFields にも登録してください", key, ft.String())
+				}
+			case reflect.Struct:
+				inspectStruct(ft)
+			}
+		}
+	}
+
+	inspectStruct(reflect.TypeOf(order.Order{}))
+	inspectStruct(reflect.TypeOf(order.OrderRequest{}))
+	inspectStruct(reflect.TypeOf(order.Execution{}))
+
+	// 2. 実際のディープコピー動作検証
+	var nilOrd *order.Order
+	if nilOrd.Clone() != nil {
+		t.Fatal("expected nil.Clone() to return nil")
+	}
+
+	child := order.NewOrder("child-1", "7203", order.ACTION_SELL, 2520, 100,
+		order.WithCashMargin(order.CASH_MARGIN_MARGIN_EXIT),
+		order.WithRequest(&order.OrderRequest{
+			Exchange:       order.EXCHANGE_TOSHO,
+			ClosePositions: []order.ClosePosition{{HoldID: "H1", Qty: 100}},
+		}),
+	)
+	orig := order.NewOrder("local-1", "7203", order.ACTION_BUY, 2500, 100,
+		order.WithRequest(&order.OrderRequest{
+			Exchange:       order.EXCHANGE_TOSHO,
+			ClosePositions: []order.ClosePosition{{HoldID: "H0", Qty: 100}},
+		}),
+	)
+	orig.AddExecution(order.Execution{ID: "E1", Price: 2500, Qty: 100, ExecutionTime: time.Now()})
+	orig.IfDone = child
+
+	cloned := orig.Clone()
+
+	// クローン側を書き換えても元オブジェクトに影響しないこと
+	cloned.ID = "server-999"
+	cloned.Executions[0].Price = 9999
+	cloned.Request.ClosePositions[0].Qty = 999
+	cloned.IfDone.ID = "child-mutated"
+	cloned.IfDone.Request.ClosePositions[0].HoldID = "H_MUTATED"
+
+	if orig.ID != "local-1" {
+		t.Errorf("orig.ID was mutated: %s", orig.ID)
+	}
+	if orig.Executions[0].Price != 2500 {
+		t.Errorf("orig.Executions was mutated: %f", orig.Executions[0].Price)
+	}
+	if orig.Request.ClosePositions[0].Qty != 100 {
+		t.Errorf("orig.Request.ClosePositions was mutated: %f", orig.Request.ClosePositions[0].Qty)
+	}
+	if orig.IfDone.ID != "child-1" {
+		t.Errorf("orig.IfDone.ID was mutated: %s", orig.IfDone.ID)
+	}
+	if orig.IfDone.Request.ClosePositions[0].HoldID != "H1" {
+		t.Errorf("orig.IfDone.Request.ClosePositions was mutated: %s", orig.IfDone.Request.ClosePositions[0].HoldID)
+	}
 }
 
