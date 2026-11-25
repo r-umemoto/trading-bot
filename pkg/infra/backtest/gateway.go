@@ -15,10 +15,21 @@ import (
 type ExecutionModel string
 
 const (
-	ExecutionModelPrice  ExecutionModel = "price"  // 価格のみ（指値に届けば約定）
-	ExecutionModelVolume ExecutionModel = "volume" // 板の厚みを考慮
-	ExecutionModelTouch  ExecutionModel = "touch"  // 旧名称との互換性（Priceと同じ扱い）
+	ExecutionModelPrice       ExecutionModel = "price"       // 価格のみ（指値に届けば約定）
+	ExecutionModelVolume      ExecutionModel = "volume"      // 板の厚みを考慮
+	ExecutionModelTouch       ExecutionModel = "touch"       // 旧名称との互換性（Priceと同じ扱い）
+	ExecutionModelPessimistic ExecutionModel = "pessimistic" // 悲観モデル（同値タッチでは約定せず、指値を突き抜けた場合のみ約定）
 )
+
+// IsValidExecutionModel は指定された約定モデルがサポートされているか判定します。
+func IsValidExecutionModel(m ExecutionModel) bool {
+	switch m {
+	case ExecutionModelPrice, ExecutionModelVolume, ExecutionModelTouch, ExecutionModelPessimistic:
+		return true
+	default:
+		return false
+	}
+}
 
 // SyncBacktestGateway は逐次的に実行されるバックテスト用のゲートウェイです。
 type SyncBacktestGateway struct {
@@ -50,6 +61,9 @@ type SyncBacktestGateway struct {
 	// 建玉管理
 	positions map[string][]position.Position
 
+	// 銘柄マスタ情報（呼値テーブル等）
+	symbols map[string]symbol.Symbol
+
 	// 前日終値データ
 	previousCloses map[string]float64
 }
@@ -71,10 +85,22 @@ func NewSyncBacktestGateway(model ExecutionModel, latency time.Duration) *SyncBa
 		cancelRequested:      make(map[string]bool),
 		simulateCancelSilent: make(map[string]bool),
 		positions:            make(map[string][]position.Position),
+		symbols:              make(map[string]symbol.Symbol),
 		previousCloses:       make(map[string]float64),
 	}
 	g.dataPool = tick.NewDefaultDataPool(&backtestHistoricalFeederProvider{gateway: g})
 	return g
+}
+
+// SetSymbol はバックテストで使用する銘柄属性（PriceRangeGroup等）を登録します。
+func (g *SyncBacktestGateway) SetSymbol(sym symbol.Symbol) {
+	if g.symbols == nil {
+		g.symbols = make(map[string]symbol.Symbol)
+	}
+	if sym.PriceRangeGroup == 0 {
+		sym.PriceRangeGroup = symbol.PRICE_RANGE_GROUP_TSE_STANDARD
+	}
+	g.symbols[sym.Code] = sym
 }
 
 // InjectCancelSilentFault は指定された注文IDに対してキャンセル成功通知を握りつぶす障害を注入します
@@ -240,17 +266,31 @@ func (g *SyncBacktestGateway) UnregisterSymbolAll(ctx context.Context) error {
 }
 
 func (g *SyncBacktestGateway) GetSymbol(ctx context.Context, symbolCode string, exchange order.ExchangeMarket) (symbol.Symbol, error) {
-	return symbol.Symbol{Code: symbolCode}, nil
+	if sym, ok := g.symbols[symbolCode]; ok {
+		return sym, nil
+	}
+	return symbol.Symbol{
+		Code:            symbolCode,
+		PriceRangeGroup: symbol.PRICE_RANGE_GROUP_TSE_STANDARD,
+	}, nil
 }
 
 func (g *SyncBacktestGateway) ProcessTick(t tick.Tick) {
 	g.currentTime = t.CurrentPriceTime
 	volDelta := 0.0
 	if lastVol, ok := g.lastTotalVolumes[t.Symbol]; ok {
-		volDelta = t.TradingVolume - lastVol
+		if t.TradingVolume >= lastVol {
+			volDelta = t.TradingVolume - lastVol
+		} else if t.TradingVolume > 0 {
+			// 日替わり・複数日結合CSV等で出来高がリセットされた場合、負の差分を防ぎ現在出来高を増分とする
+			volDelta = t.TradingVolume
+		}
 	}
 	g.lastTotalVolumes[t.Symbol] = t.TradingVolume
 	g.lastTicks[t.Symbol] = t
+	if t.PreviousClose > 0 && g.previousCloses[t.Symbol] == 0 {
+		g.previousCloses[t.Symbol] = t.PreviousClose
+	}
 
 	if g.dataPool != nil {
 		g.dataPool.PushTick(t)
@@ -346,6 +386,10 @@ func (g *SyncBacktestGateway) ProcessTick(t tick.Tick) {
 }
 
 func (g *SyncBacktestGateway) tryExecuteVolume(id string, volDelta float64, price float64) bool {
+	if g.Model == ExecutionModelPessimistic && g.orderTypes[id] != order.ORDER_TYPE_MARKET {
+		// 悲観モデルでは同値タッチでの約定を認めない（指値突き抜けのみ約定）
+		return false
+	}
 	if g.Model == ExecutionModelPrice || g.Model == ExecutionModelTouch || g.orderTypes[id] == order.ORDER_TYPE_MARKET {
 		g.executeAll(id, price)
 		return true

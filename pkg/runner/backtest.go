@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -58,6 +59,9 @@ func RunBacktest() error {
 	}
 
 	execModel := backtest.ExecutionModel(execModelStr)
+	if !backtest.IsValidExecutionModel(execModel) {
+		return fmt.Errorf("未対応の約定モデルです: %q (利用可能: price, touch, pessimistic, volume)", execModelStr)
+	}
 	latency := time.Duration(latencyMs) * time.Millisecond
 
 	fmt.Printf("戦略のバックテストを開始します... (データ: %s, 約定モデル: %s, 遅延: %v)\n", csvPath, execModel, latency)
@@ -96,12 +100,28 @@ func RunBacktest() error {
 	tickCh := gateway.TickCh()
 	orderReportCh := gateway.OrderCh()
 
-	// 2. 有効化されたマスタ銘柄マップの構築
+	// 2. 有効化されたマスタ銘柄マップの構築と呼値グループ（PriceRangeGroup）の登録
 	enabledAssets := make(map[string]portfolio.SymbolTarget)
 	for _, t := range targets {
 		if t.Enabled {
 			enabledAssets[t.Symbol] = t
 		}
+	}
+	inferredGroups := inferPriceRangeGroupsFromCSV(csvPath, enabledAssets)
+	for code, asset := range enabledAssets {
+		prg := asset.PriceRangeGroup
+		if prg == 0 {
+			if inferred, ok := inferredGroups[code]; ok {
+				prg = inferred
+			} else {
+				prg = symbol.PRICE_RANGE_GROUP_TSE_STANDARD
+			}
+		}
+		gateway.SetSymbol(symbol.Symbol{
+			Code:            code,
+			Name:            asset.Name,
+			PriceRangeGroup: prg,
+		})
 	}
 
 	// 3. 監視リスト (watchList) の自動構築
@@ -283,13 +303,6 @@ func RunBacktest() error {
 		slog.Warn("作戦に未登録のスナイパーをフォールバック作戦として自動配備しました", slog.String("symbol", symbol))
 	}
 
-	// PositionCleaner の起動 (Gatewayに依存するため)
-	cleanableTargets := make([]usecase.CleanableTarget, len(operations))
-	for i, op := range operations {
-		cleanableTargets[i] = op
-	}
-	usecase.NewPositionCleaner(cleanableTargets, gateway)
-
 	// 5. Feederの準備
 	csvTickChan := make(chan tick.Tick, 1000)
 
@@ -396,7 +409,7 @@ func RunBacktest() error {
 	fmt.Printf("バックテスト完了: 総処理Tick数 %d件\n", tickCount)
 
 	// 結果の出力
-	positions, err := gateway.GetPositions(context.Background(), order.PRODICT_CASH)
+	positions, err := gateway.GetPositions(context.Background(), order.PRODUCT_MARGIN)
 	if err != nil {
 		return fmt.Errorf("最終建玉情報の取得に失敗しました: %w", err)
 	}
@@ -447,14 +460,101 @@ func (p *backtestPerformanceProvider) GetUnrealizedPnL(sniperID string, currentP
 	return 0
 }
 
+var jstLocation = time.FixedZone("JST", 9*60*60)
+
+// inferPriceRangeGroupsFromCSV はCSV冒頭の価格・板情報から銘柄ごとの呼値グループ（標準 / TOPIX100）を推定します。
+// 東証標準の呼値刻みで割り切れない価格（例: 3000円以下の0.1/0.5円刻み、3001-5000円の1円刻み等）が観測された場合は TOPIX100 と判定します。
+func inferPriceRangeGroupsFromCSV(csvPath string, enabledAssets map[string]portfolio.SymbolTarget) map[string]symbol.PriceRangeGroup {
+	result := make(map[string]symbol.PriceRangeGroup, len(enabledAssets))
+	for code, asset := range enabledAssets {
+		if asset.PriceRangeGroup != 0 {
+			result[code] = asset.PriceRangeGroup
+		} else {
+			result[code] = symbol.PRICE_RANGE_GROUP_TSE_STANDARD
+		}
+	}
+
+	file, err := os.Open(csvPath)
+	if err != nil {
+		return result
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	if _, err := reader.Read(); err != nil { // skip header
+		return result
+	}
+
+	stdSym := symbol.Symbol{PriceRangeGroup: symbol.PRICE_RANGE_GROUP_TSE_STANDARD}
+	seenPerSymbol := make(map[string]int, len(enabledAssets))
+	const maxSamplesPerSymbol = 200
+	const maxRowsToScan = 20000
+
+	checkPrice := func(code string, p float64) {
+		if p <= 0 || result[code] == symbol.PRICE_RANGE_GROUP_TSE_TOPIX100 {
+			return
+		}
+		stdTick := stdSym.CalcTickSize(p)
+		if stdTick <= 0 {
+			return
+		}
+		rem := math.Mod(p, stdTick)
+		if rem > 1e-6 && math.Abs(rem-stdTick) > 1e-6 {
+			result[code] = symbol.PRICE_RANGE_GROUP_TSE_TOPIX100
+		}
+	}
+
+	for row := 0; row < maxRowsToScan; row++ {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if len(record) < 9 {
+			continue
+		}
+		code := record[1]
+		asset, ok := enabledAssets[code]
+		if !ok || asset.PriceRangeGroup != 0 {
+			continue
+		}
+		if seenPerSymbol[code] >= maxSamplesPerSymbol {
+			continue
+		}
+		seenPerSymbol[code]++
+
+		if p, err := strconv.ParseFloat(record[2], 64); err == nil {
+			checkPrice(code, p)
+		}
+		if askP, err := strconv.ParseFloat(record[5], 64); err == nil {
+			checkPrice(code, askP)
+		}
+		if bidP, err := strconv.ParseFloat(record[7], 64); err == nil {
+			checkPrice(code, bidP)
+		}
+		if len(record) >= 45 && result[code] != symbol.PRICE_RANGE_GROUP_TSE_TOPIX100 {
+			for i := 0; i < 9; i++ {
+				base := 9 + (i * 4)
+				if p, err := strconv.ParseFloat(record[base], 64); err == nil {
+					checkPrice(code, p)
+				}
+				if p, err := strconv.ParseFloat(record[base+2], 64); err == nil {
+					checkPrice(code, p)
+				}
+			}
+		}
+	}
+
+	return result
+}
+
 func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
-	// 🌟 CSVファイル名から日付 (YYYYMMDD) を抽出。デフォルトは実行当日の日付
-	baseDate := time.Now()
+	// 🌟 CSVファイル名から日付 (YYYYMMDD) を抽出。デフォルトは実行当日のJST日付
+	baseDate := time.Now().In(jstLocation)
 	baseName := filepath.Base(csvPath)
 	for i := 0; i <= len(baseName)-8; i++ {
 		sub := baseName[i : i+8]
 		if _, err := strconv.Atoi(sub); err == nil {
-			if d, err := time.Parse("20060102", sub); err == nil {
+			if d, err := time.ParseInLocation("20060102", sub, jstLocation); err == nil {
 				baseDate = d
 				break
 			}
@@ -474,13 +574,35 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 		return err
 	}
 
-	prevCloseIdx := -1
+	colIdx := make(map[string]int, len(header))
 	for i, col := range header {
-		colClean := strings.ToLower(strings.TrimSpace(col))
-		if colClean == "previousclose" || colClean == "previous_close" || colClean == "前日終値" {
-			prevCloseIdx = i
-			break
+		colIdx[strings.ToLower(strings.TrimSpace(col))] = i
+	}
+	findCol := func(names ...string) int {
+		for _, name := range names {
+			if idx, ok := colIdx[name]; ok {
+				return idx
+			}
 		}
+		return -1
+	}
+
+	statusColIdx := findCol("currentpricestatus", "current_price_status")
+	changeStatusColIdx := findCol("currentpricechangestatus", "current_price_change_status")
+	openingPriceColIdx := findCol("openingprice", "opening_price")
+	prevCloseColIdx := findCol("previousclose", "previous_close", "前日終値")
+	tradingValueColIdx := findCol("tradingvalue", "trading_value")
+	mktSellQtyColIdx := findCol("marketordersellqty", "market_order_sell_qty")
+	mktBuyQtyColIdx := findCol("marketorderbuyqty", "market_order_buy_qty")
+	overSellQtyColIdx := findCol("oversellqty", "over_sell_qty")
+	underBuyQtyColIdx := findCol("underbuyqty", "under_buy_qty")
+
+	parseFloatCol := func(record []string, idx int) float64 {
+		if idx < 0 || idx >= len(record) || record[idx] == "" {
+			return 0
+		}
+		v, _ := strconv.ParseFloat(record[idx], 64)
+		return v
 	}
 
 	for {
@@ -493,11 +615,11 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 		}
 
 		parsedTime, _ := time.Parse("15:04:05.000", record[0])
-		// 🌟 抽出した日付と時刻をマージして完全な time.Time を生成
+		// 🌟 抽出した日付と時刻をJST固定でマージして完全な time.Time を生成
 		tickTime := time.Date(
 			baseDate.Year(), baseDate.Month(), baseDate.Day(),
 			parsedTime.Hour(), parsedTime.Minute(), parsedTime.Second(), parsedTime.Nanosecond(),
-			time.Local,
+			jstLocation,
 		)
 		price, _ := strconv.ParseFloat(record[2], 64)
 		volume, _ := strconv.ParseFloat(record[3], 64)
@@ -511,11 +633,11 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 
 		var sellBoard []tick.Quote
 		var buyBoard []tick.Quote
-		statusIdx := 9 // デフォルト（旧フォーマット）
+		fallbackStatusIdx := 9 // デフォルト（旧フォーマット）
 
 		// フル板情報がある場合 (新フォーマット)
 		if len(record) >= 46 {
-			statusIdx = 45
+			fallbackStatusIdx = 45
 			for i := 0; i < 9; i++ {
 				base := 9 + (i * 4)
 				askP, _ := strconv.ParseFloat(record[base], 64)
@@ -533,22 +655,28 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 		}
 
 		status := 1
-		if len(record) > statusIdx {
-			if s, err := strconv.Atoi(record[statusIdx]); err == nil {
+		sIdx := statusColIdx
+		if sIdx < 0 {
+			sIdx = fallbackStatusIdx
+		}
+		if sIdx >= 0 && len(record) > sIdx {
+			if s, err := strconv.Atoi(record[sIdx]); err == nil {
 				status = s
 			}
 		}
 
-		prevClose := 0.0
-		if prevCloseIdx != -1 && len(record) > prevCloseIdx {
-			prevClose, _ = strconv.ParseFloat(record[prevCloseIdx], 64)
+		var changeStatus tick.PriceChangeStatus
+		if changeStatusColIdx >= 0 && len(record) > changeStatusColIdx {
+			changeStatus = tick.PriceChangeStatus(record[changeStatusColIdx])
 		}
 
-		tick := tick.Tick{
+		t := tick.Tick{
 			Symbol:        record[1],
 			Price:         price,
-			PreviousClose: prevClose,
+			OpeningPrice:  parseFloatCol(record, openingPriceColIdx),
+			PreviousClose: parseFloatCol(record, prevCloseColIdx),
 			TradingVolume: volume,
+			TradingValue:  parseFloatCol(record, tradingValueColIdx),
 			VWAP:          vwap,
 			BestAsk: tick.FirstQuote{
 				Price: askPrice,
@@ -558,13 +686,18 @@ func runCustomCSVFeeder(csvPath string, tickChan chan<- tick.Tick) error {
 				Price: bidPrice,
 				Qty:   bidQty,
 			},
-			SellBoard:          sellBoard,
-			BuyBoard:           buyBoard,
-			CurrentPriceTime:   tickTime,
-			CurrentPriceStatus: tick.PriceStatus(status),
+			SellBoard:                sellBoard,
+			BuyBoard:                 buyBoard,
+			CurrentPriceTime:         tickTime,
+			CurrentPriceStatus:       tick.PriceStatus(status),
+			CurrentPriceChangeStatus: changeStatus,
+			MarketOrderSellQty:       parseFloatCol(record, mktSellQtyColIdx),
+			MarketOrderBuyQty:        parseFloatCol(record, mktBuyQtyColIdx),
+			OverSellQty:              parseFloatCol(record, overSellQtyColIdx),
+			UnderBuyQty:              parseFloatCol(record, underBuyQtyColIdx),
 		}
 
-		tickChan <- tick
+		tickChan <- t
 	}
 
 	close(tickChan)
