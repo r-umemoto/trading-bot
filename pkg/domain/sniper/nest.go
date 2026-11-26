@@ -113,6 +113,129 @@ func (n *SniperNest) HandleTick(t tick.Tick) []FireAction {
 	return n.handleTickLegacy(t)
 }
 
+func (n *SniperNest) evaluateSyntheticFills(s *Sniper, t tick.Tick) {
+	policy := s.ExecutionPolicy
+	if policy == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	activeOrders := n.orders.GetActive(s.ID)
+	for _, curr := range activeOrders {
+		if !curr.IsEligibleForSyntheticFill() {
+			continue
+		}
+
+		policy.UpdateState(curr, t)
+
+		if policy.ShouldReset(curr, t) {
+			curr.ResetSynthetic()
+			fmt.Printf("🔄 [%s] 価格が離れたため疑似約定ステータスをリセットしました: %s\n", curr.Symbol, curr.ID)
+			continue
+		}
+
+		if curr.IsFillExpected() {
+			if policy.ShouldTimeout(curr, t) {
+				curr.MarkAsTimedOut()
+				fmt.Printf("💔 [%s] 疑似約定がタイムアウトしました: %s\n", curr.Symbol, curr.ID)
+			}
+			continue
+		}
+
+		if policy.ShouldFill(curr, t) {
+			curr.MarkAsFillExpected(t.CurrentPriceTime)
+			fmt.Printf("⚡ [%s] 疑似約定を検知しました: %s (Price: %f, Tick: %f)\n", curr.Symbol, curr.ID, curr.OrderPrice, t.Price)
+		}
+	}
+}
+
+func (n *SniperNest) commitLegacyBullet(s *Sniper, bullet Bullet) []FireAction {
+	if bullet == nil {
+		return nil
+	}
+
+	ordBullet, ok := bullet.(OrderBullet)
+	if !ok {
+		return []FireAction{{SniperID: s.ID, Bullet: bullet}}
+	}
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	newOrd := ordBullet.Order
+
+	var conflictingOrder *order.Order
+	var conflictingSniperID string
+
+	// 他のスナイパーが持つ「売買方向が反対」の未約定注文を探す
+	for otherSniperID, otherOrders := range n.orders.activeOrders {
+		if otherSniperID == s.ID {
+			continue
+		}
+		for _, actOrd := range otherOrders {
+			if actOrd.Action != newOrd.Action {
+				conflictingOrder = actOrd
+				conflictingSniperID = otherSniperID
+				break
+			}
+		}
+		if conflictingOrder != nil {
+			break
+		}
+	}
+
+	if conflictingOrder != nil {
+		if newOrd.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
+			// 返済（決済）注文を優先するため、競合する反対側の新規指値注文などをキャンセルする
+			n.Logger.Warn("⚠️ [CrossTradeRegulation] 返済注文を優先するため、競合する反対側の未約定注文を自動キャンセルします",
+				slog.String("symbol", n.SymbolCode),
+				slog.String("exit_sniper", s.ID),
+				slog.String("canceling_order_id", conflictingOrder.ID),
+				slog.String("canceling_sniper", conflictingSniperID))
+
+			return []FireAction{{
+				SniperID: conflictingSniperID,
+				Bullet:   CancelBullet{OrderID: conflictingOrder.ID},
+			}}
+		}
+
+		// 新規エントリー注文の場合は、単に発注をスキップして様子見する
+		n.Logger.Warn("⚠️ [CrossTradeRegulation] 不公正取引（自己対当クロス）を防止するため、新規エントリーを一時的に抑止します",
+			slog.String("symbol", n.SymbolCode),
+			slog.String("entry_sniper", s.ID),
+			slog.String("conflicting_order_id", conflictingOrder.ID),
+			slog.String("conflicting_sniper", conflictingSniperID))
+		return nil
+	}
+
+	// 新規発注なら、自身の管理リストに注文を追加し、外部へはクローンを渡してポインタ共有を防ぐ
+	n.addOrderLocked(s.ID, newOrd)
+	return []FireAction{{
+		SniperID: s.ID,
+		Bullet:   OrderBullet{Order: newOrd.Clone()},
+	}}
+}
+
+func (n *SniperNest) cancelActiveEntries(sniperID string, now time.Time) []FireAction {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	var acts []FireAction
+	stats := n.orders.GetInflightStats(sniperID)
+	for _, o := range stats.ActiveOrders {
+		if o != nil && o.CanCancel() && o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
+			o.ToCancelSent()
+			o.CancelSentAt = now
+			acts = append(acts, FireAction{
+				SniperID: sniperID,
+				Bullet:   CancelBullet{OrderID: o.ID},
+			})
+		}
+	}
+	return acts
+}
+
 // handleTickLegacy は従来の個別評価・クロス取引抑止ガードによる発注処理です。
 func (n *SniperNest) handleTickLegacy(t tick.Tick) []FireAction {
 	var actions []FireAction
@@ -120,36 +243,7 @@ func (n *SniperNest) handleTickLegacy(t tick.Tick) []FireAction {
 		if s.GetLifecycle() == LifecycleStopped {
 			continue
 		}
-		policy := s.ExecutionPolicy
-		if policy != nil {
-			activeOrders := n.orders.GetActive(s.ID)
-			for _, curr := range activeOrders {
-				if !curr.IsEligibleForSyntheticFill() {
-					continue
-				}
-
-				policy.UpdateState(curr, t)
-
-				if policy.ShouldReset(curr, t) {
-					curr.ResetSynthetic()
-					fmt.Printf("🔄 [%s] 価格が離れたため疑似約定ステータスをリセットしました: %s\n", curr.Symbol, curr.ID)
-					continue
-				}
-
-				if curr.IsFillExpected() {
-					if policy.ShouldTimeout(curr, t) {
-						curr.MarkAsTimedOut()
-						fmt.Printf("💔 [%s] 疑似約定がタイムアウトしました: %s\n", curr.Symbol, curr.ID)
-					}
-					continue
-				}
-
-				if policy.ShouldFill(curr, t) {
-					curr.MarkAsFillExpected(t.CurrentPriceTime)
-					fmt.Printf("⚡ [%s] 疑似約定を検知しました: %s (Price: %f, Tick: %f)\n", curr.Symbol, curr.ID, curr.OrderPrice, t.Price)
-				}
-			}
-		}
+		n.evaluateSyntheticFills(s, t)
 		obs := n.PrepareObservation(s.ID, t)
 		virtualPos := s.CalculateVirtualPosition(obs.Positions, obs.ActiveOrders)
 
@@ -160,69 +254,7 @@ func (n *SniperNest) handleTickLegacy(t tick.Tick) []FireAction {
 
 		target := s.Evaluate(input)
 		bullet := n.ReconcileTarget(s.ID, obs.Tick, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
-
-		if bullet != nil {
-			// 🌟 不公正取引（自己対当クロス）の自動調停ロジック
-			if ordBullet, ok := bullet.(OrderBullet); ok {
-				newOrd := ordBullet.Order
-
-				var conflictingOrder *order.Order
-				var conflictingSniperID string
-
-				// 他のスナイパーが持つ「売買方向が反対」の未約定注文を探す
-				for otherSniperID, otherOrders := range n.orders.activeOrders {
-					if otherSniperID == s.ID {
-						continue
-					}
-					for _, actOrd := range otherOrders {
-						if actOrd.Action != newOrd.Action {
-							conflictingOrder = actOrd
-							conflictingSniperID = otherSniperID
-							break
-						}
-					}
-					if conflictingOrder != nil {
-						break
-					}
-				}
-
-				if conflictingOrder != nil {
-					if newOrd.CashMargin == order.CASH_MARGIN_MARGIN_EXIT {
-						// 返済（決済）注文を優先するため、競合する反対側の新規指値注文などをキャンセルする
-						n.Logger.Warn("⚠️ [CrossTradeRegulation] 返済注文を優先するため、競合する反対側の未約定注文を自動キャンセルします",
-							slog.String("symbol", n.SymbolCode),
-							slog.String("exit_sniper", s.ID),
-							slog.String("canceling_order_id", conflictingOrder.ID),
-							slog.String("canceling_sniper", conflictingSniperID))
-
-						// キャンセル命令を発行して送信リストに追加
-						actions = append(actions, FireAction{
-							SniperID: conflictingSniperID,
-							Bullet:   CancelBullet{OrderID: conflictingOrder.ID},
-						})
-					} else {
-						// 新規エントリー注文の場合は、単に発注をスキップして様子見する
-						n.Logger.Warn("⚠️ [CrossTradeRegulation] 不公正取引（自己対当クロス）を防止するため、新規エントリーを一時的に抑止します",
-							slog.String("symbol", n.SymbolCode),
-							slog.String("entry_sniper", s.ID),
-							slog.String("conflicting_order_id", conflictingOrder.ID),
-							slog.String("conflicting_sniper", conflictingSniperID))
-					}
-
-					// 今回の発注は一旦スキップし、次のループに回す
-					continue
-				}
-			}
-
-			actions = append(actions, FireAction{
-				SniperID: s.ID,
-				Bullet:   bullet,
-			})
-			// 新規発注なら、自身の管理リストに注文を追加して追跡を開始する
-			if ordBullet, ok := bullet.(OrderBullet); ok {
-				n.AddOrder(s.ID, ordBullet.Order)
-			}
-		}
+		actions = append(actions, n.commitLegacyBullet(s, bullet)...)
 	}
 	return actions
 }
@@ -246,36 +278,7 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 			continue
 		}
 
-		policy := s.ExecutionPolicy
-		if policy != nil {
-			activeOrders := n.orders.GetActive(s.ID)
-			for _, curr := range activeOrders {
-				if !curr.IsEligibleForSyntheticFill() {
-					continue
-				}
-
-				policy.UpdateState(curr, t)
-
-				if policy.ShouldReset(curr, t) {
-					curr.ResetSynthetic()
-					fmt.Printf("🔄 [%s] 価格が離れたため疑似約定ステータスをリセットしました: %s\n", curr.Symbol, curr.ID)
-					continue
-				}
-
-				if curr.IsFillExpected() {
-					if policy.ShouldTimeout(curr, t) {
-						curr.MarkAsTimedOut()
-						fmt.Printf("💔 [%s] 疑似約定がタイムアウトしました: %s\n", curr.Symbol, curr.ID)
-					}
-					continue
-				}
-
-				if policy.ShouldFill(curr, t) {
-					curr.MarkAsFillExpected(t.CurrentPriceTime)
-					fmt.Printf("⚡ [%s] 疑似約定を検知しました: %s (Price: %f, Tick: %f)\n", curr.Symbol, curr.ID, curr.OrderPrice, t.Price)
-				}
-			}
-		}
+		n.evaluateSyntheticFills(s, t)
 
 		obs := n.PrepareObservation(s.ID, t)
 		virtualPos := s.CalculateVirtualPosition(obs.Positions, obs.ActiveOrders)
@@ -318,28 +321,21 @@ func (n *SniperNest) handleTickAggregated(t tick.Tick) []FireAction {
 		var acts []FireAction
 		bullet := n.ReconcileTarget(s.ID, obs.Tick, target, s.Exchange, s.MarginTradeType, s.AccountType, s.ExecutionPolicy)
 		if bullet != nil {
-			acts = append(acts, FireAction{SniperID: s.ID, Bullet: bullet})
 			if ordBullet, ok := bullet.(OrderBullet); ok {
 				n.AddOrder(s.ID, ordBullet.Order)
+				acts = append(acts, FireAction{
+					SniperID: s.ID,
+					Bullet:   OrderBullet{Order: ordBullet.Order.Clone()},
+				})
+			} else {
+				acts = append(acts, FireAction{SniperID: s.ID, Bullet: bullet})
 			}
 		}
 		return acts
 	}
 
 	cancelActiveEntries := func(sniperID string) []FireAction {
-		var acts []FireAction
-		stats := n.orders.GetInflightStats(sniperID)
-		for _, o := range stats.ActiveOrders {
-			if o != nil && o.CanCancel() && o.CashMargin == order.CASH_MARGIN_MARGIN_ENTRY {
-				o.ToCancelSent()
-				o.CancelSentAt = t.CurrentPriceTime
-				acts = append(acts, FireAction{
-					SniperID: sniperID,
-					Bullet:   CancelBullet{OrderID: o.ID},
-				})
-			}
-		}
-		return acts
+		return n.cancelActiveEntries(sniperID, t.CurrentPriceTime)
 	}
 
 	var actions []FireAction
@@ -454,11 +450,22 @@ func (n *SniperNest) GetSymbolCode() string {
 	return n.SymbolCode
 }
 
-// GetActiveOrders は配下の全スナイパーが追跡中の未完了注文を集約して返します。
+func cloneOrderSlice(orders []*order.Order) []*order.Order {
+	if len(orders) == 0 {
+		return nil
+	}
+	res := make([]*order.Order, len(orders))
+	for i, o := range orders {
+		res[i] = o.Clone()
+	}
+	return res
+}
+
+// GetActiveOrders は配下の全スナイパーが追跡中の未完了注文を集約して返します（Data Race防止のためスナップショットを返却）。
 func (n *SniperNest) GetActiveOrders() []*order.Order {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.orders.GetAllActive()
+	return cloneOrderSlice(n.orders.GetAllActive())
 }
 
 // UpdateOrders は注文・約定レポートをもとに、内部の状態を更新します。
@@ -604,21 +611,25 @@ func (n *SniperNest) RevertOrderStatus(sniperID string, ord *order.Order, status
 	n.orders.RevertOrderStatus(sniperID, ord, status)
 }
 
-// AddOrder は新規注文を追跡対象に追加します。
-func (n *SniperNest) AddOrder(sniperID string, ord *order.Order) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+func (n *SniperNest) addOrderLocked(sniperID string, ord *order.Order) {
 	n.orders.Add(sniperID, ord)
 	if ord.CashMargin == order.CASH_MARGIN_MARGIN_EXIT && ord.Request != nil {
 		_ = n.positions.LockPositions(ord.ID, ord.Request.ClosePositions)
 	}
 }
 
-// GetSniperActiveOrders は特定のスナイパーのアクティブな注文リストを返します。
+// AddOrder は新規注文を追跡対象に追加します。
+func (n *SniperNest) AddOrder(sniperID string, ord *order.Order) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.addOrderLocked(sniperID, ord)
+}
+
+// GetSniperActiveOrders は特定のスナイパーのアクティブな注文リストを返します（Data Race防止のためスナップショットを返却）。
 func (n *SniperNest) GetSniperActiveOrders(sniperID string) []*order.Order {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.orders.GetActive(sniperID)
+	return cloneOrderSlice(n.orders.GetActive(sniperID))
 }
 
 // HoldQty は特定のスナイパーの物理保有数量を返します。
@@ -684,12 +695,11 @@ func (n *SniperNest) PrepareObservation(sniperID string, t tick.Tick) Observatio
 	return Observation{
 		Tick:         t,
 		Positions:    posCopy,
-		ActiveOrders: activeOrders,
+		ActiveOrders: cloneOrderSlice(activeOrders),
 	}
 }
 
-// GetCommittedPosition は物理確定建玉とアクティブ注文から、市場に既にコミットしている執行中・約定済みポジションを計算して返します
-func (n *SniperNest) GetCommittedPosition(sniperID string) CommittedPosition {
+func (n *SniperNest) getCommittedPositionLocked(sniperID string) CommittedPosition {
 	physicalQty := n.positions.HoldQty()
 	orderQty := n.orders.SignedQty(sniperID)
 
@@ -698,14 +708,27 @@ func (n *SniperNest) GetCommittedPosition(sniperID string) CommittedPosition {
 	}
 }
 
-// GetTotalCommittedPosition は物理確定建玉とネスト全体の全アクティブ注文からコミット中ポジションを計算して返します
-func (n *SniperNest) GetTotalCommittedPosition() CommittedPosition {
+func (n *SniperNest) getTotalCommittedPositionLocked() CommittedPosition {
 	physicalQty := n.positions.HoldQty()
 	orderQty := n.orders.TotalSignedQty()
 
 	return CommittedPosition{
 		TotalQty: physicalQty + orderQty,
 	}
+}
+
+// GetCommittedPosition は物理確定建玉とアクティブ注文から、市場に既にコミットしている執行中・約定済みポジションを計算して返します
+func (n *SniperNest) GetCommittedPosition(sniperID string) CommittedPosition {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.getCommittedPositionLocked(sniperID)
+}
+
+// GetTotalCommittedPosition は物理確定建玉とネスト全体の全アクティブ注文からコミット中ポジションを計算して返します
+func (n *SniperNest) GetTotalCommittedPosition() CommittedPosition {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.getTotalCommittedPositionLocked()
 }
 
 func (n *SniperNest) ReconcileTarget(
@@ -742,9 +765,9 @@ func (n *SniperNest) ReconcileTarget(
 
 	// 物理確定建玉と市場コミット中ポジション（CommittedPosition）の取得
 	physicalHoldQty := n.positions.HoldQty()
-	committedPos := n.GetCommittedPosition(sniperID)
+	committedPos := n.getCommittedPositionLocked(sniperID)
 	if n.reconciliationMode == ReconciliationModeAggregate {
-		committedPos = n.GetTotalCommittedPosition()
+		committedPos = n.getTotalCommittedPositionLocked()
 	}
 
 	// ポジション反転の安全弁:

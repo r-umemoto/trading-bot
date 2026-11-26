@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,10 +164,10 @@ func TestTradeUseCase_BypassAndSkipOrderDestruction(t *testing.T) {
 	detail := symbol.Symbol{Code: "7203"}
 
 	t.Run("ErrDispatchQueueBypass", func(t *testing.T) {
-		var sendOrderCalled bool
+		var sendOrderCalled atomic.Bool
 		gw := &mockGateway{
 			sendOrderFunc: func(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
-				sendOrderCalled = true
+				sendOrderCalled.Store(true)
 				return nil, order.ErrDispatchQueueBypass
 			},
 		}
@@ -206,7 +207,7 @@ func TestTradeUseCase_BypassAndSkipOrderDestruction(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		if !sendOrderCalled {
+		if !sendOrderCalled.Load() {
 			t.Fatal("expected SendOrder to be called")
 		}
 
@@ -217,10 +218,10 @@ func TestTradeUseCase_BypassAndSkipOrderDestruction(t *testing.T) {
 	})
 
 	t.Run("ErrOrderSkipped", func(t *testing.T) {
-		var sendOrderCalled bool
+		var sendOrderCalled atomic.Bool
 		gw := &mockGateway{
 			sendOrderFunc: func(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
-				sendOrderCalled = true
+				sendOrderCalled.Store(true)
 				return nil, order.ErrOrderSkipped
 			},
 		}
@@ -260,7 +261,7 @@ func TestTradeUseCase_BypassAndSkipOrderDestruction(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		if !sendOrderCalled {
+		if !sendOrderCalled.Load() {
 			t.Fatal("expected SendOrder to be called")
 		}
 
@@ -286,10 +287,10 @@ func (mockOtherRejectError) IsPositionMissing() bool   { return false }
 func TestTradeUseCase_RejectedOrderCleanUpPosition(t *testing.T) {
 	detail := symbol.Symbol{Code: "7203"}
 
-	var sendOrderCalled bool
+	var sendOrderCalled atomic.Bool
 	gw := &mockGateway{
 		sendOrderFunc: func(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
-			sendOrderCalled = true
+			sendOrderCalled.Store(true)
 			return nil, mockRejectError{}
 		},
 	}
@@ -354,7 +355,7 @@ func TestTradeUseCase_RejectedOrderCleanUpPosition(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if !sendOrderCalled {
+	if !sendOrderCalled.Load() {
 		t.Fatal("expected SendOrder to be called")
 	}
 
@@ -368,10 +369,10 @@ func TestTradeUseCase_RejectedOrderCleanUpPosition(t *testing.T) {
 func TestTradeUseCase_RejectedOrderKeepsPosition(t *testing.T) {
 	detail := symbol.Symbol{Code: "7203"}
 
-	var sendOrderCalled bool
+	var sendOrderCalled atomic.Bool
 	gw := &mockGateway{
 		sendOrderFunc: func(ctx context.Context, input order.SendOrderInput) (*order.Order, error) {
-			sendOrderCalled = true
+			sendOrderCalled.Store(true)
 			return nil, mockOtherRejectError{}
 		},
 	}
@@ -436,7 +437,7 @@ func TestTradeUseCase_RejectedOrderKeepsPosition(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if !sendOrderCalled {
+	if !sendOrderCalled.Load() {
 		t.Fatal("expected SendOrder to be called")
 	}
 
