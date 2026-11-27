@@ -22,6 +22,7 @@ type Operation interface {
 
 	HasSniper(sniperID string) bool
 	FailSendingOrder(sniperID string, ord *order.Order)
+	FailCancelingOrder(sniperID string, orderID string)
 	DestroySendingOrder(sniperID string, ord *order.Order)
 	HandleOrderRejection(sniperID string, ord *order.Order, err error)
 	UpdateOrderID(sniperID string, ord *order.Order, newID string)

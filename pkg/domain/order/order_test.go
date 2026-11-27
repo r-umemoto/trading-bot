@@ -358,7 +358,7 @@ func TestOrder_StatusTransitions(t *testing.T) {
 		o.ToExpired() // redundant
 	})
 
-	t.Run("Terminal Panic Status", func(t *testing.T) {
+	t.Run("Terminal Status Transition Ignored Without Panic", func(t *testing.T) {
 		terminalStatuses := []order.OrderStatus{
 			order.ORDER_STATUS_FILLED,
 			order.ORDER_STATUS_CANCELED,
@@ -367,19 +367,17 @@ func TestOrder_StatusTransitions(t *testing.T) {
 
 		for _, ts := range terminalStatuses {
 			t.Run(string(rune(ts)), func(t *testing.T) {
-				defer func() {
-					if recover() == nil {
-						t.Errorf("expected panic when transitioning out of terminal status %v", ts)
-					}
-				}()
 				o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
 				o.BypassTransition(ts, o.InternalState())
 				o.ToWaiting()
+				if o.Status() != ts {
+					t.Errorf("expected terminal status %v to remain unchanged, got %v", ts, o.Status())
+				}
 			})
 		}
 	})
 
-	t.Run("Invalid Status Transition Panic", func(t *testing.T) {
+	t.Run("Invalid Status Transition Ignored Without Panic", func(t *testing.T) {
 		invalidCases := []struct {
 			from order.OrderStatus
 			to   func(*order.Order)
@@ -392,14 +390,12 @@ func TestOrder_StatusTransitions(t *testing.T) {
 
 		for i, tc := range invalidCases {
 			t.Run(string(rune(i)), func(t *testing.T) {
-				defer func() {
-					if recover() == nil {
-						t.Errorf("expected panic for invalid transition from status %v", tc.from)
-					}
-				}()
 				o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
 				o.BypassTransition(tc.from, o.InternalState())
 				tc.to(o)
+				if o.Status() != tc.from {
+					t.Errorf("expected status %v to remain unchanged on invalid transition, got %v", tc.from, o.Status())
+				}
 			})
 		}
 	})
@@ -445,18 +441,16 @@ func TestOrder_InternalStateTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("Closed Panic Internal State", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic when transitioning out of closed internal state")
-			}
-		}()
+	t.Run("Closed Internal State Transition Ignored Without Panic", func(t *testing.T) {
 		o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
 		o.ToClosed()
 		o.ToPending()
+		if o.InternalState() != order.STATE_CLOSED {
+			t.Errorf("expected internal state CLOSED to remain unchanged, got %v", o.InternalState())
+		}
 	})
 
-	t.Run("Invalid Internal Transition Panic", func(t *testing.T) {
+	t.Run("Invalid Internal Transition Ignored Without Panic", func(t *testing.T) {
 		invalidCases := []struct {
 			from order.InternalState
 			to   func(*order.Order)
@@ -468,14 +462,12 @@ func TestOrder_InternalStateTransitions(t *testing.T) {
 
 		for i, tc := range invalidCases {
 			t.Run(string(rune(i)), func(t *testing.T) {
-				defer func() {
-					if recover() == nil {
-						t.Errorf("expected panic for invalid transition from internal state %v", tc.from)
-					}
-				}()
 				o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
 				o.BypassTransition(o.Status(), tc.from)
 				tc.to(o)
+				if o.InternalState() != tc.from {
+					t.Errorf("expected internal state %v to remain unchanged on invalid transition, got %v", tc.from, o.InternalState())
+				}
 			})
 		}
 	})
@@ -627,28 +619,23 @@ func TestOrder_CanCancel(t *testing.T) {
 
 
 
-func TestOrder_Transitions_ExtraPanics(t *testing.T) {
-	t.Run("ToCancelSent invalid state panic", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic when transitioning to CancelSent from invalid non-terminal state")
-			}
-		}()
+func TestOrder_Transitions_ExtraInvalidIgnored(t *testing.T) {
+	t.Run("ToCancelSent invalid state ignored without panic", func(t *testing.T) {
 		o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
-		// Use an arbitrary invalid non-terminal state
 		o.BypassTransition(order.OrderStatus(99), order.STATE_PREPARING)
 		o.ToCancelSent()
+		if o.Status() != order.OrderStatus(99) {
+			t.Errorf("expected status 99 to remain unchanged, got %v", o.Status())
+		}
 	})
 
-	t.Run("ToFillExpected invalid state panic", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic when transitioning to FillExpected from CancelSent")
-			}
-		}()
+	t.Run("ToFillExpected invalid state ignored without panic", func(t *testing.T) {
 		o := order.NewOrder("test", "7203", order.ACTION_BUY, 100, 1)
 		o.BypassTransition(order.ORDER_STATUS_CANCEL_SENT, order.STATE_CANCELING)
 		o.ToFillExpected()
+		if o.Status() != order.ORDER_STATUS_CANCEL_SENT {
+			t.Errorf("expected status CANCEL_SENT to remain unchanged, got %v", o.Status())
+		}
 	})
 }
 

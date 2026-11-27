@@ -351,7 +351,9 @@ func RunBacktest() error {
 				switch b := act.Bullet.(type) {
 				case sniper.CancelBullet:
 					fmt.Printf("🛑 [Backtest] 自動キャンセルを実行: %s\n", b.OrderID)
-					_ = gateway.CancelOrder(context.Background(), b.OrderID)
+					if err := gateway.CancelOrder(context.Background(), b.OrderID); err != nil {
+						op.FailCancelingOrder(act.SniperID, b.OrderID)
+					}
 				case sniper.OrderBullet:
 					fmt.Printf("🔫 [Backtest] 発注: %s %v %.0f株 (Price: %.1f, CashMargin: %v, Reason: %s)\n",
 						b.Order.Symbol, b.Order.Action, b.Order.OrderQty, b.Order.OrderPrice, b.Order.CashMargin, b.Order.Reason)

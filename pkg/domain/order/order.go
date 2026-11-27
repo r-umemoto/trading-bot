@@ -2,6 +2,7 @@ package order
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -303,24 +304,40 @@ func (o *Order) BypassTransition(status OrderStatus, internalState InternalState
 	o.internalState = internalState
 }
 
-func (o *Order) ensureNotTerminal() {
-	if o.status == ORDER_STATUS_FILLED || o.status == ORDER_STATUS_CANCELED || o.status == ORDER_STATUS_EXPIRED {
-		panic(fmt.Sprintf("🚨 [FATAL_STATE_TRANSITION] Cannot transition out of terminal state: %v (OrderID: %s)", o.status, o.ID))
-	}
+func (o *Order) isTerminalStatus() bool {
+	return o.status == ORDER_STATUS_FILLED || o.status == ORDER_STATUS_CANCELED || o.status == ORDER_STATUS_EXPIRED
 }
 
-func (o *Order) panicInvalidTransition(from, to OrderStatus) {
-	panic(fmt.Sprintf("🚨 [INVALID_STATE_TRANSITION] Illegal order status change: %v -> %v (OrderID: %s)", from, to, o.ID))
+func (o *Order) logTerminalTransition(to OrderStatus) {
+	slog.Warn("⚠️ [IGNORED_STATE_TRANSITION] Cannot transition out of terminal status",
+		slog.String("orderID", o.ID),
+		slog.Any("from", o.status),
+		slog.Any("to", to),
+	)
 }
 
-func (o *Order) ensureNotClosed() {
-	if o.internalState == STATE_CLOSED {
-		panic(fmt.Sprintf("🚨 [FATAL_STATE_TRANSITION] Cannot transition out of closed internal state: %v (OrderID: %s)", o.internalState, o.ID))
-	}
+func (o *Order) logInvalidTransition(from, to OrderStatus) {
+	slog.Warn("⚠️ [IGNORED_STATE_TRANSITION] Illegal order status change",
+		slog.String("orderID", o.ID),
+		slog.Any("from", from),
+		slog.Any("to", to),
+	)
 }
 
-func (o *Order) panicInvalidInternalTransition(from, to InternalState) {
-	panic(fmt.Sprintf("🚨 [INVALID_STATE_TRANSITION] Illegal internal state change: %v -> %v (OrderID: %s)", from, to, o.ID))
+func (o *Order) logClosedInternalTransition(to InternalState) {
+	slog.Warn("⚠️ [IGNORED_STATE_TRANSITION] Cannot transition out of closed internal state",
+		slog.String("orderID", o.ID),
+		slog.Any("from", o.internalState),
+		slog.Any("to", to),
+	)
+}
+
+func (o *Order) logInvalidInternalTransition(from, to InternalState) {
+	slog.Warn("⚠️ [IGNORED_STATE_TRANSITION] Illegal internal state change",
+		slog.String("orderID", o.ID),
+		slog.Any("from", from),
+		slog.Any("to", to),
+	)
 }
 
 // ToWaiting は注文ステータスを WAITING に遷移させます
@@ -329,11 +346,15 @@ func (o *Order) ToWaiting() {
 	if from == ORDER_STATUS_WAITING {
 		return
 	}
-	o.ensureNotTerminal()
+	if o.isTerminalStatus() {
+		o.logTerminalTransition(ORDER_STATUS_WAITING)
+		return
+	}
 
 	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_FILL_EXPECTED)
 	if !valid {
-		o.panicInvalidTransition(from, ORDER_STATUS_WAITING)
+		o.logInvalidTransition(from, ORDER_STATUS_WAITING)
+		return
 	}
 	o.status = ORDER_STATUS_WAITING
 }
@@ -344,11 +365,15 @@ func (o *Order) ToInProgress() {
 	if from == ORDER_STATUS_IN_PROGRESS {
 		return
 	}
-	o.ensureNotTerminal()
+	if o.isTerminalStatus() {
+		o.logTerminalTransition(ORDER_STATUS_IN_PROGRESS)
+		return
+	}
 
 	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_WAITING)
 	if !valid {
-		o.panicInvalidTransition(from, ORDER_STATUS_IN_PROGRESS)
+		o.logInvalidTransition(from, ORDER_STATUS_IN_PROGRESS)
+		return
 	}
 	o.status = ORDER_STATUS_IN_PROGRESS
 }
@@ -359,11 +384,15 @@ func (o *Order) ToCancelSent() {
 	if from == ORDER_STATUS_CANCEL_SENT {
 		return
 	}
-	o.ensureNotTerminal()
+	if o.isTerminalStatus() {
+		o.logTerminalTransition(ORDER_STATUS_CANCEL_SENT)
+		return
+	}
 
 	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_WAITING || from == ORDER_STATUS_IN_PROGRESS || from == ORDER_STATUS_FILL_EXPECTED)
 	if !valid {
-		o.panicInvalidTransition(from, ORDER_STATUS_CANCEL_SENT)
+		o.logInvalidTransition(from, ORDER_STATUS_CANCEL_SENT)
+		return
 	}
 	o.status = ORDER_STATUS_CANCEL_SENT
 }
@@ -374,11 +403,15 @@ func (o *Order) ToFillExpected() {
 	if from == ORDER_STATUS_FILL_EXPECTED {
 		return
 	}
-	o.ensureNotTerminal()
+	if o.isTerminalStatus() {
+		o.logTerminalTransition(ORDER_STATUS_FILL_EXPECTED)
+		return
+	}
 
 	valid := (from == ORDER_STATUS_NONE || from == ORDER_STATUS_WAITING || from == ORDER_STATUS_IN_PROGRESS)
 	if !valid {
-		o.panicInvalidTransition(from, ORDER_STATUS_FILL_EXPECTED)
+		o.logInvalidTransition(from, ORDER_STATUS_FILL_EXPECTED)
+		return
 	}
 	o.status = ORDER_STATUS_FILL_EXPECTED
 }
@@ -389,7 +422,10 @@ func (o *Order) ToFilled() {
 	if from == ORDER_STATUS_FILLED {
 		return
 	}
-	o.ensureNotTerminal()
+	if o.isTerminalStatus() {
+		o.logTerminalTransition(ORDER_STATUS_FILLED)
+		return
+	}
 	o.status = ORDER_STATUS_FILLED
 }
 
@@ -399,7 +435,10 @@ func (o *Order) ToCanceled() {
 	if from == ORDER_STATUS_CANCELED {
 		return
 	}
-	o.ensureNotTerminal()
+	if o.isTerminalStatus() {
+		o.logTerminalTransition(ORDER_STATUS_CANCELED)
+		return
+	}
 	o.status = ORDER_STATUS_CANCELED
 }
 
@@ -409,7 +448,10 @@ func (o *Order) ToExpired() {
 	if from == ORDER_STATUS_EXPIRED {
 		return
 	}
-	o.ensureNotTerminal()
+	if o.isTerminalStatus() {
+		o.logTerminalTransition(ORDER_STATUS_EXPIRED)
+		return
+	}
 	o.status = ORDER_STATUS_EXPIRED
 }
 
@@ -419,11 +461,15 @@ func (o *Order) ToPending() {
 	if from == STATE_PENDING {
 		return
 	}
-	o.ensureNotClosed()
+	if from == STATE_CLOSED {
+		o.logClosedInternalTransition(STATE_PENDING)
+		return
+	}
 
 	valid := (from == STATE_PREPARING)
 	if !valid {
-		o.panicInvalidInternalTransition(from, STATE_PENDING)
+		o.logInvalidInternalTransition(from, STATE_PENDING)
+		return
 	}
 	o.internalState = STATE_PENDING
 }
@@ -434,11 +480,15 @@ func (o *Order) ToActive() {
 	if from == STATE_ACTIVE {
 		return
 	}
-	o.ensureNotClosed()
+	if from == STATE_CLOSED {
+		o.logClosedInternalTransition(STATE_ACTIVE)
+		return
+	}
 
 	valid := (from == STATE_PREPARING || from == STATE_PENDING)
 	if !valid {
-		o.panicInvalidInternalTransition(from, STATE_ACTIVE)
+		o.logInvalidInternalTransition(from, STATE_ACTIVE)
+		return
 	}
 	o.internalState = STATE_ACTIVE
 }
@@ -449,11 +499,15 @@ func (o *Order) ToCanceling() {
 	if from == STATE_CANCELING {
 		return
 	}
-	o.ensureNotClosed()
+	if from == STATE_CLOSED {
+		o.logClosedInternalTransition(STATE_CANCELING)
+		return
+	}
 
 	valid := (from == STATE_ACTIVE)
 	if !valid {
-		o.panicInvalidInternalTransition(from, STATE_CANCELING)
+		o.logInvalidInternalTransition(from, STATE_CANCELING)
+		return
 	}
 	o.internalState = STATE_CANCELING
 }
@@ -464,7 +518,6 @@ func (o *Order) ToClosed() {
 	if from == STATE_CLOSED {
 		return
 	}
-	o.ensureNotClosed()
 	o.internalState = STATE_CLOSED
 }
 
